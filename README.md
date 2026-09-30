@@ -20,7 +20,9 @@
    | `LLM_MODEL` | ✅ | 사용할 모델명 |
    | `LLM_TIMEOUT` | – | 요청 타임아웃(초), 기본 60 |
 
-   OS 환경변수에 같은 이름이 있으면 `.env`보다 우선합니다. `OPENAI_API_KEY` 등 `OPENAI_*` 변수는 읽지 않습니다.
+   OS 환경변수에 같은 이름이 있으면 `.env`보다 우선합니다. 키·조직·프로젝트는 항상 `LLM_*` 설정에서만 가져오며, `OPENAI_API_KEY`·`OPENAI_BASE_URL`·`OPENAI_ORG_ID`·`OPENAI_PROJECT_ID`는 무시하고 `OPENAI_CUSTOM_HEADERS`의 `Authorization`도 무시합니다. 그 밖의 `OPENAI_CUSTOM_HEADERS` 항목은 그대로 요청에 붙습니다.
+
+   `HTTP_PROXY`·`HTTPS_PROXY`·`NO_PROXY` 환경변수는 그대로 적용됩니다(Windows는 시스템 프록시 설정도 반영). 사내 LLM 호스트에 프록시 없이 직접 붙어야 하면 그 호스트를 `NO_PROXY`에 추가하고, 프록시를 거쳐야 하면 `HTTPS_PROXY`를 설정하세요.
 
 ## 점검 실행
 
