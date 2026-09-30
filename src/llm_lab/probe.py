@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import ssl
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 import openai
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
+
+from llm_lab.client import get_client
+from llm_lab.config import ConfigError, Settings, load_settings
 
 SSL_ERROR = "SSL"
 NETWORK_ERROR = "네트워크"
@@ -238,3 +244,108 @@ def check_json(client: OpenAI, model: str) -> CheckResult:
     if _parse_json_object(response) is None:
         return CheckResult("fail", f"{schema_note}, json_object 응답도 JSON 객체가 아님", raw)
     return CheckResult("partial", f"{schema_note} → json_object 성공", raw)
+
+
+# 아이콘만 쓰면 cp949로 리다이렉트될 때 모두 '?'가 되므로 한글 라벨을 함께 붙인다
+LABELS: dict[Status, str] = {
+    "ok": "✅ 지원",
+    "partial": "⚠️ 부분",
+    "fail": "❌ 실패",
+    "skip": "⏭ 건너뜀",
+}
+
+# 200이지만 OpenAI 형식이 아닌 응답(프록시·SSO 로그인 페이지 등)의 분류
+FORMAT_ERROR = "응답 형식"
+
+
+class ProbeAborted(Exception):
+    """네트워크·SSL·인증 오류. 이후 점검도 같은 이유로 실패하므로 중단한다."""
+
+    def __init__(self, result: CheckResult, category: str) -> None:
+        super().__init__(result.detail)
+        self.result = result
+        self.category = category
+
+
+Check = Callable[[OpenAI, str], CheckResult]
+
+CHAT_CHECK_NAME = "기본 채팅"
+CHECKS: list[tuple[str, Check]] = [
+    ("연결·모델 목록", check_models),
+    (CHAT_CHECK_NAME, check_chat),
+    ("스트리밍", check_stream),
+    ("Tool calling", check_tools),
+    ("JSON 출력", check_json),
+]
+
+
+def run_check(name: str, check: Check, client: OpenAI, model: str) -> CheckResult:
+    """점검 하나를 실행한다. 네트워크·SSL·인증 오류면 ProbeAborted를 던진다."""
+    start = time.perf_counter()
+    fatal: tuple[str, openai.APIError] | None = None
+    try:
+        result = check(client, model)
+    except openai.APIError as exc:
+        category, hint = classify_error(exc)
+        result = CheckResult("fail", f"[{category}] {hint}")
+        if category in FATAL_CATEGORIES:
+            fatal = (category, exc)
+    except Exception as exc:
+        # SDK가 HTML 같은 본문을 파싱하지 못하면 AttributeError·TypeError 등으로 나온다
+        result = CheckResult(
+            "fail",
+            f"[{FORMAT_ERROR}] 서버 응답이 OpenAI 형식이 아님 - "
+            f"프록시·로그인 페이지인지 확인하세요 ({type(exc).__name__}: {exc})",
+        )
+    result.name = name
+    result.elapsed = time.perf_counter() - start
+    if fatal:
+        category, exc = fatal
+        raise ProbeAborted(result, category) from exc
+    return result
+
+
+def format_result(index: int, result: CheckResult) -> str:
+    elapsed = f"  {result.elapsed:.2f}s" if result.elapsed is not None else ""
+    return f"[{index}] {result.name:<14} {LABELS[result.status]}  {result.detail}{elapsed}"
+
+
+def run_probe(client: OpenAI, settings: Settings, *, verbose: bool = False) -> int:
+    """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0)."""
+    print(f"회사 LLM 점검: {settings.base_url} (model: {settings.model})\n")
+    results: list[CheckResult] = []
+    for index, (name, check) in enumerate(CHECKS, start=1):
+        try:
+            result = run_check(name, check, client, settings.model)
+        except ProbeAborted as aborted:
+            print(format_result(index, aborted.result))
+            print(f"\n점검 중단: {aborted.category} 문제는 이후 항목도 같은 이유로 실패합니다.")
+            return 1
+        results.append(result)
+        print(format_result(index, result))
+        if verbose and result.raw is not None:
+            print(json.dumps(result.raw, ensure_ascii=False, indent=2, default=str))
+
+    counts = {status: sum(r.status == status for r in results) for status in LABELS}
+    print(
+        f"\n요약: 지원 {counts['ok']} / 부분 지원 {counts['partial']} / "
+        f"미지원 {counts['fail']} / 건너뜀 {counts['skip']}"
+    )
+    chat_ok = any(r.name == CHAT_CHECK_NAME and r.status == "ok" for r in results)
+    return 0 if chat_ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        # 파이프·파일로 리다이렉트된 cp949 콘솔에서도 인코딩 오류로 죽지 않게 한다
+        stream.reconfigure(errors="replace")
+    parser = argparse.ArgumentParser(prog="llm-probe", description="회사 LLM 연결·기능 점검")
+    parser.add_argument("--verbose", action="store_true", help="각 응답의 원문 JSON도 출력")
+    args = parser.parse_args(argv)
+    try:
+        settings = load_settings()
+    except ConfigError as exc:
+        print(f"설정 오류: {exc}", file=sys.stderr)
+        return 1
+    client = get_client(settings).with_options(max_retries=0)
+    return run_probe(client, settings, verbose=args.verbose)

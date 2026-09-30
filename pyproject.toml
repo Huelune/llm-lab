@@ -9,6 +9,9 @@ dependencies = [
     "python-dotenv>=1.2",
 ]
 
+[project.scripts]
+llm-probe = "llm_lab.probe:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9",
