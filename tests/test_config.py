@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from llm_lab.config import ConfigError, Settings, load_settings, settings_from_env
@@ -32,7 +34,7 @@ def test_timeout_is_parsed_as_float():
     assert settings_from_env({**VALID, "LLM_TIMEOUT": "15"}).timeout == 15.0
 
 
-@pytest.mark.parametrize("bad", ["abc", "0", "-5"])
+@pytest.mark.parametrize("bad", ["abc", "0", "-5", "nan", "inf"])
 def test_invalid_timeout_is_rejected(bad):
     with pytest.raises(ConfigError, match="LLM_TIMEOUT"):
         settings_from_env({**VALID, "LLM_TIMEOUT": bad})
@@ -90,9 +92,62 @@ def test_empty_os_environment_value_does_not_hide_dotenv(isolated, monkeypatch):
     assert load_settings().model == "from-file"
 
 
+def test_whitespace_os_environment_value_does_not_hide_dotenv(isolated, monkeypatch):
+    (isolated / ".env").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_API_KEY=secret-key\nLLM_MODEL=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLM_MODEL", "   ")
+
+    assert load_settings().model == "from-file"
+
+
+def test_utf16_dotenv_gets_encoding_hint(isolated):
+    # PowerShell 5.1의 `>`·Out-File은 UTF-16으로 저장한다
+    (isolated / ".env").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_API_KEY=secret-key\nLLM_MODEL=m1\n",
+        encoding="utf-16",
+    )
+
+    with pytest.raises(ConfigError, match="UTF-8"):
+        load_settings()
+
+
 def test_load_settings_without_dotenv_reports_missing(isolated):
     with pytest.raises(ConfigError, match="LLM_BASE_URL"):
         load_settings()
+
+
+def test_missing_values_without_dotenv_name_the_current_folder(isolated):
+    with pytest.raises(ConfigError) as exc_info:
+        load_settings()
+
+    message = str(exc_info.value)
+    assert ".env가 없습니다" in message
+    assert str(Path.cwd()) in message
+
+
+def test_missing_values_with_dotenv_present_do_not_claim_it_is_absent(isolated):
+    (isolated / ".env").write_text("LLM_MODEL=m1\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_settings()
+
+    message = str(exc_info.value)
+    assert "LLM_BASE_URL" in message
+    assert ".env가 없습니다" not in message
+
+
+def test_invalid_timeout_without_dotenv_does_not_claim_dotenv_is_absent(isolated, monkeypatch):
+    for key, value in {**VALID, "LLM_TIMEOUT": "abc"}.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_settings()
+
+    message = str(exc_info.value)
+    assert "LLM_TIMEOUT" in message
+    assert ".env가 없습니다" not in message
 
 
 def test_load_settings_ignores_dotenv_in_parent_directory(isolated, monkeypatch):
