@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from dotenv import dotenv_values, find_dotenv
+from dotenv import dotenv_values
 
 REQUIRED_VARS = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
 DEFAULT_TIMEOUT = 60.0
@@ -51,8 +52,8 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
 
 
 def load_settings() -> Settings:
-    """현재 디렉터리부터 위로 .env를 찾아 읽고, 비어 있지 않은 OS 환경변수를 우선 적용한다."""
-    path = find_dotenv(usecwd=True)
-    merged: dict[str, str | None] = dict(dotenv_values(path)) if path else {}
+    """현재 디렉터리의 .env를 읽고, 비어 있지 않은 OS 환경변수를 우선 적용한다."""
+    path = Path(".env")
+    merged: dict[str, str | None] = dict(dotenv_values(path)) if path.is_file() else {}
     merged.update({key: value for key, value in os.environ.items() if value})
     return settings_from_env(merged)

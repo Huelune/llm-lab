@@ -93,3 +93,17 @@ def test_empty_os_environment_value_does_not_hide_dotenv(isolated, monkeypatch):
 def test_load_settings_without_dotenv_reports_missing(isolated):
     with pytest.raises(ConfigError, match="LLM_BASE_URL"):
         load_settings()
+
+
+def test_load_settings_ignores_dotenv_in_parent_directory(isolated, monkeypatch):
+    # 저장소 루트의 실제 .env가 하위 디렉터리 실행(특히 테스트)에 섞이지 않아야 한다
+    (isolated / ".env").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_API_KEY=secret-key\nLLM_MODEL=m1\n",
+        encoding="utf-8",
+    )
+    child = isolated / "sub"
+    child.mkdir()
+    monkeypatch.chdir(child)
+
+    with pytest.raises(ConfigError, match="LLM_BASE_URL"):
+        load_settings()
