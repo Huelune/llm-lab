@@ -1,7 +1,7 @@
 # 회사 LLM 연결·기능 점검 도구 (llm-probe) 설계
 
 - 작성일: 2026-09-30
-- 상태: 검토 대기
+- 상태: 승인됨 (구현 계획: `docs/superpowers/plans/2026-09-30-llm-probe.md`)
 
 ## 1. 배경과 목표
 
@@ -26,11 +26,11 @@
 |---|---|---|
 | 언어 | Python 3.14 | 로컬에 설치됨 |
 | 패키지 관리 | uv | 로컬에 설치됨, `uv run`으로 실행 일원화 |
-| LLM 클라이언트 | 공식 `openai` SDK (`base_url` 지정) | 스트리밍·tool calling·타임아웃·재시도 내장. 호환성 문제는 점검에서 드러나며, 필요 시 해당 부분만 `httpx` 직접 호출로 대체 |
+| LLM 클라이언트 | 공식 `openai` SDK (`base_url` 지정) | 스트리밍·tool calling·타임아웃·재시도 내장. 호환성 문제는 점검에서 드러나며, 필요 시 해당 부분만 `httpx2` 직접 호출로 대체. `openai` 3.x는 HTTP 계층으로 `httpx2`를 씀 |
 | 설정 | `python-dotenv` | `.env` 로딩 |
 | 개발 도구 | `pytest`, `ruff` | 테스트, 린트·포맷 |
 
-검토 후 제외한 대안: LiteLLM(단일 엔드포인트엔 과함), `httpx` 직접 구현(스트리밍·tool calling 파싱을 직접 작성해야 함).
+검토 후 제외한 대안: LiteLLM(단일 엔드포인트엔 과함), `httpx2` 직접 구현(스트리밍·tool calling 파싱을 직접 작성해야 함).
 
 ## 3. 프로젝트 구조
 
@@ -49,7 +49,11 @@ D:\codes\llm\
 │  └─ probe.py         # 점검 항목, 오류 분류, CLI 진입점 main()
 └─ tests/
    ├─ test_config.py
-   └─ test_probe.py
+   ├─ test_client.py
+   ├─ test_classify_error.py
+   ├─ test_checks.py
+   ├─ test_run_probe.py
+   └─ fake_llm.py       # httpx2.MockTransport 가짜 서버
 ```
 
 ## 4. 설정 (`config.py`)
@@ -102,15 +106,15 @@ uv run llm-probe [--verbose]
 ### 6.3 출력 형식
 
 ```
-회사 LLM 점검 — https://llm.사내/v1 (model: xxx)
+회사 LLM 점검: https://llm.사내/v1 (model: xxx)
 
-[1] 연결·모델 목록    ✅  모델 3개, 'xxx' 확인됨          0.21s
-[2] 기본 채팅         ✅  토큰 in 12 / out 3               0.84s
-[3] 스트리밍          ✅  첫 토큰 0.31s, 청크 18개
-[4] Tool calling      ✅  report_issue(line=3) 반환
-[5] JSON 출력         ⚠️  json_schema 미지원 → json_object 성공
+[1] 연결·모델 목록    ✅ 지원  모델 3개, 'xxx' 확인됨          0.21s
+[2] 기본 채팅         ✅ 지원  토큰 in 12 / out 3               0.84s
+[3] 스트리밍          ✅ 지원  첫 토큰 0.31s, 청크 18개
+[4] Tool calling      ✅ 지원  report_issue(line=3) 반환
+[5] JSON 출력         ⚠️ 부분  json_schema 미지원 → json_object 성공
 
-요약: 지원 4 / 부분 지원 1 / 미지원 0
+요약: 지원 4 / 부분 지원 1 / 미지원 0 / 건너뜀 0
 ```
 
 - 헤더에는 `base_url`과 `model`만 출력한다. **API 키는 어떤 출력에도 포함하지 않는다**(`--verbose` 포함).
@@ -122,7 +126,7 @@ uv run llm-probe [--verbose]
 
 | 예외 | 분류 | 안내 |
 |---|---|---|
-| `APIConnectionError` (원인 체인에 `ssl.SSLError`) | SSL | 인증서 검증 실패 — 사내 인증서 설정 확인 |
+| `APIConnectionError` (원인 체인에 `ssl.SSLError`) | SSL | 인증서 검증 실패 - Windows 인증서 저장소에 사내 루트 인증서가 있는지 확인 (`httpx2`는 OS 인증서 저장소를 사용) |
 | `APITimeoutError` | 네트워크 | 타임아웃 — 사내망/VPN 연결, `LLM_TIMEOUT` 확인 |
 | `APIConnectionError` (그 외) | 네트워크 | 접속 불가 — 사내망/VPN 연결, `LLM_BASE_URL` 확인 |
 | `AuthenticationError`(401), `PermissionDeniedError`(403) | 인증 | `LLM_API_KEY` 확인 |
@@ -144,7 +148,7 @@ uv run llm-probe [--verbose]
 | 대상 | 방식 | 케이스 |
 |---|---|---|
 | `config.py` | `monkeypatch`로 환경변수 설정/삭제, 임시 디렉터리에서 실행해 실제 `.env` 영향 차단 | 필수값 누락 시 빠진 변수 이름 전부 포함, `LLM_TIMEOUT` 기본값 60, 숫자가 아닌 timeout 거부 |
-| 점검 항목 | `httpx.MockTransport` 가짜 서버를 `OpenAI(http_client=httpx.Client(transport=...))`에 주입 | 모델 목록 200(모델 있음/없음)·404, 채팅 성공, SSE 스트리밍, tool_calls 있음/없음/인자 깨짐, json_schema 400 → json_object 200, 연결 오류 시 중단 |
+| 점검 항목 | `httpx2.MockTransport` 가짜 서버를 `OpenAI(http_client=httpx2.Client(transport=...))`에 주입 | 모델 목록 200(모델 있음/없음)·404, 채팅 성공, SSE 스트리밍, tool_calls 있음/없음/인자 깨짐, json_schema 400 → json_object 200, 연결 오류 시 중단 |
 | `classify_error` | 실제 SDK 예외 객체 생성 | 401, 403, 404, 400, 타임아웃, SSL 원인 체인, 일반 연결 오류 |
 | `main()` | 점검 결과를 주입해 종료 코드 확인 | 채팅 ✅ → 0, 채팅 ❌ → 1, 출력에 API 키 문자열이 없음 |
 
