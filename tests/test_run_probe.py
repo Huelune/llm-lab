@@ -34,6 +34,34 @@ def test_api_key_never_printed_even_verbose(capsys):
     assert API_KEY not in out
 
 
+def test_fatal_error_after_chat_success_keeps_exit_code_zero(capsys):
+    # spec: 기본 채팅이 성공했다면 이후 단계에서 중단되어도 종료 코드는 0
+    def handler(request):
+        if request_kind(request) == "stream":
+            raise httpx2.ReadTimeout("timed out", request=request)
+        return healthy_server(request)
+
+    code, out = run(handler, capsys)
+
+    assert code == 0
+    assert "[3] 스트리밍" in out
+    assert "점검 중단" in out
+    assert "[4]" not in out
+
+
+def test_api_key_echoed_by_server_is_masked(capsys):
+    # 게이트웨이가 오류 메시지에 키를 되돌려 보내는 경우
+    def handler(request):
+        if request_kind(request) == "tools":
+            return error(400, f"tools rejected for key {API_KEY}")
+        return healthy_server(request)
+
+    code, out = run(handler, capsys)
+
+    assert API_KEY not in out
+    assert "tools rejected for key ***" in out
+
+
 def test_unsupported_feature_does_not_stop_later_checks(capsys):
     def handler(request):
         if request_kind(request) == "tools":
@@ -86,7 +114,7 @@ def test_base_url_without_v1_explains_path(capsys):
     assert code == 1
     assert "⏭ 건너뜀" in out
     assert "[경로]" in out
-    assert "/v1" in out
+    assert "끝에 /v1이 있는지" in out  # 헤더 URL의 /v1이 아니라 안내 문구
 
 
 def test_empty_chat_reply_exits_nonzero(capsys):

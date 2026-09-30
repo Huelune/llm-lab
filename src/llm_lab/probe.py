@@ -310,29 +310,39 @@ def format_result(index: int, result: CheckResult) -> str:
     return f"[{index}] {result.name:<14} {LABELS[result.status]}  {result.detail}{elapsed}"
 
 
+def exit_code(results: list[CheckResult]) -> int:
+    """기본 채팅이 성공했으면 0, 아니면 1 (중단된 경우에도 같은 규칙)."""
+    chat_ok = any(r.name == CHAT_CHECK_NAME and r.status == "ok" for r in results)
+    return 0 if chat_ok else 1
+
+
 def run_probe(client: OpenAI, settings: Settings, *, verbose: bool = False) -> int:
     """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0)."""
-    print(f"회사 LLM 점검: {settings.base_url} (model: {settings.model})\n")
+
+    def emit(text: str) -> None:
+        # 서버가 오류 메시지에 키를 되돌려 보내도 출력에는 남기지 않는다
+        print(text.replace(settings.api_key, "***"))
+
+    emit(f"회사 LLM 점검: {settings.base_url} (model: {settings.model})\n")
     results: list[CheckResult] = []
     for index, (name, check) in enumerate(CHECKS, start=1):
         try:
             result = run_check(name, check, client, settings.model)
         except ProbeAborted as aborted:
-            print(format_result(index, aborted.result))
-            print(f"\n점검 중단: {aborted.category} 문제는 이후 항목도 같은 이유로 실패합니다.")
-            return 1
+            emit(format_result(index, aborted.result))
+            emit(f"\n점검 중단: {aborted.category} 문제는 이후 항목도 같은 이유로 실패합니다.")
+            return exit_code(results)
         results.append(result)
-        print(format_result(index, result))
+        emit(format_result(index, result))
         if verbose and result.raw is not None:
-            print(json.dumps(result.raw, ensure_ascii=False, indent=2, default=str))
+            emit(json.dumps(result.raw, ensure_ascii=False, indent=2, default=str))
 
     counts = {status: sum(r.status == status for r in results) for status in LABELS}
-    print(
+    emit(
         f"\n요약: 지원 {counts['ok']} / 부분 지원 {counts['partial']} / "
         f"미지원 {counts['fail']} / 건너뜀 {counts['skip']}"
     )
-    chat_ok = any(r.name == CHAT_CHECK_NAME and r.status == "ok" for r in results)
-    return 0 if chat_ok else 1
+    return exit_code(results)
 
 
 def main(argv: list[str] | None = None) -> int:
