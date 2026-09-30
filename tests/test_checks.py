@@ -116,6 +116,27 @@ def test_tools_partial_when_arguments_broken(arguments, expected):
     assert expected in result.detail
 
 
+@pytest.mark.filterwarnings("error::UserWarning")  # pydantic 직렬화 경고가 사용자 화면에 새지 않게
+@pytest.mark.parametrize(
+    ("arguments", "type_name"), [({"file": "stats.py", "line": 5}, "dict"), (None, "NoneType")]
+)
+def test_tools_partial_when_arguments_not_a_string(arguments, type_name):
+    # 일부 게이트웨이는 arguments를 JSON 문자열이 아니라 객체나 null로 돌려준다
+    call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "report_issue", "arguments": arguments},
+    }
+    client = make_client(lambda request: completion(tool_calls=[call]))
+
+    result = check_tools(client, MODEL)
+
+    assert result.status == "partial"
+    assert f"인자가 문자열이 아님({type_name})" in result.detail
+    sent = result.raw["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert sent == arguments
+
+
 def test_tools_unsupported_raises_bad_request():
     # 400은 run_check가 '기능 미지원'으로 분류한다
     with pytest.raises(openai.BadRequestError):

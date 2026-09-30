@@ -143,6 +143,18 @@ def test_non_openai_response_is_reported_without_crashing(capsys):
     assert "[5] JSON 출력" in out
 
 
+def test_unprocessable_response_does_not_blame_the_server_for_sure(capsys):
+    def handler(request):
+        return httpx2.Response(
+            200, headers={"content-type": "text/html"}, content=b"<html>login</html>"
+        )
+
+    _, out = run(handler, capsys)
+
+    assert "응답을 처리하지 못함 - 프록시·로그인 페이지일 수 있음 (" in out
+    assert "서버 응답이 OpenAI 형식이 아님" not in out
+
+
 def test_main_reports_config_error(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT"):

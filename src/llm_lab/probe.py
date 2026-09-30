@@ -27,35 +27,63 @@ SERVER_ERROR = "서버"
 FATAL_CATEGORIES = {SSL_ERROR, NETWORK_ERROR, AUTH_ERROR}
 
 
-def _has_ssl_cause(exc: BaseException) -> bool:
+def _brief(text: str, limit: int = 200) -> str:
+    """공백·줄바꿈을 한 칸으로 줄이고 limit자에서 자른다 (HTML 오류 페이지가 화면을 덮지 않게)."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _cause_chain(exc: BaseException) -> list[BaseException]:
+    """exc에서 __cause__/__context__를 따라간 예외 목록. 순환이 있어도 멈춘다."""
+    chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
-        if isinstance(current, ssl.SSLError):
-            return True
+        chain.append(current)
         seen.add(id(current))
         current = current.__cause__ or current.__context__
-    return False
+    return chain
+
+
+def _root_cause_note(chain: list[BaseException]) -> str:
+    root = chain[-1]
+    message = _brief(str(root))
+    return f" (원인: {type(root).__name__}{': ' + message if message else ''})"
 
 
 def _server_message(exc: openai.APIStatusError) -> str:
     if isinstance(exc.body, dict) and exc.body.get("message"):
-        return str(exc.body["message"])
-    return exc.message
+        return _brief(str(exc.body["message"]))
+    return _brief(exc.message)
 
 
 def classify_error(exc: openai.APIError) -> tuple[str, str]:
     """SDK 예외를 (분류, 안내 문구)로 바꾼다."""
     if isinstance(exc, openai.APITimeoutError):
-        return NETWORK_ERROR, "응답 시간 초과 - 사내망/VPN 연결과 LLM_TIMEOUT 값을 확인하세요"
+        cause = _root_cause_note(_cause_chain(exc))
+        return NETWORK_ERROR, (
+            f"응답 시간 초과 - 사내망/VPN 연결과 LLM_TIMEOUT 값을 확인하세요{cause}"
+        )
     if isinstance(exc, openai.APIConnectionError):
-        if _has_ssl_cause(exc):
+        chain = _cause_chain(exc)
+        cause = _root_cause_note(chain)
+        if any(isinstance(item, ssl.SSLCertVerificationError) for item in chain):
             return SSL_ERROR, (
-                "인증서 검증 실패 - Windows 인증서 저장소에 사내 루트 인증서가 있는지 확인하세요"
+                "인증서 검증 실패 - Windows 인증서 저장소에 사내 루트 인증서가 있는지 "
+                f"확인하세요{cause}"
             )
-        return NETWORK_ERROR, "서버에 접속할 수 없음 - 사내망/VPN 연결과 LLM_BASE_URL을 확인하세요"
+        if any(isinstance(item, ssl.SSLError) for item in chain):
+            return SSL_ERROR, (
+                f"TLS 연결 실패 - LLM_BASE_URL의 http/https 여부와 프록시를 확인하세요{cause}"
+            )
+        return NETWORK_ERROR, (
+            f"서버에 접속할 수 없음 - 사내망/VPN 연결과 LLM_BASE_URL을 확인하세요{cause}"
+        )
     if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
-        return AUTH_ERROR, f"인증 실패({exc.status_code}) - LLM_API_KEY를 확인하세요"
+        return AUTH_ERROR, (
+            f"인증 실패({exc.status_code}) - LLM_API_KEY를 확인하세요"
+            f" - 서버 메시지: {_server_message(exc)}"
+        )
     if isinstance(exc, openai.NotFoundError):
         return PATH_ERROR, (
             "경로를 찾을 수 없음(404) - LLM_BASE_URL 끝에 /v1이 있는지, "
@@ -187,7 +215,8 @@ def check_tools(client: OpenAI, model: str) -> CheckResult:
     response = client.chat.completions.create(
         model=model, messages=TOOL_MESSAGES, tools=[REPORT_ISSUE_TOOL], tool_choice="auto"
     )
-    raw = response.model_dump()
+    # arguments가 문자열이 아닌 응답은 pydantic이 직렬화 경고를 내므로 끈다
+    raw = response.model_dump(warnings=False)
     tool_calls = (response.choices[0].message.tool_calls if response.choices else None) or []
     calls = [
         call
@@ -196,8 +225,14 @@ def check_tools(client: OpenAI, model: str) -> CheckResult:
     ]
     if not calls:
         return CheckResult("fail", "모델이 report_issue를 호출하지 않음", raw)
+    arguments = calls[0].function.arguments
+    if not isinstance(arguments, str):
+        # 일부 게이트웨이는 문자열 대신 객체·null을 돌려준다 (SDK는 그대로 통과시킨다)
+        return CheckResult(
+            "partial", f"호출은 왔지만 인자가 문자열이 아님({type(arguments).__name__})", raw
+        )
     try:
-        args = json.loads(calls[0].function.arguments)
+        args = json.loads(arguments)
     except json.JSONDecodeError:
         return CheckResult("partial", "호출은 왔지만 인자가 JSON이 아님", raw)
     if not isinstance(args, dict):
@@ -294,8 +329,8 @@ def run_check(name: str, check: Check, client: OpenAI, model: str) -> CheckResul
         # SDK가 HTML 같은 본문을 파싱하지 못하면 AttributeError·TypeError 등으로 나온다
         result = CheckResult(
             "fail",
-            f"[{FORMAT_ERROR}] 서버 응답이 OpenAI 형식이 아님 - "
-            f"프록시·로그인 페이지인지 확인하세요 ({type(exc).__name__}: {exc})",
+            f"[{FORMAT_ERROR}] 응답을 처리하지 못함 - 프록시·로그인 페이지일 수 있음 "
+            f"({type(exc).__name__}: {_brief(str(exc))})",
         )
     result.name = name
     result.elapsed = time.perf_counter() - start
