@@ -69,8 +69,8 @@ def classify_error(exc: openai.APIError) -> tuple[str, str]:
         cause = _root_cause_note(chain)
         if any(isinstance(item, ssl.SSLCertVerificationError) for item in chain):
             return SSL_ERROR, (
-                "인증서 검증 실패 - Windows 인증서 저장소에 사내 루트 인증서가 있는지 "
-                f"확인하세요{cause}"
+                "인증서 검증 실패 - OS 인증서 저장소에 사내 루트 인증서가 있는지 확인하세요. "
+                f"사설 인증서 서버라면 .env에 LLM_VERIFY_SSL=false{cause}"
             )
         if any(isinstance(item, ssl.SSLError) for item in chain):
             return SSL_ERROR, (
@@ -356,9 +356,17 @@ def run_probe(client: OpenAI, settings: Settings, *, verbose: bool = False) -> i
 
     def emit(text: str) -> None:
         # 서버가 오류 메시지에 키를 되돌려 보내도 출력에는 남기지 않는다
-        print(text.replace(settings.api_key, "***"))
+        print(text.replace(settings.api_key, "***") if settings.api_key else text)
 
-    emit(f"회사 LLM 점검: {settings.base_url} (model: {settings.model})\n")
+    # 결과 파일만 보고도 어떤 설정으로 점검했는지 알 수 있게 기본값이 아닌 옵션을 적는다
+    options = [f"model: {settings.model}"]
+    if not settings.api_key:
+        options.append("API 키 없음")
+    if not settings.verify_ssl:
+        options.append("인증서 검사 끔")
+    if settings.enable_thinking is not None:
+        options.append(f"enable_thinking={str(settings.enable_thinking).lower()}")
+    emit(f"회사 LLM 점검: {settings.base_url} ({', '.join(options)})\n")
     results: list[CheckResult] = []
     for index, (name, check) in enumerate(CHECKS, start=1):
         try:

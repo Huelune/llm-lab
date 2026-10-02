@@ -74,6 +74,8 @@ def test_ssl_error_anywhere_in_cause_chain_is_ssl_error():
 
     assert category == "SSL"
     assert "인증서" in hint
+    # 사설 인증서 서버는 검사를 끄는 선택지도 안내해야 한다
+    assert "LLM_VERIFY_SSL=false" in hint
 
 
 def test_certificate_hint_includes_root_cause():

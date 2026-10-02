@@ -15,10 +15,14 @@
 
    | 변수 | 필수 | 설명 |
    |---|---|---|
-   | `LLM_BASE_URL` | ✅ | 예: `https://llm.사내도메인/v1` (`/v1`까지 포함) |
-   | `LLM_API_KEY` | ✅ | 발급받은 키 |
+   | `LLM_BASE_URL` | ✅ | 예: `https://llm.사내도메인/v1` (`/v1`까지만 적습니다. 끝에 `/chat/completions`가 붙어 있으면 자동으로 잘라냅니다) |
+   | `LLM_API_KEY` | – | 발급받은 키. 키 없이 쓰는 서버면 비워 두며, 이때는 `Authorization` 헤더를 보내지 않습니다 |
    | `LLM_MODEL` | ✅ | 사용할 모델명 |
    | `LLM_TIMEOUT` | – | 요청 타임아웃(초), 기본 60 |
+   | `LLM_VERIFY_SSL` | – | `false`이면 서버 인증서를 검증하지 않습니다(`requests`의 `verify=False`와 같음). 기본 `true` |
+   | `LLM_ENABLE_THINKING` | – | `true`/`false`. 모든 채팅 요청에 `chat_template_kwargs.enable_thinking`을 붙입니다(vLLM + Qwen3 등). 비워 두면 보내지 않습니다 |
+
+   `LLM_VERIFY_SSL=false`는 중간자 공격을 막지 못하므로, 사내 루트 인증서를 OS 인증서 저장소에 넣을 수 없을 때만 사용하세요.
 
    OS 환경변수에 같은 이름이 있으면 `.env`보다 우선합니다. 키·주소는 항상 `LLM_*` 설정에서만 가져오고 조직·프로젝트 헤더는 보내지 않으므로, `OPENAI_API_KEY`·`OPENAI_BASE_URL`·`OPENAI_ORG_ID`·`OPENAI_PROJECT_ID`와 `OPENAI_CUSTOM_HEADERS`의 `Authorization`은 무시됩니다. 그 밖의 `OPENAI_CUSTOM_HEADERS` 항목은 그대로 요청에 붙습니다.
 

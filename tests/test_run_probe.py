@@ -49,6 +49,43 @@ def test_fatal_error_after_chat_success_keeps_exit_code_zero(capsys):
     assert "[4]" not in out
 
 
+def test_blank_api_key_does_not_garble_output(capsys):
+    # 빈 문자열로 replace하면 모든 글자 사이에 ***가 끼어든다
+    settings = Settings(base_url="https://llm.test/v1", api_key="", model=MODEL)
+
+    code = probe.run_probe(make_client(healthy_server), settings)
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "요약: 지원 5 / 부분 지원 0 / 미지원 0 / 건너뜀 0" in out
+    assert "***" not in out
+
+
+def test_header_lists_non_default_options(capsys):
+    # 결과 파일만 보고도 어떤 설정으로 점검했는지 알 수 있어야 한다
+    settings = Settings(
+        base_url="https://llm.test/v1",
+        api_key="",
+        model=MODEL,
+        verify_ssl=False,
+        enable_thinking=False,
+    )
+
+    probe.run_probe(make_client(healthy_server), settings)
+    first_line = capsys.readouterr().out.splitlines()[0]
+
+    assert "model: m1" in first_line
+    assert "API 키 없음" in first_line
+    assert "인증서 검사 끔" in first_line
+    assert "enable_thinking=false" in first_line
+
+
+def test_header_omits_options_left_at_default(capsys):
+    _, out = run(healthy_server, capsys)
+
+    assert out.splitlines()[0] == "회사 LLM 점검: https://llm.test/v1 (model: m1)"
+
+
 def test_api_key_echoed_by_server_is_masked(capsys):
     # 게이트웨이가 오류 메시지에 키를 되돌려 보내는 경우
     def handler(request):

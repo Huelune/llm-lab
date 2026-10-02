@@ -10,8 +10,13 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-REQUIRED_VARS = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+REQUIRED_VARS = ("LLM_BASE_URL", "LLM_MODEL")
+OPTIONAL_VARS = ("LLM_API_KEY", "LLM_TIMEOUT", "LLM_VERIFY_SSL", "LLM_ENABLE_THINKING")
 DEFAULT_TIMEOUT = 60.0
+BOOL_VALUES = {
+    **dict.fromkeys(("true", "1", "yes", "on"), True),
+    **dict.fromkeys(("false", "0", "no", "off"), False),
+}
 
 
 class ConfigError(Exception):
@@ -28,11 +33,21 @@ class Settings:
     api_key: str = field(repr=False)
     model: str
     timeout: float = DEFAULT_TIMEOUT
+    verify_ssl: bool = True
+    # None이면 chat_template_kwargs를 보내지 않아 서버 기본값을 따른다
+    enable_thinking: bool | None = None
+
+
+def _parse_bool(key: str, value: str) -> bool:
+    try:
+        return BOOL_VALUES[value.lower()]
+    except KeyError:
+        raise ConfigError(f"{key}은 true 또는 false여야 합니다: {value!r}") from None
 
 
 def settings_from_env(env: Mapping[str, str | None]) -> Settings:
     """환경변수 매핑에서 Settings를 만든다. 빈 문자열은 없는 값으로 본다."""
-    values = {key: (env.get(key) or "").strip() for key in (*REQUIRED_VARS, "LLM_TIMEOUT")}
+    values = {key: (env.get(key) or "").strip() for key in (*REQUIRED_VARS, *OPTIONAL_VARS)}
     missing = [key for key in REQUIRED_VARS if not values[key]]
     if missing:
         raise MissingSettingsError(
@@ -52,11 +67,16 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
         if timeout <= 0:
             raise ConfigError(f"LLM_TIMEOUT은 0보다 커야 합니다: {values['LLM_TIMEOUT']!r}")
 
+    # SDK가 /chat/completions를 직접 붙이므로, requests용 전체 주소를 넣었으면 잘라낸다
+    base_url = values["LLM_BASE_URL"].rstrip("/").removesuffix("/chat/completions")
+    thinking = values["LLM_ENABLE_THINKING"]
     return Settings(
-        base_url=values["LLM_BASE_URL"],
+        base_url=base_url,
         api_key=values["LLM_API_KEY"],
         model=values["LLM_MODEL"],
         timeout=timeout,
+        verify_ssl=_parse_bool("LLM_VERIFY_SSL", values["LLM_VERIFY_SSL"] or "true"),
+        enable_thinking=_parse_bool("LLM_ENABLE_THINKING", thinking) if thinking else None,
     )
 
 

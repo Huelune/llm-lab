@@ -17,17 +17,57 @@ def test_settings_from_env_reads_required_values_and_default_timeout():
 
 def test_missing_required_values_are_all_named():
     with pytest.raises(ConfigError) as exc_info:
-        settings_from_env({"LLM_MODEL": "m1"})
+        settings_from_env({})
 
     message = str(exc_info.value)
     assert "LLM_BASE_URL" in message
-    assert "LLM_API_KEY" in message
-    assert "LLM_MODEL" not in message
+    assert "LLM_MODEL" in message
+    assert "LLM_API_KEY" not in message
 
 
 def test_blank_value_counts_as_missing():
-    with pytest.raises(ConfigError, match="LLM_API_KEY"):
-        settings_from_env({**VALID, "LLM_API_KEY": "   "})
+    with pytest.raises(ConfigError, match="LLM_MODEL"):
+        settings_from_env({**VALID, "LLM_MODEL": "   "})
+
+
+def test_api_key_is_optional():
+    # 인증 없이 열어 둔 사내 서버(vLLM 등)는 키가 없다
+    settings = settings_from_env({"LLM_BASE_URL": "https://llm.test/v1", "LLM_MODEL": "m1"})
+
+    assert settings.api_key == ""
+
+
+@pytest.mark.parametrize("suffix", ["/chat/completions", "/chat/completions/", "/"])
+def test_base_url_drops_endpoint_path(suffix):
+    # requests로 직접 호출하던 전체 주소를 그대로 붙여 넣어도 SDK가 경로를 두 번 붙이지 않게
+    settings = settings_from_env({**VALID, "LLM_BASE_URL": f"https://llm.test/v1{suffix}"})
+
+    assert settings.base_url == "https://llm.test/v1"
+
+
+def test_verify_ssl_and_thinking_defaults():
+    settings = settings_from_env(VALID)
+
+    assert settings.verify_ssl is True
+    assert settings.enable_thinking is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("false", False), ("FALSE", False), ("0", False), ("true", True)]
+)
+def test_verify_ssl_is_parsed_as_bool(raw, expected):
+    assert settings_from_env({**VALID, "LLM_VERIFY_SSL": raw}).verify_ssl is expected
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("false", False), ("no", False), ("on", True)])
+def test_enable_thinking_is_parsed_as_bool(raw, expected):
+    assert settings_from_env({**VALID, "LLM_ENABLE_THINKING": raw}).enable_thinking is expected
+
+
+@pytest.mark.parametrize("key", ["LLM_VERIFY_SSL", "LLM_ENABLE_THINKING"])
+def test_invalid_bool_is_rejected(key):
+    with pytest.raises(ConfigError, match=key):
+        settings_from_env({**VALID, key: "nope"})
 
 
 def test_timeout_is_parsed_as_float():
@@ -48,7 +88,14 @@ def test_repr_hides_api_key():
 def isolated(tmp_path, monkeypatch):
     """임시 디렉터리로 이동하고 LLM_* 환경변수를 비운다."""
     monkeypatch.chdir(tmp_path)
-    for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT"):
+    for key in (
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_TIMEOUT",
+        "LLM_VERIFY_SSL",
+        "LLM_ENABLE_THINKING",
+    ):
         monkeypatch.delenv(key, raising=False)
     return tmp_path
 
