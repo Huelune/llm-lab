@@ -20,7 +20,7 @@
    | `LLM_MODEL` | ✅ | 사용할 모델명 |
    | `LLM_TIMEOUT` | – | 요청 타임아웃(초), 기본 60 |
    | `LLM_VERIFY_SSL` | – | `false`이면 서버 인증서를 검증하지 않습니다(`requests`의 `verify=False`와 같음). 기본 `true` |
-   | `LLM_ENABLE_THINKING` | – | `true`/`false`. 모든 채팅 요청에 `chat_template_kwargs.enable_thinking`을 붙입니다(vLLM + Qwen3 등). 비워 두면 보내지 않습니다 |
+   | `LLM_ENABLE_THINKING` | – | `true`/`false`. 모든 채팅 요청에 `chat_template_kwargs.enable_thinking`을 붙입니다(생각 모드를 지원하는 모델용). 비워 두면 보내지 않습니다 |
 
    `LLM_VERIFY_SSL=false`는 중간자 공격을 막지 못하므로, 사내 루트 인증서를 OS 인증서 저장소에 넣을 수 없을 때만 사용하세요.
 

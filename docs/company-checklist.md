@@ -8,7 +8,7 @@
 ## 1. 서버에 코드 가져가기
 
 - [ ] 서버에서 github.com에 접속되는지 확인합니다.
-  - 접속되면 clone합니다. 비공개 저장소이므로 `gh auth login`이나 개인 액세스 토큰이 필요합니다.
+  - 접속되면 clone합니다. 공개 저장소라 인증 없이 받을 수 있으니, 서버에 GitHub 토큰을 남기지 않습니다.
 
     ```bash
     git clone https://github.com/Huelune/llm-lab.git
@@ -31,10 +31,7 @@
 ## 2. `.env` 작성
 
 - [ ] `.env.example`을 `.env`로 복사하고 `LLM_BASE_URL`(`/v1`까지 포함)과 `LLM_MODEL`을 채웁니다. 키가 있는 서버면 `LLM_API_KEY`도 채웁니다.
-- [ ] 예전에 `requests`로 호출하던 코드가 있다면 같은 설정을 맞춥니다.
-  - `verify=False`를 썼다면 `LLM_VERIFY_SSL=false`
-  - `"chat_template_kwargs": {"enable_thinking": False}`를 보냈다면 `LLM_ENABLE_THINKING=false`
-  - 그 코드의 `model` 값을 `LLM_MODEL`에 넣습니다.
+- [ ] 선택 항목(`LLM_VERIFY_SSL`, `LLM_ENABLE_THINKING`)은 `.env.example`의 설명을 보고 필요할 때만 채웁니다.
 - [ ] 키는 채팅이나 스크린샷에 올리지 않습니다.
 
 ## 3. 점검 실행
@@ -72,7 +69,7 @@ Windows PowerShell에서 파일로 저장할 때는 먼저 `$env:PYTHONUTF8 = "1
 
 ## 6. 질문지 전달
 
-- [ ] [사내 LLM 도입 확인 질문지](https://claude.ai/code/artifact/26621ad3-f802-4dc6-b364-3cd337beae15)를 담당자에게 공유합니다. 지금은 비공개 상태이므로 공유 설정을 바꾸거나 Word/PDF로 내보내서 전달합니다.
+- [ ] 사내 LLM 도입 확인 질문지를 담당자에게 공유합니다. 링크는 저장소에 두지 않습니다. 링크 공개로 바꾸지 말고 담당자만 초대하거나 Word/PDF로 내보내서 전달합니다.
 - [ ] "꼭 물어볼 것" 5개를 먼저 받습니다. 특히 아래 세 가지는 답에 따라 구조가 달라집니다.
   - 2번: 소스코드를 LLM에 보내도 되는지, 로그가 남는지
   - 3번: LLM에 접속되는 서버에 API 서비스를 올릴 수 있는지
@@ -85,5 +82,7 @@ Windows PowerShell에서 파일로 저장할 때는 먼저 `$env:PYTHONUTF8 = "1
 - [ ] 질문지 답변
 - [ ] 규칙 엑셀 샘플. 몇 행만 있어도 됩니다.
 - [ ] 규칙 위반이 들어 있는 샘플 코드와 기대 결과(있으면)
+
+이 자료는 **커밋하지 않습니다**(공개 저장소). 저장소 안에 둘 때는 `private/` 폴더에 넣습니다. `private/`, `probe-result*.txt`, 엑셀 파일은 `.gitignore`에 들어 있습니다.
 
 이것들이 모이면 2단계 설계를 시작합니다.

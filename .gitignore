@@ -16,3 +16,10 @@ dist/
 .env
 .env.*
 !.env.example
+
+# 공개 저장소이므로 회사 자료는 커밋하지 않는다: 점검 결과(사내 주소·응답 원문), 규칙 엑셀, 샘플 코드·답변
+probe-result*.txt
+*.xlsx
+*.xlsm
+*.xls
+private/
