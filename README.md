@@ -1,6 +1,6 @@
 # llm-lab
 
-회사 LLM(OpenAI 호환 API, 사내망 전용)의 연결·기능 점검 도구와 공용 클라이언트입니다.
+회사 LLM(OpenAI 호환 API, 사내망 전용)의 연결·기능 점검 도구, 공용 클라이언트, Polyspace RTE 수정 제안 서비스입니다.
 
 ## 준비
 
@@ -55,6 +55,31 @@ uv run llm-probe --context --output probe-result-context.txt
 - 상태: `✅ 지원` / `⚠️ 부분` / `❌ 실패` / `⏭ 건너뜀`
 - 네트워크·SSL·인증 오류가 나면 그 자리에서 중단하고 원인과 확인할 것을 보여줍니다.
 - 종료 코드: 기본 채팅이 성공하면 0, 아니면 1
+
+## 수정 제안 서비스 (llm-fix-server)
+
+Polyspace Code Prover 결과 엑셀의 RTE 시트에서 Red/Orange 행마다 회사 LLM이 "수정" 또는 "수정 불필요"를 판단합니다. 수정이면 diff를 보여주고, 고른 수정을 패치 파일로 내려받아 적용합니다.
+
+```bash
+uv run llm-fix-server
+```
+
+1. 브라우저에서 `http://127.0.0.1:8000`을 엽니다. 같은 PC에서만 열립니다. 포트를 바꾸려면 `--port 8080`처럼 붙입니다.
+2. 엑셀(.xlsx)과 소스 파일들을 골라 "분석 시작"을 누릅니다. 이름이 `_Result`로 끝나고 `TYPE`, `File`, `line`, `check`, `detail` 열이 있는 시트를 읽습니다.
+3. 처리 중에는 결과 페이지가 5초마다 새로 고쳐집니다. 끝나면 적용할 수정에 체크하고 "고른 수정을 패치로 내려받기"를 누릅니다.
+4. 화면에 나온 폴더에서 패치를 확인한 뒤 적용합니다. `core.autocrlf=false`는 Git for Windows가 LF 파일을 CRLF로 바꾸지 않게 합니다.
+
+```bash
+git -c core.autocrlf=false apply --check fixes.patch
+```
+
+```bash
+git -c core.autocrlf=false apply fixes.patch
+```
+
+- 소스는 UTF-8 또는 CP949여야 하고, 한 파일 안의 줄바꿈은 한 가지(CRLF 또는 LF)여야 합니다.
+- 작업과 결과는 `private/fixer.db`에 저장되며 커밋되지 않습니다. 같은 파일·같은 지적은 LLM을 다시 부르지 않습니다.
+- 서비스를 껐다 켜면 처리 중이던 작업을 이어서 합니다. 결과 JSON은 `/api/jobs/{작업 번호}`에서 받을 수 있습니다.
 
 ## 코드에서 사용하기
 

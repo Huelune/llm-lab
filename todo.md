@@ -37,6 +37,34 @@ uv run llm-probe --context --output probe-result-context.txt
 
 패치 파일 안의 경로와 `git apply`를 실행할 폴더가 이것으로 정해집니다.
 
+## 4. 수정 제안 서비스 실제로 써 보기
+
+회사 PC에서 최신 코드를 받고 서비스를 켭니다.
+
+```bash
+git pull
+```
+
+```bash
+uv sync
+```
+
+```bash
+uv run llm-fix-server
+```
+
+1. 브라우저에서 `http://127.0.0.1:8000`을 열고 Polyspace 엑셀과 해당 소스 파일들을 올립니다.
+2. 결과 화면에서 판단·이유·diff가 읽을 만한지 봅니다.
+3. 몇 개를 골라 패치를 받고, 화면에 나온 폴더에서 `git -c core.autocrlf=false apply --check fixes.patch` 다음 `--check` 없이 적용합니다.
+4. Polyspace를 다시 돌립니다.
+
+알려줄 것(파일 경로·코드는 가려도 됩니다):
+
+- 처리한 행 수와 판단 분포(수정 / 수정 불필요 / 오류 / 소스 없음)
+- 이상하다고 느낀 판단이나 오류 메시지 예시 1~2개
+- `git apply`가 됐는지
+- Polyspace 재실행 결과: "수정" 행이 Green이 됐는지, 새 Red/Orange가 생겼는지
+
 ## 나중에 (RTE 다음)
 
 - MISRA와 CodeMetrics 시트의 이름, 헤더 행, 가린 예시 행 1~2개

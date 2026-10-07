@@ -1,7 +1,7 @@
 # Polyspace RTE 수정 제안 서비스 (llm-fix-server) 설계
 
 - 작성일: 2026-10-07
-- 상태: 검토 중
+- 상태: 승인됨 (구현 계획: `docs/superpowers/plans/2026-10-07-rte-fixer.md`)
 
 ## 1. 배경과 목표
 
