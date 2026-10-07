@@ -12,6 +12,7 @@ from typing import Annotated, Any
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from llm_lab.client import get_client
@@ -52,6 +53,8 @@ def _row_json(row: Row) -> dict[str, Any]:
 
 def create_app(store: Store, worker: Worker) -> FastAPI:
     app = FastAPI(title="llm-fix-server")
+    # DNS 리바인딩으로 다른 사이트가 이 페이지(회사 소스·diff)를 읽지 못하게 Host를 제한한다
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     def job_or_404(job_id: int) -> Job:
         job = store.job(job_id)

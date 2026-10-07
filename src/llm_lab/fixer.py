@@ -360,6 +360,16 @@ def _to_result(
         )
     ):
         raise EditMismatch("fix인데 edits가 비었거나 형식이 다름")
+    for number, raw in enumerate(raw_edits, start=1):
+        # 소스 인코딩(CP949 등)으로 못 쓰는 문자가 있으면 패치를 만들 수 없으므로 지금 다시 요청한다
+        try:
+            raw["replacement"].encode(source.encoding)
+        except UnicodeEncodeError as exc:
+            char = ord(raw["replacement"][exc.start])
+            raise EditMismatch(
+                f"edits[{number}].replacement에 {source.encoding}로 쓸 수 없는 문자 "
+                f"U+{char:04X}가 있음 - ASCII나 한글만 쓰세요"
+            ) from None
     edits = locate_edits(source.text, first, last, raw_edits)
     fixed = apply_edits(source.text, edits)
     if fixed == source.text:

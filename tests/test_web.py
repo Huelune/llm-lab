@@ -15,7 +15,9 @@ def make_service(tmp_path, *responses, submit=run_now):
     handler, sent = scripted(*responses)
     store = Store(tmp_path / "fixer.db")
     worker = Worker(store, make_client(handler), MODEL, submit)
-    return TestClient(web.create_app(store, worker)), store, sent
+    # 브라우저가 실제로 보내는 Host와 같게 둔다
+    client = TestClient(web.create_app(store, worker), base_url="http://127.0.0.1:8000")
+    return client, store, sent
 
 
 def upload(client, excel: bytes, *sources: tuple[str, bytes]):
@@ -38,6 +40,14 @@ def test_index_shows_upload_form(tmp_path):
 
     assert 'name="excel"' in page
     assert 'name="sources" multiple' in page
+
+
+def test_rejects_other_host_names(tmp_path):
+    # DNS 리바인딩: 다른 사이트가 자기 도메인으로 이 서버(회사 소스·diff)를 읽지 못해야 한다
+    client, _, _ = make_service(tmp_path)
+
+    assert client.get("/api/jobs/1", headers={"host": "evil.example"}).status_code == 400
+    assert client.get("/", headers={"host": "localhost:8000"}).status_code == 200
 
 
 def test_upload_processes_rows_and_shows_results(tmp_path):

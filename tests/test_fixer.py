@@ -49,6 +49,19 @@ def test_unusable_answer_is_retried_once_with_the_problem():
     assert "edits[1].original을 보낸 코드에서 찾을 수 없음" in retry[3]["content"]
 
 
+def test_replacement_not_writable_in_source_encoding_is_retried():
+    # CP949 소스에 CP949로 쓸 수 없는 문자(– U+2013)를 넣으면 패치를 만들 수 없으므로 다시 요청한다
+    source = decode_source("calc.c", ("/* 나눗셈 */\n" + CALC_C.decode()).encode("cp949"))
+    dash = {"original": "    return a / b;", "replacement": "    return b ? a / b : 0; /* b – 0 */"}
+    handler, sent = scripted(fix_answer(edits=[dash]), fix_answer())
+
+    result = propose_fix(make_client(handler), MODEL, finding(line=4), source)
+
+    assert result.decision == "fix"
+    assert "–" not in apply_edits(source.text, result.edits)
+    assert "cp949로 쓸 수 없는 문자 U+2013" in sent[1]["messages"][3]["content"]
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [
