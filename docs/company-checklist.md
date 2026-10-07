@@ -36,13 +36,13 @@
 
 ## 3. 점검 실행
 
-결과를 파일로 남겨 둡니다. Linux에서는 이렇게 실행합니다.
+결과를 파일로 남겨 둡니다. 화면에도 같은 내용이 나오고, 파일은 Windows·Linux 모두 UTF-8로 저장됩니다.
 
 ```bash
-uv run llm-probe --verbose 2>&1 | tee probe-result.txt
+uv run llm-probe --verbose --output probe-result.txt
 ```
 
-Windows PowerShell에서 파일로 저장할 때는 먼저 `$env:PYTHONUTF8 = "1"`을 설정해야 ✅ 같은 기호가 깨지지 않습니다. API 키는 어떤 출력에도 나오지 않습니다.
+API 키는 화면과 파일 어디에도 나오지 않습니다.
 
 ## 4. 결과에서 볼 것
 
@@ -53,6 +53,12 @@ Windows PowerShell에서 파일로 저장할 때는 먼저 `$env:PYTHONUTF8 = "1
 | 3. 스트리밍 | 첫 토큰까지 시간 | 응답 속도 기대치 |
 | 4. Tool calling | ✅ / ⚠️ / ❌ | 검사 결과를 구조화해서 받는 방식을 정합니다. |
 | 5. JSON 출력 | `json_schema`가 되는지, `json_object`만 되는지 | 4번과 함께 위와 같습니다. |
+
+2번에서 짧은 답에 출력 토큰이 수십~수백 개 나오면 생각 모드가 켜진 것입니다. 이때는 비교 실행을 한 번 더 합니다.
+
+1. `.env`에 `LLM_ENABLE_THINKING=false`를 넣습니다.
+2. `--output probe-result-think-off.txt`로 다시 실행합니다.
+3. 두 결과에서 4·5번 걸린 시간과 5번 원문의 `usage.completion_tokens`를 비교합니다.
 
 4번과 5번이 400 오류로 실패하면 "지원하지 않음"이라는 결과이므로 고칠 대상이 아닙니다. 그대로 기록합니다.
 

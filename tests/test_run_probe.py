@@ -218,3 +218,21 @@ def test_main_survives_cp949_redirected_stdout(tmp_path, monkeypatch):
     sys.stdout.flush()
     assert code == 0
     assert "지원" in buffer.getvalue().decode("cp949")
+
+
+def test_main_writes_output_file_in_utf8_and_masks_key(tmp_path, monkeypatch, capsys):
+    # Windows에는 tee가 없고 셸 리다이렉트는 인코딩이 셸마다 달라서 파일은 직접 쓴다
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("LLM_API_KEY", API_KEY)
+    monkeypatch.setenv("LLM_MODEL", MODEL)
+    monkeypatch.setattr(probe, "get_client", lambda settings: make_client(healthy_server))
+
+    code = probe.main(["--verbose", "--output", "result.txt"])
+
+    saved = (tmp_path / "result.txt").read_text(encoding="utf-8")
+    assert code == 0
+    assert saved == capsys.readouterr().out  # 화면과 같은 내용
+    assert "✅ 지원" in saved
+    assert '"pong"' in saved
+    assert API_KEY not in saved

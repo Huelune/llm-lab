@@ -8,8 +8,9 @@ import ssl
 import sys
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TextIO
 
 import openai
 from openai import OpenAI
@@ -351,12 +352,21 @@ def exit_code(results: list[CheckResult]) -> int:
     return 0 if chat_ok else 1
 
 
-def run_probe(client: OpenAI, settings: Settings, *, verbose: bool = False) -> int:
-    """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0)."""
+def run_probe(
+    client: OpenAI, settings: Settings, *, verbose: bool = False, output: TextIO | None = None
+) -> int:
+    """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0).
+
+    output을 주면 화면과 같은 내용을 그 파일에도 쓴다.
+    """
 
     def emit(text: str) -> None:
         # 서버가 오류 메시지에 키를 되돌려 보내도 출력에는 남기지 않는다
-        print(text.replace(settings.api_key, "***") if settings.api_key else text)
+        if settings.api_key:
+            text = text.replace(settings.api_key, "***")
+        print(text)
+        if output is not None:
+            print(text, file=output)
 
     # 결과 파일만 보고도 어떤 설정으로 점검했는지 알 수 있게 기본값이 아닌 옵션을 적는다
     options = [f"model: {settings.model}"]
@@ -394,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         stream.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(prog="llm-probe", description="회사 LLM 연결·기능 점검")
     parser.add_argument("--verbose", action="store_true", help="각 응답의 원문 JSON도 출력")
+    parser.add_argument("--output", metavar="FILE", help="화면 출력을 UTF-8 파일로도 저장")
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -401,4 +412,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return 1
     client = get_client(settings).with_options(max_retries=0)
-    return run_probe(client, settings, verbose=args.verbose)
+    # Windows에는 tee가 없고 셸 리다이렉트는 셸마다 인코딩이 달라서 파일은 직접 쓴다
+    with open(args.output, "w", encoding="utf-8") if args.output else nullcontext() as output:
+        return run_probe(client, settings, verbose=args.verbose, output=output)
