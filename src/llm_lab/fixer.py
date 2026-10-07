@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
+from typing import Any
+
+import openai
+from openai import OpenAI
+
+from llm_lab.polyspace import Finding
+from llm_lab.probe import FATAL_CATEGORIES, classify_error
+from llm_lab.sources import SourceFile
 
 # 이 줄 수 이하면 파일 전체를 보낸다. 컨텍스트 길이를 잰 뒤 조정한다.
 WHOLE_FILE_MAX_LINES = 400
@@ -13,6 +22,17 @@ WHOLE_FILE_MAX_LINES = 400
 WINDOW_LINES = 60
 # 함수 시그니처를 넣으려고 '{' 위로 거슬러 올라가는 최대 줄 수
 SIGNATURE_LINES = 10
+FIX_TIMEOUT = 120.0
+# 프롬프트나 응답 처리 방식을 바꾸면 올린다 (캐시 키에 들어간다)
+PROMPT_VERSION = 1
+
+
+class FixError(Exception):
+    """행 하나를 처리하지 못함. 그 행만 오류로 표시한다."""
+
+
+class FatalLLMError(Exception):
+    """네트워크·SSL·인증 오류. 나머지 행도 같은 이유로 실패하므로 작업 전체를 멈춘다."""
 
 
 class EditMismatch(Exception):
@@ -207,3 +227,176 @@ def display_diff(name: str, old: str, new: str) -> str:
         split_lines(old), split_lines(new), f"a/{name}", f"b/{name}", lineterm="", n=3
     )
     return "\n".join(lines)
+
+
+SYSTEM_PROMPT = """\
+You review one Polyspace Code Prover run-time check in C code \
+and decide whether the code must change.
+- Red Check: Polyspace proved that the operation fails whenever it runs. Fix it.
+- Orange Check: Polyspace could not prove the operation safe. \
+Fix it if some execution can really fail. \
+If the code shown guarantees safety, answer no_fix and name the lines that guarantee it.
+When you fix:
+- Make the safety provable by static analysis: explicit range checks, \
+division-by-zero checks, initialization and similar.
+- Change as little as possible. Do not touch lines unrelated to the check. \
+Keep the behavior for valid inputs.
+- Copy each edit's "original" exactly from the code shown, as whole consecutive lines, \
+without the line-number prefix. "replacement" is the new text for those lines.
+Do not guess definitions (macros, types, other functions) that are not shown. \
+If they matter, say so in reason.
+Write "reason" in Korean, one to three sentences that a reviewer can paste \
+into a Polyspace comment.
+Answer with JSON only. For no_fix, "edits" is [].
+"""
+
+FIX_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["fix", "no_fix"]},
+        "reason": {"type": "string"},
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "original": {"type": "string"},
+                    "replacement": {"type": "string"},
+                },
+                "required": ["original", "replacement"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["decision", "reason", "edits"],
+    "additionalProperties": False,
+}
+
+
+def build_prompt(finding: Finding, source: SourceFile, first: int, last: int) -> str:
+    facts = [
+        ("TYPE", finding.type),
+        ("check", finding.check),
+        ("detail", finding.detail),
+        ("Group", finding.group),
+        ("information", finding.information),
+        ("Function", finding.function),
+        ("File", source.name),
+        ("line", str(finding.line)),
+    ]
+    listed = "\n".join(f"- {name}: {value}" for name, value in facts if value)
+    return (
+        f"Polyspace Code Prover result:\n{listed}\n\n"
+        f"Code (lines {first}-{last} of {source.name}; "
+        "each line starts with its number and '| '):\n"
+        f"```c\n{numbered(source.text, first, last)}\n```"
+    )
+
+
+def cache_key(model: str, source: SourceFile, finding: Finding) -> str:
+    parts = [
+        str(PROMPT_VERSION),
+        model,
+        source.sha256,
+        finding.type,
+        finding.check,
+        finding.detail,
+        finding.group,
+        finding.information,
+        finding.function,
+        str(finding.line),
+    ]
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+
+def _ask(client: OpenAI, model: str, messages: list[dict[str, str]]) -> tuple[str, str | None]:
+    """(응답 내용, finish_reason). 네트워크·SSL·인증 오류면 FatalLLMError."""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,  # type: ignore[arg-type]
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "rte_fix", "schema": FIX_SCHEMA, "strict": True},
+            },
+        )
+    except openai.APIError as exc:
+        category, hint = classify_error(exc)
+        if category in FATAL_CATEGORIES:
+            raise FatalLLMError(f"[{category}] {hint}") from exc
+        raise FixError(f"[{category}] {hint}") from exc
+    if not response.choices:
+        return "", None
+    choice = response.choices[0]
+    return choice.message.content or "", choice.finish_reason
+
+
+def _to_result(
+    content: str, finish_reason: str | None, source: SourceFile, first: int, last: int
+) -> FixResult:
+    if finish_reason == "length":
+        raise EditMismatch("응답이 출력 길이 제한으로 잘림")
+    try:
+        data: Any = json.loads(content)
+    except json.JSONDecodeError:
+        raise EditMismatch("응답이 JSON이 아님") from None
+    if (
+        not isinstance(data, dict)
+        or data.get("decision") not in ("fix", "no_fix")
+        or not isinstance(data.get("reason"), str)
+    ):
+        raise EditMismatch("decision·reason이 스키마와 다름")
+    if data["decision"] == "no_fix":
+        return FixResult("no_fix", data["reason"], (), "")
+    raw_edits = data.get("edits")
+    if (
+        not isinstance(raw_edits, list)
+        or not raw_edits
+        or not all(
+            isinstance(edit, dict)
+            and isinstance(edit.get("original"), str)
+            and isinstance(edit.get("replacement"), str)
+            for edit in raw_edits
+        )
+    ):
+        raise EditMismatch("fix인데 edits가 비었거나 형식이 다름")
+    edits = locate_edits(source.text, first, last, raw_edits)
+    fixed = apply_edits(source.text, edits)
+    if fixed == source.text:
+        raise EditMismatch("수정해도 원본과 같음")
+    return FixResult("fix", data["reason"], edits, display_diff(source.name, source.text, fixed))
+
+
+def propose_fix(client: OpenAI, model: str, finding: Finding, source: SourceFile) -> FixResult:
+    """RTE 행 하나에 대한 판단과 수정. 쓸 수 없는 응답이면 한 번만 다시 요청한다."""
+    line_count = len(split_lines(source.text))
+    if finding.line is None:
+        raise FixError("line 칸이 정수가 아님")
+    if not 1 <= finding.line <= line_count:
+        raise FixError(
+            f"{finding.line}번 줄이 없음 (파일은 {line_count}줄) - "
+            "엑셀과 소스의 버전이 다를 수 있음"
+        )
+    first, last = select_region(source.text, finding.line)
+    client = client.with_options(timeout=FIX_TIMEOUT, max_retries=1)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_prompt(finding, source, first, last)},
+    ]
+    problem = ""
+    for _ in range(2):
+        content, finish_reason = _ask(client, model, messages)
+        try:
+            return _to_result(content, finish_reason, source, first, last)
+        except EditMismatch as exc:
+            problem = str(exc)
+            messages = [
+                *messages,
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": f"Your answer could not be used: {problem}. "
+                    "Answer again with the same JSON format.",
+                },
+            ]
+    raise FixError(f"LLM 응답을 쓸 수 없음 (2번 시도): {problem}")

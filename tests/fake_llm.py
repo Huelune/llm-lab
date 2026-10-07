@@ -33,7 +33,11 @@ def models(*ids: str) -> httpx2.Response:
 
 
 def completion(
-    content: str | None = None, *, tool_calls: list[dict] | None = None, usage: bool = True
+    content: str | None = None,
+    *,
+    tool_calls: list[dict] | None = None,
+    usage: bool = True,
+    finish_reason: str = "stop",
 ) -> httpx2.Response:
     message: dict = {"role": "assistant", "content": content}
     if tool_calls is not None:
@@ -43,7 +47,7 @@ def completion(
         "object": "chat.completion",
         "created": 0,
         "model": MODEL,
-        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
     }
     if usage:
         body["usage"] = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
@@ -103,3 +107,15 @@ def healthy_server(request: httpx2.Request) -> httpx2.Response:
     if kind == "json":
         return completion(ISSUE_JSON)
     return completion("pong")
+
+
+def scripted(*responses: httpx2.Response) -> tuple[Handler, list[dict]]:
+    """응답을 순서대로 돌려주는 서버와, 받은 요청 본문 목록."""
+    queue = list(responses)
+    sent: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request_json(request))
+        return queue.pop(0)
+
+    return handler, sent
