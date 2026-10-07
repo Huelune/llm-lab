@@ -5,16 +5,21 @@ description = "회사 LLM 연결·기능 점검 도구와 공용 클라이언트
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.142.2",
     "openai>=3.22,<4",
     "openpyxl>=3.1.5",
     "python-dotenv>=1.2",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
 llm-probe = "llm_lab.probe:main"
+llm-fix-server = "llm_lab.web:main"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9",
     "ruff>=0.16",
 ]
