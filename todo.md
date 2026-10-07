@@ -27,6 +27,16 @@ uv run llm-probe --context --output probe-result-context.txt
 - C인지 C++인지
 - MISRA 규칙 버전(예: MISRA C:2012, MISRA C:2023, MISRA C++:2008). MISRA 시트에 적혀 있을 수 있습니다.
 
+## 3. RTE 시트 `File` 칸 형식
+
+`File` 칸에 경로가 어떻게 적혀 있는지 알려줍니다. 셋 중 어느 쪽인지만 알면 됩니다. 폴더 이름은 가려도 되고, 형태만 보이면 됩니다(예: `C:\***\***\src\***.c`).
+
+- 전체 경로(예: `C:\work\proj\src\a.c`)
+- 상대 경로(예: `src\a.c`)
+- 파일 이름만(예: `a.c`)
+
+패치 파일 안의 경로와 `git apply`를 실행할 폴더가 이것으로 정해집니다.
+
 ## 나중에 (RTE 다음)
 
 - MISRA와 CodeMetrics 시트의 이름, 헤더 행, 가린 예시 행 1~2개
