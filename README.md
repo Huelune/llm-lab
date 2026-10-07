@@ -38,6 +38,12 @@ uv run llm-probe
 
 응답 원문 JSON까지 보려면 `--verbose`를 붙입니다. 결과를 파일로 남기려면 `--output probe-result.txt`를 붙입니다. 화면과 같은 내용이 UTF-8로 저장되므로 `tee`나 리다이렉트가 필요 없습니다. API 키는 어떤 출력에도 나오지 않습니다.
 
+모델 목록에 컨텍스트 길이(`max_model_len`)가 없으면 `--context`로 직접 잽니다. 약 8천 토큰짜리 프롬프트부터 두 배씩 늘려 25만 6천 토큰까지 보내고, 서버가 거부하면 그 자리에서 멈추고 서버 메시지를 보여줍니다. 메시지에 보통 정확한 최대값이 들어 있습니다. 요청마다 최대 5분까지 기다리므로 몇 분 걸릴 수 있습니다.
+
+```bash
+uv run llm-probe --context --output probe-result-context.txt
+```
+
 | 항목 | 확인 내용 |
 |---|---|
 | 1. 연결·모델 목록 | `/models` 호출, `LLM_MODEL`이 목록에 있는지 |

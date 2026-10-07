@@ -52,10 +52,10 @@ def _root_cause_note(chain: list[BaseException]) -> str:
     return f" (원인: {type(root).__name__}{': ' + message if message else ''})"
 
 
-def _server_message(exc: openai.APIStatusError) -> str:
+def _server_message(exc: openai.APIStatusError, limit: int = 200) -> str:
     if isinstance(exc.body, dict) and exc.body.get("message"):
-        return _brief(str(exc.body["message"]))
-    return _brief(exc.message)
+        return _brief(str(exc.body["message"]), limit)
+    return _brief(exc.message, limit)
 
 
 def classify_error(exc: openai.APIError) -> tuple[str, str]:
@@ -352,13 +352,8 @@ def exit_code(results: list[CheckResult]) -> int:
     return 0 if chat_ok else 1
 
 
-def run_probe(
-    client: OpenAI, settings: Settings, *, verbose: bool = False, output: TextIO | None = None
-) -> int:
-    """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0).
-
-    output을 주면 화면과 같은 내용을 그 파일에도 쓴다.
-    """
+def _emitter(settings: Settings, output: TextIO | None) -> Callable[[str], None]:
+    """화면(과 output 파일)에 한 줄씩 쓰는 함수를 만든다."""
 
     def emit(text: str) -> None:
         # 서버가 오류 메시지에 키를 되돌려 보내도 출력에는 남기지 않는다
@@ -368,6 +363,10 @@ def run_probe(
         if output is not None:
             print(text, file=output)
 
+    return emit
+
+
+def _header(settings: Settings) -> str:
     # 결과 파일만 보고도 어떤 설정으로 점검했는지 알 수 있게 기본값이 아닌 옵션을 적는다
     options = [f"model: {settings.model}"]
     if not settings.api_key:
@@ -376,7 +375,18 @@ def run_probe(
         options.append("인증서 검사 끔")
     if settings.enable_thinking is not None:
         options.append(f"enable_thinking={str(settings.enable_thinking).lower()}")
-    emit(f"회사 LLM 점검: {settings.base_url} ({', '.join(options)})\n")
+    return f"회사 LLM 점검: {settings.base_url} ({', '.join(options)})\n"
+
+
+def run_probe(
+    client: OpenAI, settings: Settings, *, verbose: bool = False, output: TextIO | None = None
+) -> int:
+    """모든 점검을 실행해 결과를 출력하고 종료 코드를 반환한다 (기본 채팅 성공 시 0).
+
+    output을 주면 화면과 같은 내용을 그 파일에도 쓴다.
+    """
+    emit = _emitter(settings, output)
+    emit(_header(settings))
     results: list[CheckResult] = []
     for index, (name, check) in enumerate(CHECKS, start=1):
         try:
@@ -398,6 +408,56 @@ def run_probe(
     return exit_code(results)
 
 
+# 컨텍스트 길이 측정: 프롬프트를 두 배씩 늘려 서버가 거부하는 지점을 찾는다.
+# "hello "는 대부분의 토크나이저에서 1토큰이라 단어 수가 곧 대략의 토큰 수다.
+CONTEXT_SIZES = (8_000, 16_000, 32_000, 64_000, 128_000, 256_000)
+# 긴 프롬프트는 읽는 데만 수십 초 걸릴 수 있다
+CONTEXT_TIMEOUT = 300.0
+
+
+def run_context(client: OpenAI, settings: Settings, *, output: TextIO | None = None) -> int:
+    """컨텍스트 길이를 잰다. 가장 작은 요청부터 실패하면 1, 아니면 0."""
+    emit = _emitter(settings, output)
+    emit(_header(settings))
+    client = client.with_options(timeout=max(settings.timeout, CONTEXT_TIMEOUT))
+    passed: int | None = None
+    rejected: int | None = None
+    for size in CONTEXT_SIZES:
+        start = time.perf_counter()
+        try:
+            response = client.chat.completions.create(
+                model=settings.model,
+                messages=[{"role": "user", "content": "hello " * size}],
+                max_tokens=1,
+            )
+        except openai.APIStatusError as exc:
+            # 게이트웨이가 감싼 메시지는 길고 숫자가 뒤쪽에 있으므로 넉넉히 보여준다
+            emit(f"약 {size:,}토큰  거부({exc.status_code})  {_server_message(exc, limit=600)}")
+            rejected = size
+            break
+        except openai.APIError as exc:
+            emit(f"약 {size:,}토큰  실패  {classify_error(exc)[1]}")
+            rejected = size
+            break
+        elapsed = time.perf_counter() - start
+        usage = response.usage
+        tokens = f"prompt_tokens {usage.prompt_tokens:,}" if usage else "토큰 정보 없음"
+        emit(f"약 {size:,}토큰  통과  {tokens}  {elapsed:.2f}s")
+        passed = size
+
+    if rejected is None:
+        emit(f"\n결과: {CONTEXT_SIZES[-1]:,}토큰 이상 (더 길게는 시험하지 않음)")
+    elif passed is None:
+        emit("\n결과: 가장 작은 요청부터 실패 - 위 메시지를 확인하세요")
+        return 1
+    else:
+        emit(
+            f"\n결과: {passed:,}토큰은 통과, {rejected:,}토큰은 거부. "
+            "정확한 값은 위 서버 메시지에 있을 수 있습니다."
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         # 파이프·파일로 리다이렉트된 cp949 콘솔에서도 인코딩 오류로 죽지 않게 한다
@@ -405,6 +465,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="llm-probe", description="회사 LLM 연결·기능 점검")
     parser.add_argument("--verbose", action="store_true", help="각 응답의 원문 JSON도 출력")
     parser.add_argument("--output", metavar="FILE", help="화면 출력을 UTF-8 파일로도 저장")
+    parser.add_argument(
+        "--context", action="store_true", help="기본 점검 대신 컨텍스트 길이(최대 입력 토큰)를 잼"
+    )
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -414,4 +477,6 @@ def main(argv: list[str] | None = None) -> int:
     client = get_client(settings).with_options(max_retries=0)
     # Windows에는 tee가 없고 셸 리다이렉트는 셸마다 인코딩이 달라서 파일은 직접 쓴다
     with open(args.output, "w", encoding="utf-8") if args.output else nullcontext() as output:
+        if args.context:
+            return run_context(client, settings, output=output)
         return run_probe(client, settings, verbose=args.verbose, output=output)
