@@ -83,8 +83,9 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     page = client.get("/results/1").text
     assert "<title>작업 1 결과 · rte.xlsx · Polyspace RTE 수정 제안</title>" in page
     assert '<span class="badge green">완료</span>' in page
-    for value, label in [(1, "Red"), (1, "Orange"), (1, "제외 (Gray 등)"), (1, "수정")]:
-        assert f'<div class="v">{value}</div><div class="k">{label}</div>' in page
+    for color, label in [("red", "Red"), ("orange", "Orange"), ("blue", "수정")]:
+        assert f'<span class="badge {color}">{label}</span> <b>1</b>' in page
+    assert '<span class="badge gray">제외 1</span>' in page
     assert '<span class="add">+    return (b != 0) ? a / b : 0;</span>' in page
     assert "폴더에 missing.c이(가) 없음" in page
     assert 'type="checkbox" name="row" value="1"' in page
@@ -380,3 +381,49 @@ def test_home_has_folder_picker_button(tmp_path):
 
     assert 'id="pick-folder"' in page
     assert "폴더 찾기" in page
+
+
+def test_result_page_has_overview_and_detail_tabs(tmp_path):
+    client, _, _ = make_service(tmp_path, fix_answer())
+    upload(client, EXCEL, source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+
+    assert 'data-tab="overview"' in page and 'data-tab="detail"' in page
+    assert "한눈에 보기" in page and "자세히 보기" in page
+    assert "검사 종류별" in page and "파일별" in page
+    # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 확인 필요 1
+    assert (
+        '<tr><td>Division by zero</td><td class="num">2</td><td class="num">1</td>'
+        '<td class="num">0</td><td class="num">1</td></tr>'
+    ) in page
+    assert '<td class="mono">src/calc.c</td>' in page
+
+
+def test_row_errors_read_as_what_happened_and_what_to_do(tmp_path):
+    wrong = fix_answer(edits=[{"original": "return a % b;", "replacement": "x"}])
+    client, _, _ = make_service(tmp_path, wrong, wrong)
+    upload(client, EXCEL, source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+
+    assert '<span class="badge amber">확인 필요</span>' in page
+    assert "LLM이 고칠 위치를 정확히 짚지 못했습니다." in page
+    assert '<div class="todo">할 일: ' in page
+    assert "<details><summary>자세히 (개발자용)</summary>" in page
+    assert "_job1_row2.md" in page  # 이 행의 대화 기록 파일
+
+
+def test_conflicting_fixes_are_marked_and_red_is_picked_first(tmp_path):
+    other = {"original": "    return a / b;", "replacement": "    return b ? a / b : -1;"}
+    client, _, _ = make_service(tmp_path, fix_answer(), fix_answer(edits=[other]))
+    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", check="Overflow"))
+    upload(client, excel, source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+
+    # Red(엑셀 3행)가 먼저 골라지고, 같은 줄을 고치는 Orange(엑셀 2행)는 이번엔 제외
+    assert 'name="row" value="2" data-auto="1" data-conflicts="1"' in page
+    assert 'name="row" value="1" data-auto="0" data-conflicts="2"' in page
+    assert "이번엔 제외" in page
+    assert "행 3 수정과 같은 줄을 고칩니다" in page
