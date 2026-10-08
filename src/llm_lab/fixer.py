@@ -327,8 +327,12 @@ def locate_edits(
 
 
 def apply_edits(text: str, edits: tuple[Edit, ...] | list[Edit]) -> str:
-    """겹치지 않는 수정들을 뒤쪽부터 적용한다."""
-    for edit in sorted(edits, key=lambda edit: edit.start, reverse=True):
+    """겹치지 않는 수정들을 뒤쪽부터 적용한다.
+
+    같은 자리에서 시작하면 바꾸기를 먼저, 끼워 넣기를 나중에 해야 끼워 넣은 글이 바꾸기 범위에
+    섞이지 않는다.
+    """
+    for edit in sorted(edits, key=lambda edit: (edit.start, edit.end), reverse=True):
         text = text[: edit.start] + edit.replacement + text[edit.end :]
     return text
 

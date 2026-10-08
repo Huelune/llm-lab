@@ -5,13 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from llm_lab.fixer import Edit, locate_edits
+from llm_lab.fixer import Edit, apply_edits, locate_edits
 from llm_lab.patch import (
     APPLY_COMMAND,
     FilePatch,
     PatchConflict,
     base_folder,
     build_patch,
+    find_conflicts,
+    pick_without_conflicts,
     relative_path,
 )
 from llm_lab.sources import decode_source
@@ -180,3 +182,47 @@ def test_fixes_for_neighbouring_lines_no_longer_conflict():
 
     assert b"+    a = inc(a);\n" in patch
     assert b"+    b = inc(b);\n" in patch
+
+
+def test_edits_conflict_only_when_they_touch_the_same_text():
+    a, b, c = Edit(10, 20, "x"), Edit(15, 25, "y"), Edit(25, 30, "z")
+    insert, other_insert, inside = Edit(5, 5, "i"), Edit(5, 5, "j"), Edit(12, 12, "k")
+    rows = {
+        1: ("a.c", [a]),
+        2: ("a.c", [b]),
+        3: ("a.c", [c]),  # b가 끝나는 자리에서 시작: 겹치지 않음
+        4: ("a.c", [insert]),
+        5: ("a.c", [other_insert]),  # 같은 자리에 다른 내용을 끼워 넣음: 순서를 정할 수 없음
+        6: ("a.c", [inside]),
+        7: ("b.c", [b]),  # 다른 파일
+        8: ("a.c", [a]),  # 행 1과 똑같은 수정: 하나로 합쳐지므로 충돌 아님
+    }
+
+    assert find_conflicts(rows) == {
+        1: {2, 6},
+        2: {1, 8},
+        3: set(),
+        4: {5},
+        5: {4},
+        6: {1, 8},
+        7: set(),
+        8: {2, 6},
+    }
+
+
+def test_pick_without_conflicts_follows_the_given_order():
+    conflicts = {1: {2}, 2: {1, 3}, 3: {2}, 4: set()}
+
+    assert pick_without_conflicts([2, 1, 3, 4], conflicts) == {2, 4}
+    assert pick_without_conflicts([1, 2, 3, 4], conflicts) == {1, 3, 4}
+
+
+def test_insert_at_start_of_replaced_text_goes_before_the_replacement():
+    assert apply_edits("abc", [Edit(1, 1, "X"), Edit(1, 2, "Y")]) == "aXYc"
+
+
+def test_conflict_message_is_short_and_says_what_to_do():
+    message = str(PatchConflict([(n, n + 1) for n in range(10)]))
+
+    assert "행 0와 행 1, 행 1와 행 2, 행 2와 행 3 외 7쌍" in message
+    assert "수정 모두 선택" in message

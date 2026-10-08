@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from llm_lab.fixer import Edit, apply_edits
@@ -23,8 +23,12 @@ class PatchConflict(PatchError):
     """고른 수정끼리 같은 곳을 고침."""
 
     def __init__(self, pairs: list[tuple[int, int]]) -> None:
-        listed = ", ".join(f"행 {a}와 행 {b}" for a, b in pairs)
-        super().__init__(f"같은 곳을 고치는 수정을 함께 골랐습니다: {listed}. 하나만 고르세요.")
+        listed = ", ".join(f"행 {a}와 행 {b}" for a, b in pairs[:3])
+        more = f" 외 {len(pairs) - 3}쌍" if len(pairs) > 3 else ""
+        super().__init__(
+            f"같은 줄을 고치는 수정이 함께 골라졌습니다: {listed}{more}. "
+            "결과 화면에서 '수정 모두 선택'을 다시 누르면 겹치지 않게 골라집니다."
+        )
         self.pairs = pairs
 
 
@@ -111,18 +115,46 @@ def _unique(edits: list[tuple[int, Edit]]) -> list[tuple[int, Edit]]:
     return [(row, edit) for edit, row in first_row.items()]
 
 
+def _conflict(a: Edit, b: Edit) -> bool:
+    """두 수정을 함께 적용할 수 없는지. 똑같은 수정은 하나로 합치므로 충돌이 아니다."""
+    if a == b:
+        return False
+    if a.start == a.end == b.start == b.end:
+        return True  # 같은 자리에 서로 다른 내용을 끼워 넣으면 순서를 정할 수 없다
+    return a.start < b.end and b.start < a.end
+
+
+def find_conflicts(rows: Mapping[int, tuple[str, Sequence[Edit]]]) -> dict[int, set[int]]:
+    """행 → 함께 고를 수 없는 행들. rows는 행 → (파일, 그 행의 수정들)."""
+    conflicts: dict[int, set[int]] = {row: set() for row in rows}
+    items = list(rows.items())
+    for index, (row_a, (file_a, edits_a)) in enumerate(items):
+        for row_b, (file_b, edits_b) in items[index + 1 :]:
+            if file_a == file_b and any(_conflict(a, b) for a in edits_a for b in edits_b):
+                conflicts[row_a].add(row_b)
+                conflicts[row_b].add(row_a)
+    return conflicts
+
+
+def pick_without_conflicts(order: Iterable[int], conflicts: Mapping[int, set[int]]) -> set[int]:
+    """order 순서대로, 이미 고른 행과 겹치지 않는 행만 고른다."""
+    picked: set[int] = set()
+    for row in order:
+        if not conflicts.get(row, set()) & picked:
+            picked.add(row)
+    return picked
+
+
 def build_patch(files: list[FilePatch]) -> bytes:
     unique = {item.path: _unique(item.edits) for item in files}
-    conflicts: list[tuple[int, int]] = []
-    for edits in unique.values():
-        reach_row, reach_end = 0, -1  # 지금까지 가장 뒤까지 고치는 수정
-        for row, edit in sorted(edits, key=lambda pair: pair[1].start):
-            if edit.start < reach_end and (reach_row, row) not in conflicts:
-                conflicts.append((reach_row, row))
-            if edit.end > reach_end:
-                reach_row, reach_end = row, edit.end
-    if conflicts:
-        raise PatchConflict(conflicts)
+    rows: dict[int, tuple[str, list[Edit]]] = {}
+    for path, edits in unique.items():
+        for row, edit in edits:
+            rows.setdefault(row, (path, []))[1].append(edit)
+    conflicts = find_conflicts(rows)
+    pairs = sorted({(min(a, b), max(a, b)) for a, partners in conflicts.items() for b in partners})
+    if pairs:
+        raise PatchConflict(pairs)
     chunks = []
     for item in sorted(files, key=lambda item: item.path):
         fixed = apply_edits(item.source.text, [edit for _, edit in unique[item.path]])
