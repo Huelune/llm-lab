@@ -79,7 +79,7 @@ uv run python scripts/peek_excel.py "엑셀 경로.xlsx"
 - MISRA 시트 첫 줄의 `데이터 N행`. 행마다 LLM을 한 번 부르므로 이 수가 곧 걸리는 시간입니다.
 - MISRA 시트의 `종류` 줄. TYPE 값(RTE에서는 Red Check, Orange Check), 규칙 분류(Mandatory/Required/Advisory), status 값이 어떻게 적히는지 봅니다.
 - MISRA `예시 1행`. Check 칸에 "10.4" 같은 번호만 있는지, 규칙 설명 문장도 있는지 봅니다. 번호만 있으면 규칙 설명을 따로 넣는 기능이 필요합니다.
-- CodeMetrics 시트도 같은 화면에 나옵니다. 고칠 대상인지 한 줄로 알려 주세요(측정값 목록이라 고치려면 함수 쪼개기 같은 리팩터링이 됩니다).
+- CodeMetrics 시트도 같은 화면에 나옵니다. CodeMetrics 준비에도 쓰니 그 부분도 잘리지 않게 찍어 주세요.
 
 화면으로 알기 어려운 것도 함께 알려 주세요:
 
