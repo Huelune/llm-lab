@@ -16,7 +16,8 @@ from llm_lab.polyspace import Finding
 from llm_lab.sources import SourceFile
 
 # 표 구조를 바꾸면 올리고 옛 DB를 옮기는 코드를 넣는다. PRAGMA user_version에 적는다.
-SCHEMA_VERSION = 1
+# 2: jobs.source_root (소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 '')
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     sheet TEXT NOT NULL,
     skipped INTEGER NOT NULL,
     state TEXT NOT NULL,
-    message TEXT NOT NULL DEFAULT ''
+    message TEXT NOT NULL DEFAULT '',
+    source_root TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS files (
     job_id INTEGER NOT NULL,
@@ -68,6 +70,7 @@ class Job:
     skipped: int  # Gray Check 등 대상이 아니어서 뺀 행 수
     state: str  # running / done / stopped
     message: str
+    source_root: str = ""  # 소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 ''
 
 
 @dataclass(frozen=True)
@@ -108,7 +111,10 @@ class Store:
                 )
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            # 버전 0: 새 DB이거나 버전을 적기 전에 만든 DB (표 구조는 1과 같다)
+            # 버전 0·1: 새 DB이거나 jobs.source_root가 생기기 전에 만든 DB
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "source_root" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN source_root TEXT NOT NULL DEFAULT ''")
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -127,14 +133,20 @@ class Store:
             yield db
 
     def create_job(
-        self, excel_name: str, sheet: str, skipped: int, files: list[SourceFile], rows: list[NewRow]
+        self,
+        excel_name: str,
+        sheet: str,
+        skipped: int,
+        files: list[SourceFile],
+        rows: list[NewRow],
+        source_root: str = "",
     ) -> int:
         state = "running" if any(row.state == "pending" for row in rows) else "done"
         with self._write() as db:
             cursor = db.execute(
-                "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (_now(), excel_name, sheet, skipped, state),
+                "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state, source_root) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (_now(), excel_name, sheet, skipped, state, source_root),
             )
             job_id = cursor.lastrowid
             assert job_id is not None
@@ -170,6 +182,16 @@ class Store:
         with self._db() as db:
             found = db.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [Job(**dict(row)) for row in found]
+
+    def recent_roots(self, limit: int = 10) -> list[str]:
+        """최근에 쓴 소스 폴더 (가장 최근에 쓴 것부터, 중복 없이)."""
+        with self._db() as db:
+            found = db.execute(
+                "SELECT source_root FROM jobs WHERE source_root != '' "
+                "GROUP BY source_root ORDER BY MAX(id) DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [row["source_root"] for row in found]
 
     def rows(self, job_id: int) -> list[Row]:
         with self._db() as db:

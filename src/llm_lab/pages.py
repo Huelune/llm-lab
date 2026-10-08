@@ -61,6 +61,8 @@ h2 { font-size: 19px; margin: 32px 0 12px; }
 .step > div + div { flex: 1; }
 .step h3 { margin: 0 0 4px; font-size: 17px; }
 .hint { color: var(--muted); font-size: 14px; margin: 0 0 8px; }
+input[type=text] { font: 15px Consolas, "D2Coding", monospace; padding: 10px; width: 100%;
+  border: 1px solid #b9c3d3; border-radius: 8px; }
 input[type=file] { font-size: 15px; padding: 10px; border: 2px dashed #b9c3d3;
   border-radius: 8px; width: 100%; background: #fafbfd; }
 .btn { display: inline-block; font: inherit; font-weight: 700; border: 0; border-radius: 8px;
@@ -230,23 +232,27 @@ def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
     )
 
 
-def index_page(recent: list[tuple[Job, list[Row]]]) -> str:
+def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> str:
+    options = "".join(f'<option value="{escape(folder)}">' for folder in recent_dirs)
     form = (
         '<form class="card" method="post" action="/results" enctype="multipart/form-data">'
         '<div class="step"><div class="num">1</div><div><h3>Polyspace 결과 엑셀</h3>'
         '<p class="hint">이름이 _Result로 끝나는 RTE 시트가 있는 .xlsx 파일 하나</p>'
         '<input type="file" name="excel" accept=".xlsx" required></div></div>'
-        '<div class="step"><div class="num">2</div><div><h3>소스 파일</h3>'
-        '<p class="hint">엑셀 File 칸에 나온 .c/.h 파일들. 여러 개를 한 번에 고를 수 있습니다'
-        " (Ctrl+클릭)</p>"
-        '<input type="file" name="sources" multiple required></div></div>'
+        '<div class="step"><div class="num">2</div><div><h3>소스 폴더</h3>'
+        '<p class="hint">소스 코드가 들어 있는 최상위 폴더 경로. 탐색기 주소창에서 복사해 '
+        "붙여넣으면 됩니다. 엑셀에 나온 파일을 이 폴더 안에서 찾고, 패치도 이 폴더 기준으로 "
+        "만듭니다.</p>"
+        '<input type="text" name="source_dir" list="recent-dirs" required '
+        r'placeholder="예: C:\work\brake\src" autocomplete="off">'
+        f'<datalist id="recent-dirs">{options}</datalist></div></div>'
         '<div class="step"><div class="num">3</div><div><h3>분석 시작</h3>'
         '<p class="hint">결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 있습니다</p>'
         '<button class="btn primary" type="submit">분석 시작</button></div></div></form>'
     )
     body = (
         "<h1>새 분석</h1>"
-        '<p class="sub">Polyspace 결과 엑셀과 소스 파일을 올리면 Red·Orange 행마다 '
+        '<p class="sub">Polyspace 결과 엑셀과 소스 폴더를 주면 Red·Orange 행마다 '
         "LLM이 수정안을 만듭니다.</p>"
         + form
         + '<h2>최근 작업 <a href="/results" style="font-size:15px;font-weight:400">'
@@ -380,7 +386,9 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
     when = job.created_at[5:16].replace("T", " ")
     body = (
         f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
-        f'<p class="sub">시트 {escape(job.sheet)} · {escape(when)} 시작</p>'
+        f'<p class="sub">시트 {escape(job.sheet)} · {escape(when)} 시작'
+        + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
+        + "</p>"
     )
     if job.state == "running":
         done, total = _progress(rows)

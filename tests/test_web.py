@@ -6,10 +6,12 @@ from pathlib import Path
 
 from fake_llm import MODEL, error, make_client, scripted
 from fastapi.testclient import TestClient
-from rte_fixtures import CALC_C, fix_answer, rte_excel, rte_row
+from rte_fixtures import CALC_C, finding, fix_answer, rte_excel, rte_row
 
 from llm_lab import web
-from llm_lab.store import Store
+from llm_lab.fixer import Edit, FixResult
+from llm_lab.sources import decode_source
+from llm_lab.store import NewRow, Store
 from llm_lab.worker import Worker
 
 
@@ -26,10 +28,18 @@ def make_service(tmp_path, *responses, submit=run_now):
     return client, store, sent
 
 
-def upload(client, excel: bytes, *sources: tuple[str, bytes]):
+def source_folder(tmp_path) -> Path:
+    """엑셀의 C:\\proj\\src\\calc.c에 해당하는 파일이 든 소스 폴더."""
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "calc.c").write_bytes(CALC_C)
+    return root
+
+
+def upload(client, excel: bytes, folder):
     files = [("excel", ("rte.xlsx", excel))]
-    files += [("sources", (name, data)) for name, data in sources]
-    return client.post("/results", files=files, follow_redirects=False)
+    data = {"source_dir": str(folder)}
+    return client.post("/results", files=files, data=data, follow_redirects=False)
 
 
 EXCEL = rte_excel(
@@ -47,7 +57,7 @@ def test_home_shows_upload_steps_and_menu(tmp_path):
     assert "<title>새 분석 · Polyspace RTE 수정 제안</title>" in page
     assert 'href="/results">작업 목록</a>' in page
     assert 'name="excel"' in page
-    assert 'name="sources" multiple' in page
+    assert 'name="source_dir"' in page
     assert 'action="/results"' in page
     assert "아직 작업이 없습니다" in page
 
@@ -63,7 +73,9 @@ def test_rejects_other_host_names(tmp_path):
 def test_upload_processes_rows_and_shows_result_page(tmp_path):
     client, _, sent = make_service(tmp_path, fix_answer())
 
-    response = upload(client, EXCEL, ("calc.c", CALC_C))
+    folder = source_folder(tmp_path)
+
+    response = upload(client, EXCEL, folder)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/results/1"
@@ -73,10 +85,10 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     for value, label in [(1, "Red"), (1, "Orange"), (1, "제외 (Gray 등)"), (1, "수정")]:
         assert f'<div class="v">{value}</div><div class="k">{label}</div>' in page
     assert '<span class="add">+    return (b != 0) ? a / b : 0;</span>' in page
-    assert "업로드한 소스에 missing.c이(가) 없음" in page
+    assert "폴더에 missing.c이(가) 없음" in page
     assert 'type="checkbox" name="row" value="1"' in page
     assert 'data-kind="fix"' in page and 'data-kind="problem"' in page
-    assert "C:\\proj\\src" in page  # git apply를 실행할 폴더
+    assert str(folder) in page  # git apply를 실행할 폴더 = 지정한 소스 폴더
     assert 'data-copy="git -c core.autocrlf=false apply --check fixes.patch"' in page
     assert 'action="/results/1/fixes.patch"' in page
     assert 'id="toggle-all"' in page  # 수정 모두 선택
@@ -86,12 +98,13 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
 
 def test_result_json(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    folder = source_folder(tmp_path)
+    upload(client, EXCEL, folder)
 
     data = client.get("/api/results/1").json()
 
     assert data["state"] == "done"
-    assert data["base_folder"] == "C:/proj/src"
+    assert data["base_folder"] == str(folder)
     assert [(r["state"], r["decision"]) for r in data["rows"]] == [
         ("done", "fix"),
         ("no_source", None),
@@ -100,7 +113,7 @@ def test_result_json(tmp_path):
 
 def test_results_list_page(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    upload(client, EXCEL, source_folder(tmp_path))
 
     page = client.get("/results").text
 
@@ -114,7 +127,7 @@ def test_results_list_page(tmp_path):
 def test_bad_excel_is_rejected_with_reason(tmp_path):
     client, _, _ = make_service(tmp_path)
 
-    response = upload(client, b"not excel", ("calc.c", CALC_C))
+    response = upload(client, b"not excel", source_folder(tmp_path))
 
     assert response.status_code == 400
     assert "엑셀(.xlsx) 파일로 읽을 수 없습니다" in response.text
@@ -123,19 +136,20 @@ def test_bad_excel_is_rejected_with_reason(tmp_path):
 
 def test_download_patch_for_chosen_rows(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    upload(client, EXCEL, source_folder(tmp_path))
 
     response = client.post("/results/1/fixes.patch", data={"row": ["1"]})
 
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="fixes.patch"'
-    assert response.content.startswith(b"--- a/calc.c\n+++ b/calc.c\n")
+    # 패치 경로는 소스 폴더 기준
+    assert response.content.startswith(b"--- a/src/calc.c\n+++ b/src/calc.c\n")
     assert b"+    return (b != 0) ? a / b : 0;\n" in response.content
 
 
 def test_patch_needs_a_chosen_fix(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    upload(client, EXCEL, source_folder(tmp_path))
 
     assert client.post("/results/1/fixes.patch", data={}).status_code == 400
     # 소스 없는 행
@@ -146,7 +160,7 @@ def test_overlapping_fixes_conflict(tmp_path):
     other = {"original": "    return a / b;", "replacement": "    return b ? a / b : -1;"}
     client, _, _ = make_service(tmp_path, fix_answer(), fix_answer(edits=[other]))
     excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", check="Overflow"))
-    upload(client, excel, ("calc.c", CALC_C))
+    upload(client, excel, source_folder(tmp_path))
 
     response = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
 
@@ -157,7 +171,7 @@ def test_overlapping_fixes_conflict(tmp_path):
 def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     queued = []
     client, _, _ = make_service(tmp_path, submit=queued.append)
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    upload(client, EXCEL, source_folder(tmp_path))
 
     page = client.get("/results/1").text
 
@@ -170,7 +184,7 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
 
 def test_stopped_job_can_be_retried(tmp_path):
     client, store, _ = make_service(tmp_path, error(401, "invalid key"), fix_answer())
-    upload(client, EXCEL, ("calc.c", CALC_C))
+    upload(client, EXCEL, source_folder(tmp_path))
     page = client.get("/results/1").text
     assert '<span class="badge red">멈춤</span>' in page
     assert "[인증]" in page
@@ -193,7 +207,7 @@ def test_unknown_job_is_404(tmp_path):
 def test_excel_without_red_or_orange_rows(tmp_path):
     client, _, sent = make_service(tmp_path)
 
-    upload(client, rte_excel(rte_row("Gray Check")), ("calc.c", CALC_C))
+    upload(client, rte_excel(rte_row("Gray Check")), source_folder(tmp_path))
 
     assert "고칠 행 없음" in client.get("/results/1").text
     assert sent == []
@@ -278,3 +292,50 @@ def test_main_refuses_database_from_newer_version(tmp_path, monkeypatch, capsys)
 
     assert web.main(["--no-browser"]) == 1
     assert "새 버전" in capsys.readouterr().err
+
+
+def test_missing_or_empty_folder_is_rejected(tmp_path):
+    client, _, sent = make_service(tmp_path)
+
+    for value in [tmp_path / "nope", "   "]:
+        response = upload(client, EXCEL, value)
+        assert response.status_code == 400
+        assert "소스 폴더" in response.text
+    assert sent == []
+
+
+def test_folder_path_copied_with_quotes_is_accepted(tmp_path):
+    # 탐색기의 '경로로 복사'는 경로를 따옴표로 감싼다
+    client, store, _ = make_service(tmp_path, fix_answer())
+    folder = source_folder(tmp_path)
+
+    assert upload(client, EXCEL, f'"{folder}"').status_code == 303
+    assert store.job(1).source_root == str(folder)
+
+
+def test_home_suggests_recent_folders(tmp_path):
+    client, _, _ = make_service(tmp_path, fix_answer())
+    folder = source_folder(tmp_path)
+    upload(client, EXCEL, folder)
+
+    assert f'<option value="{folder}">' in client.get("/").text
+
+
+def test_jobs_from_uploaded_files_still_download_patches(tmp_path):
+    # 폴더 지정 전(파일을 하나씩 올리던 때) 만든 작업은 엑셀 경로로 기준 폴더를 정한다
+    client, store, _ = make_service(tmp_path)
+    source = decode_source("calc.c", CALC_C)
+    job_id = store.create_job(
+        "rte.xlsx", "RTE_Result", 0, [source], [NewRow(finding(), "calc.c", "pending")]
+    )
+    row = store.rows(job_id)[0]
+    start = source.text.index("return a / b;")
+    edit = Edit(start, start + len("return a / b;"), "return b ? a / b : 0;")
+    store.set_row(row.id, "done", result=FixResult("fix", "이유", (edit,), "diff"))
+    store.finish_if_done(job_id)
+
+    response = client.post(f"/results/{job_id}/fixes.patch", data={"row": [str(row.id)]})
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"--- a/calc.c\n")
+    assert "C:\\proj\\src" in client.get(f"/results/{job_id}").text

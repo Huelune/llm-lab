@@ -23,7 +23,7 @@ from llm_lab.config import ConfigError, load_settings
 from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, SheetError, read_rte
-from llm_lab.sources import DecodeError, Match, SourceFile, decode_source, match_sources
+from llm_lab.sources import Match, load_from_folder
 from llm_lab.store import Job, NewRow, Row, Store, StoreError
 from llm_lab.worker import Worker, daemon_pool
 
@@ -42,8 +42,16 @@ def _new_row(finding: Finding, match: Match) -> NewRow:
     return NewRow(finding, match.source.name, "pending")
 
 
-def _base(rows: list[Row]) -> str | None:
-    return base_folder(row.finding.file for row in rows if row.file_name)
+def _base(job: Job, rows: list[Row]) -> str | None:
+    """패치 경로의 기준 폴더. 소스 폴더를 지정한 작업은 그 폴더, 파일을 하나씩 올리던
+    예전 작업은 엑셀 경로들의 공통 폴더."""
+    return job.source_root or base_folder(row.finding.file for row in rows if row.file_name)
+
+
+def _source_root(text: str) -> Path | None:
+    """화면에 붙여넣은 소스 폴더 경로. 탐색기 '경로로 복사'의 따옴표는 뗀다."""
+    cleaned = text.strip().strip('"').strip()
+    return Path(cleaned).absolute() if cleaned else None
 
 
 def _row_json(row: Row) -> dict[str, Any]:
@@ -74,7 +82,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return index_page(with_rows(store.jobs(limit=RECENT_JOBS)))
+        return index_page(with_rows(store.jobs(limit=RECENT_JOBS)), store.recent_roots())
 
     @app.get("/results", response_class=HTMLResponse)
     def results() -> str:
@@ -82,26 +90,27 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
 
     @app.post("/results")
     def create_job(
-        excel: Annotated[UploadFile, File()], sources: Annotated[list[UploadFile], File()]
+        excel: Annotated[UploadFile, File()], source_dir: Annotated[str, Form()] = ""
     ) -> Response:
+        root = _source_root(source_dir)
+        if root is None or not root.is_dir():
+            message = (
+                f"{root} 폴더가 없습니다." if root else "소스 폴더 경로를 입력하세요."
+            ) + " 탐색기 주소창의 경로를 그대로 붙여넣으면 됩니다."
+            return HTMLResponse(error_page("소스 폴더를 찾을 수 없음", message), status_code=400)
         try:
             sheet = read_rte(io.BytesIO(excel.file.read()))
         except SheetError as exc:
             return HTMLResponse(error_page("엑셀을 읽을 수 없음", str(exc)), status_code=400)
-        decoded: list[SourceFile] = []
-        undecodable: dict[str, str] = {}
-        for upload in sources:
-            if not upload.filename:
-                continue  # 파일을 고르지 않은 칸
-            try:
-                decoded.append(decode_source(upload.filename, upload.file.read()))
-            except DecodeError as exc:
-                undecodable[upload.filename] = str(exc)
-        matches = match_sources([f.file for f in sheet.findings], decoded, undecodable)
+        # 엑셀에 나온 파일만 폴더에서 찾아 읽는다. 읽은 내용은 작업에 함께 저장해
+        # 나중에 소스가 바뀌어도 결과와 패치는 분석 당시 기준으로 남는다.
+        matches, files = load_from_folder(root, [f.file for f in sheet.findings])
         rows = [_new_row(finding, matches[finding.file]) for finding in sheet.findings]
         used = {row.file_name for row in rows if row.file_name}
-        files = [source for source in decoded if source.name in used]
-        job_id = store.create_job(excel.filename or "", sheet.sheet, sheet.skipped, files, rows)
+        files = [source for source in files if source.name in used]
+        job_id = store.create_job(
+            excel.filename or "", sheet.sheet, sheet.skipped, files, rows, source_root=str(root)
+        )
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
 
@@ -109,11 +118,11 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     def job_view(job_id: int) -> str:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
-        return job_page(job, rows, _base(rows))
+        return job_page(job, rows, _base(job, rows))
 
     @app.post("/results/{job_id}/fixes.patch")
     def download_patch(job_id: int, row: Annotated[list[int] | None, Form()] = None) -> Response:
-        job_or_404(job_id)
+        job = job_or_404(job_id)
         rows = store.rows(job_id)
         wanted = set(row or [])
         chosen = [
@@ -124,13 +133,15 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         if not chosen:
             message = "적용할 수정을 하나 이상 고르세요."
             return HTMLResponse(error_page("패치를 만들 수 없음", message), status_code=400)
-        base = _base(rows)
+        base = _base(job, rows)
         by_file: dict[str, FilePatch] = {}
         for r in chosen:
             assert r.file_name is not None and r.result is not None
             if r.file_name not in by_file:
                 source = store.source(job_id, r.file_name)
-                by_file[r.file_name] = FilePatch(relative_path(r.finding.file, base), source, [])
+                # 폴더에서 읽은 소스는 이름이 곧 폴더 기준 상대 경로다
+                path = source.name if job.source_root else relative_path(r.finding.file, base)
+                by_file[r.file_name] = FilePatch(path, source, [])
             by_file[r.file_name].edits.extend((r.finding.row, edit) for edit in r.result.edits)
         try:
             data = build_patch(list(by_file.values()))
@@ -153,7 +164,8 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     def job_json(job_id: int) -> dict[str, Any]:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
-        return {**asdict(job), "base_folder": _base(rows), "rows": [_row_json(r) for r in rows]}
+        base = _base(job, rows)
+        return {**asdict(job), "base_folder": base, "rows": [_row_json(r) for r in rows]}
 
     return app
 

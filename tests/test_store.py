@@ -152,3 +152,28 @@ def test_refuses_database_from_newer_version(tmp_path):
 
     with pytest.raises(StoreError, match="새 버전"):
         Store(path)
+
+
+def test_job_keeps_source_folder_and_recent_folders_come_newest_first(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    for root in ["C:/work/a", "C:/work/b", "C:/work/a"]:
+        store.create_job("rte.xlsx", "RTE_Result", 0, [], [], source_root=root)
+    store.create_job("rte.xlsx", "RTE_Result", 0, [], [])  # 폴더 없이 만든 예전 방식 작업
+
+    assert store.job(1).source_root == "C:/work/a"
+    assert store.job(4).source_root == ""
+    assert store.recent_roots() == ["C:/work/a", "C:/work/b"]
+
+
+def test_database_from_schema_1_gets_source_folder_column(tmp_path):
+    path = tmp_path / "fixer.db"
+    job_id = make_job(Store(path), "pending")
+    with closing(sqlite3.connect(path)) as db:  # 첫 배포의 jobs 표에는 이 칸이 없었다
+        db.execute("ALTER TABLE jobs DROP COLUMN source_root")
+        db.execute("PRAGMA user_version = 1")
+        db.commit()
+
+    store = Store(path)
+
+    assert user_version(path) == SCHEMA_VERSION == 2
+    assert store.job(job_id).source_root == ""

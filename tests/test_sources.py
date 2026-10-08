@@ -2,7 +2,13 @@ import codecs
 
 import pytest
 
-from llm_lab.sources import DecodeError, base_name, decode_source, match_sources
+from llm_lab.sources import (
+    DecodeError,
+    base_name,
+    decode_source,
+    load_from_folder,
+    locate_files,
+)
 
 
 def test_decodes_utf8_lf():
@@ -42,36 +48,48 @@ def test_rejects_mixed_line_endings():
         decode_source("a.c", b"int a;\r\nint b;\nint c;\r\n")
 
 
-def test_upload_name_keeps_only_file_name():
-    assert decode_source(r"C:\x\a.c", b"").name == "a.c"
-    assert base_name("src/lib/b.c") == "b.c"
+def test_decode_keeps_the_given_name():
+    # 폴더에서 읽은 파일은 폴더 기준 상대 경로를 이름으로 쓴다 (패치 경로가 된다)
+    assert decode_source("src/lib/b.c", b"").name == "src/lib/b.c"
+    assert base_name(r"C:\x\src\b.c") == "b.c"
 
 
-def test_matches_by_file_name_ignoring_case():
-    calc = decode_source("Calc.C", b"int x;\n")
+def test_locate_picks_file_by_name_ignoring_case():
+    found = locate_files([r"C:\proj\src\Calc.C"], ["src/calc.c", "doc/readme.txt"])
 
-    matches = match_sources([r"C:\proj\src\calc.c"], [calc])
-
-    assert matches[r"C:\proj\src\calc.c"].source is calc
+    assert found[r"C:\proj\src\Calc.C"].path == "src/calc.c"
 
 
-def test_missing_ambiguous_and_undecodable_sources_explain_why():
-    a1 = decode_source("a.c", b"1\n")
-    a2 = decode_source("a.c", b"2\n")
-    paths = [
-        r"C:\p\src\a.c",
-        r"C:\p\src\missing.c",
-        r"C:\p\x\util.c",
-        r"C:\p\y\util.c",
-        r"C:\p\src\bad.c",
-        "",
-    ]
+def test_locate_prefers_longest_matching_folder_tail():
+    candidates = ["x/util.c", "y/util.c", "y/z/util.c"]
 
-    matches = match_sources(paths, [a1, a2], undecodable={"bad.c": "인코딩 미지원"})
+    found = locate_files([r"C:\old\proj\x\util.c", r"C:\old\proj\y\util.c"], candidates)
 
-    assert "같은 이름의 업로드 파일이 2개" in matches[r"C:\p\src\a.c"].reason
-    assert "missing.c" in matches[r"C:\p\src\missing.c"].reason
-    assert "C:/p/x/util.c, C:/p/y/util.c" in matches[r"C:\p\x\util.c"].reason
-    assert "인코딩" in matches[r"C:\p\src\bad.c"].reason
-    assert matches[""].reason == "File 칸이 비어 있음"
-    assert all(match.source is None for match in matches.values())
+    assert found[r"C:\old\proj\x\util.c"].path == "x/util.c"
+    assert found[r"C:\old\proj\y\util.c"].path == "y/util.c"
+
+
+def test_locate_explains_missing_and_ambiguous_files():
+    found = locate_files([r"C:\p\q\util.c", r"C:\p\missing.c", ""], ["x/util.c", "y/util.c"])
+
+    assert found[r"C:\p\q\util.c"].path is None
+    assert "x/util.c, y/util.c" in found[r"C:\p\q\util.c"].reason
+    assert found[r"C:\p\missing.c"].reason == "폴더에 missing.c이(가) 없음"
+    assert found[""].reason == "File 칸이 비어 있음"
+
+
+def test_load_from_folder_reads_only_referenced_files(tmp_path):
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / ".git").mkdir()
+    (root / "src" / "calc.c").write_bytes(b"int x;\n")
+    (root / ".git" / "calc.c").write_bytes(b"old copy\n")  # 점으로 시작하는 폴더는 보지 않는다
+    (root / "src" / "bad.c").write_bytes(b"int a;\r\nint b;\n")
+    paths = [r"C:\proj\src\calc.c", r"C:\proj\src\bad.c", r"C:\proj\src\none.c"]
+
+    matches, sources = load_from_folder(root, paths)
+
+    assert [source.name for source in sources] == ["src/calc.c"]
+    assert matches[r"C:\proj\src\calc.c"].source is sources[0]
+    assert "src/bad.c: 줄바꿈이 CRLF와 LF로 섞여" in matches[r"C:\proj\src\bad.c"].reason
+    assert matches[r"C:\proj\src\none.c"].reason == "폴더에 none.c이(가) 없음"
