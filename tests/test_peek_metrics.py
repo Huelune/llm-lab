@@ -1,4 +1,4 @@
-"""scripts/peek_metrics.py: CodeMetrics 시트 요약이 한 화면에 맞고 숫자가 맞는지."""
+"""scripts/peek_metrics.py: 요약이 한 화면에 맞고, 숫자가 맞고, 회사 정보를 찍지 않는지."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 from openpyxl import Workbook
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "peek_metrics.py"
@@ -57,7 +58,7 @@ ROWS: list[list[object]] = [
 
 
 def test_counts_per_check(tmp_path: Path) -> None:
-    screen, full = peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS))
+    screen = peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS))
 
     assert any("CodeMetrics_Result" in line and "데이터 5행" in line for line in screen)
     assert _check_line(screen, "Cyclomatic Complexity") == (["2", "0"], ["2", "0", "0", "0"])
@@ -69,8 +70,7 @@ def test_counts_per_check(tmp_path: Path) -> None:
 
 
 def test_function_and_status_lines(tmp_path: Path) -> None:
-    screen, _ = peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS))
-    text = "\n".join(screen)
+    text = "\n".join(peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS)))
 
     assert "함수(File+Function) 3개" in text
     assert "함수당 행 수: 1개 2 / 2개 1" in text
@@ -84,7 +84,7 @@ def test_line_differs_within_function(tmp_path: Path) -> None:
         ["a.c", "foo", 10, "Cyclomatic Complexity", 10, 15, "Unreviewed", None],
         ["a.c", "foo", 12, "Number of Paths", 80, 120, "Unreviewed", None],
     ]
-    screen, _ = peek.summarize(_workbook(tmp_path / "m.xlsx", rows))
+    screen = peek.summarize(_workbook(tmp_path / "m.xlsx", rows))
 
     assert "line이 다른 함수 1개" in "\n".join(screen)
     # 보통 크기면 아무 줄도 잘리지 않는다
@@ -105,27 +105,70 @@ def test_many_checks_fit_one_screen(tmp_path: Path) -> None:
         ]
         for i in range(60)
     ]
-    screen, full = peek.summarize(_workbook(tmp_path / "m.xlsx", rows))
+    screen = peek.summarize(_workbook(tmp_path / "m.xlsx", rows))
 
-    assert len(screen) <= peek.SCREEN_LINES
+    assert len(screen) <= peek.SCREEN_LINES - 2  # 프롬프트 두 줄을 남긴다
     assert all(peek.width(line) <= peek.WIDTH for line in screen)
-    assert any("외 " in line and "종" in line for line in screen)
-    # 파일에는 잘린 지표까지 모두 들어간다
-    assert sum("지표 59 번째" in line for line in full) >= 1
+    assert any(f"외 {60 - peek.MAX_CHECKS}종" in line for line in screen)
 
 
-def test_missing_sheet_explains_why(tmp_path: Path) -> None:
+def test_missing_sheet_names_only_columns(tmp_path: Path) -> None:
     book = Workbook()
     book.active.title = "RTE_Result"
+    book.active.append(["secret project title"])
     book.active.append(["ID", "TYPE", "File", "line", "check", "detail"])
     path = tmp_path / "rte.xlsx"
     book.save(path)
 
-    screen, _ = peek.summarize(path)
-    text = "\n".join(screen)
+    text = "\n".join(peek.summarize(path))
 
     assert "CodeMetrics 시트를 찾지 못했습니다" in text
-    assert "RTE_Result" in text and "TYPE" in text
+    assert "[RTE_Result] 필요한 열 3/6개" in text
+    assert "없는 열: function, threshold, actual value" in text
+    assert "secret" not in text and "TYPE" not in text
+
+
+def test_screen_never_shows_company_values(tmp_path: Path) -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "CodeMetrics_Result"
+    sheet.append([*HEADER, "secret column"])
+    sheet.append(
+        [
+            "D:/secret_dir/secret_file.c",
+            "secret_func()",
+            45,
+            "Cyclomatic Complexity",
+            15,
+            19,
+            "Unreviewed",
+            "secret note",
+            "secret value",
+        ]
+    )
+    path = tmp_path / "secret_book.xlsx"
+    book.save(path)
+
+    text = "\n".join(peek.summarize(path))
+
+    assert "secret" not in text
+    # 알 수 없는 열은 이름 대신 개수만 센다
+    assert (
+        "열: file, function, line, check, threshold, actual value, status, comment "
+        "(+ 다른 열 1개)" in text
+    )
+
+
+def test_main_error_hides_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(peek, "clear_screen", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["peek_metrics.py", str(tmp_path / "secret_dir" / "x.xlsx")])
+
+    assert peek.main() == 1
+    out = capsys.readouterr().out
+    assert "요약하지 못했습니다" in out
+    assert "secret" not in out and str(tmp_path) not in out
 
 
 def test_width_counts_korean_as_two() -> None:
