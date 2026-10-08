@@ -196,3 +196,42 @@ def test_fix_result_round_trips_through_json():
     result = FixResult("fix", "범위 검사 추가", (Edit(1, 5, "x\n"),), "diff")
 
     assert FixResult.from_json(result.to_json()) == result
+
+
+def test_edit_shrinks_to_the_lines_that_actually_change():
+    # LLM이 앞뒤 줄까지 묶어 보내도 실제로 바뀐 줄만 수정으로 남긴다 (옆 줄 수정과 덜 겹치게)
+    text = "int f(int a)\n{\n    int x = a;\n    x = x + 1;\n    return x;\n}\n"
+    raw = [
+        {
+            "original": "    int x = a;\n    x = x + 1;\n    return x;\n",
+            "replacement": "    int x = a;\n    if (x < INT_MAX) x = x + 1;\n    return x;\n",
+        }
+    ]
+
+    edits = locate_edits(text, 1, 6, raw)
+
+    assert [text[edit.start : edit.end] for edit in edits] == ["    x = x + 1;\n"]
+    assert apply_edits(text, edits) == text.replace("    x = x", "    if (x < INT_MAX) x = x")
+
+
+def test_repeated_original_picks_the_occurrence_on_the_reported_line():
+    text = "int f(void)\n{\n    x = x + 1;\n    y = 0;\n    x = x + 1;\n}\n"
+    raw = [{"original": "    x = x + 1;", "replacement": "    x = sat_inc(x);"}]
+    second_only = "int f(void)\n{\n    x = x + 1;\n    y = 0;\n    x = sat_inc(x);\n}\n"
+
+    assert apply_edits(text, locate_edits(text, 1, 6, raw, line=5)) == second_only
+    # 지적된 줄을 품은 곳이 없으면 가장 가까운 곳, 거리가 같으면 고를 수 없다
+    assert apply_edits(text, locate_edits(text, 1, 6, raw, line=6)) == second_only
+    with pytest.raises(EditMismatch, match="2번 나옴"):
+        locate_edits(text, 1, 6, raw, line=4)
+    with pytest.raises(EditMismatch, match="2번 나옴"):
+        locate_edits(text, 1, 6, raw)
+
+
+def test_repeated_original_with_spacing_differences_also_uses_the_reported_line():
+    text = "int f(void)\n{\n    x = x + 1;\n    y = 0;\n    x = x + 1;\n}\n"
+    raw = [{"original": "  x  =  x + 1;", "replacement": "    x = sat_inc(x);"}]
+
+    edits = locate_edits(text, 1, 6, raw, line=3)
+
+    assert apply_edits(text, edits).startswith("int f(void)\n{\n    x = sat_inc(x);\n")

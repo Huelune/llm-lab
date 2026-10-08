@@ -26,11 +26,12 @@ WINDOW_LINES = 60
 SIGNATURE_LINES = 10
 FIX_TIMEOUT = 120.0
 # 프롬프트나 응답 처리 방식을 바꾸면 올린다 (캐시 키에 들어간다)
-PROMPT_VERSION = 2  # 2: 파일 전체를 보내는 기준 400 → 2,000줄
+# 2: 파일 전체를 보내는 기준 400 → 2,000줄, 3: 바꾸는 줄만 짧게 보내라는 지시
+PROMPT_VERSION = 3
 
 
 class FixError(Exception):
-    """행 하나를 처리하지 못함. 그 행만 오류로 표시한다."""
+    """행 하나를 처리하지 못함. 그 행만 오류로 표시한다. 메시지는 user_error() 형식."""
 
 
 class FatalLLMError(Exception):
@@ -38,7 +39,32 @@ class FatalLLMError(Exception):
 
 
 class EditMismatch(Exception):
-    """LLM이 준 수정을 원본에 적용할 수 없음 (LLM에 다시 요청할 사유)."""
+    """LLM이 준 수정을 원본에 적용할 수 없음 (LLM에 다시 요청할 사유).
+
+    kind는 화면에 보일 설명을 고르는 데 쓴다: locate / format / truncated / encoding
+    """
+
+    def __init__(self, detail: str, kind: str = "locate") -> None:
+        super().__init__(detail)
+        self.kind = kind
+
+
+# 두 번 물어도 쓸 수 없는 답이었을 때 화면에 보일 설명 (kind별)
+MISMATCH_SUMMARIES = {
+    "locate": "LLM이 고칠 위치를 정확히 짚지 못했습니다.",
+    "format": "LLM 답을 읽을 수 없었습니다.",
+    "truncated": "LLM 답이 길이 제한에 걸려 잘렸습니다.",
+    "encoding": "LLM이 이 파일의 인코딩으로 쓸 수 없는 문자를 썼습니다.",
+}
+RETRY_ACTION = "'오류 행 다시 시도'를 누르세요. 그래도 같으면 대화 기록을 보고 직접 고치세요."
+
+
+def user_error(summary: str, action: str, detail: str = "") -> str:
+    """화면에 보일 오류. 첫 줄은 무엇이 문제인지, 둘째 줄은 할 일, 셋째 줄은 개발자용 내용."""
+    lines = [summary, f"할 일: {action}"]
+    if detail:
+        lines.append(f"자세히: {detail}")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -169,10 +195,65 @@ def _strip_numbers(text: str) -> str:
     return "\n".join(NUMBER_PREFIX.sub("", line, count=1) for line in text.split("\n"))
 
 
+def _pick_by_line(candidates: list[tuple[int, int, int]], line: int | None) -> int | None:
+    """후보 (시작 줄, 끝 줄, 값) 중에서 지적된 줄을 품은 것, 없으면 가장 가까운 것의 값.
+
+    하나로 정해지지 않으면 None.
+    """
+    if line is None:
+        return None
+
+    def distance(candidate: tuple[int, int, int]) -> int:
+        first, last, _ = candidate
+        return 0 if first <= line <= last else min(abs(line - first), abs(line - last))
+
+    best = min(distance(candidate) for candidate in candidates)
+    picked = [candidate for candidate in candidates if distance(candidate) == best]
+    return picked[0][2] if len(picked) == 1 else None
+
+
+def _keep_ends(text: str) -> list[str]:
+    """줄바꿈을 붙인 채로 \\n에서만 나눈다."""
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def _minimize(text: str, edit: Edit) -> list[Edit]:
+    """바뀌지 않은 앞뒤 줄을 덜어 내고 실제로 바뀐 줄만 남긴다 (적용 결과는 같다).
+
+    LLM은 고칠 줄 앞뒤까지 넉넉히 묶어 보내는 일이 많다. 그대로 두면 같은 함수의 다른 행
+    수정과 범위가 겹쳐 함께 적용할 수 없으므로, 실제로 바뀐 줄 단위로 줄인다.
+    """
+    begin = text.rfind("\n", 0, edit.start) + 1
+    newline = text.find("\n", edit.end - 1 if edit.end > edit.start else edit.start)
+    finish = len(text) if newline == -1 else newline + 1
+    old = _keep_ends(text[begin:finish])
+    new = _keep_ends(text[begin : edit.start] + edit.replacement + text[edit.end : finish])
+    offsets = [begin]
+    for line in old:
+        offsets.append(offsets[-1] + len(line))
+    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
+    return [
+        Edit(offsets[i1], offsets[i2], "".join(new[j1:j2]))
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    ]
+
+
 def locate_edits(
-    text: str, first: int, last: int, raw_edits: list[dict[str, str]]
+    text: str,
+    first: int,
+    last: int,
+    raw_edits: list[dict[str, str]],
+    line: int | None = None,
 ) -> tuple[Edit, ...]:
-    """LLM이 준 original을 first~last 줄 안에서 찾아 원본 위치로 바꾼다."""
+    """LLM이 준 original을 first~last 줄 안에서 찾아 원본 위치로 바꾼다.
+
+    같은 코드가 여러 곳에 있으면 지적된 줄(line)을 품은 곳, 없으면 가장 가까운 곳을 고른다.
+    """
     starts = _line_starts(text)
     region_start, region_end = starts[first - 1], starts[min(last, len(starts) - 1)]
     region = text[region_start:region_end]
@@ -191,20 +272,43 @@ def locate_edits(
             replacement += "\n"
         elif not original.endswith("\n") and replacement.endswith("\n"):
             replacement = replacement[:-1]
-        count = region.count(original)
-        if count == 1:
-            start = region_start + region.index(original)
+        found = []
+        index = region.find(original)
+        while index != -1:
+            found.append(region_start + index)
+            index = region.find(original, index + 1)
+        if found:
+            if len(found) == 1:
+                start = found[0]
+            else:
+                spans = [
+                    (
+                        text.count("\n", 0, at) + 1,
+                        text.count("\n", 0, at + len(original) - 1) + 1,
+                        at,
+                    )
+                    for at in found
+                ]
+                picked = _pick_by_line(spans, line)
+                if picked is None:
+                    raise EditMismatch(
+                        f"edits[{number}].original이 보낸 코드에 {len(found)}번 나옴"
+                    )
+                start = picked
             edits.append(Edit(start, start + len(original), replacement))
             continue
-        if count > 1:
-            raise EditMismatch(f"edits[{number}].original이 보낸 코드에 {count}번 나옴")
         # 그대로는 없으면 줄 단위로 공백 차이를 무시하고 찾는다
-        wanted = [_squash(line) for line in original.strip("\n").split("\n")]
+        wanted = [_squash(text_line) for text_line in original.strip("\n").split("\n")]
         hits = [
             index
             for index in range(len(region_lines) - len(wanted) + 1)
-            if [_squash(line) for line in region_lines[index : index + len(wanted)]] == wanted
+            if [_squash(text_line) for text_line in region_lines[index : index + len(wanted)]]
+            == wanted
         ]
+        if len(hits) > 1:
+            spans = [(first + hit, first + hit + len(wanted) - 1, hit) for hit in hits]
+            picked = _pick_by_line(spans, line)
+            hits = hits if picked is None else [picked]
         if len(hits) != 1:
             where = "찾을 수 없음" if not hits else f"{len(hits)}번 나옴"
             raise EditMismatch(f"edits[{number}].original을 보낸 코드에서 {where}")
@@ -218,7 +322,8 @@ def locate_edits(
     for before, after in zip(edits, edits[1:], strict=False):
         if after.start < before.end:
             raise EditMismatch("edits끼리 같은 줄을 고침")
-    return tuple(edits)
+    minimal = [piece for edit in edits for piece in _minimize(text, edit)]
+    return tuple(sorted(minimal, key=lambda edit: edit.start))
 
 
 def apply_edits(text: str, edits: tuple[Edit, ...] | list[Edit]) -> str:
@@ -249,6 +354,8 @@ division-by-zero checks, initialization and similar.
 Keep the behavior for valid inputs.
 - Copy each edit's "original" exactly from the code shown, as whole consecutive lines, \
 without the line-number prefix. "replacement" is the new text for those lines.
+- Keep each edit small: "original" holds only the lines you change, not the whole function. \
+Add one unchanged neighbouring line only when the changed line appears more than once.
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write "reason" in Korean, one to three sentences that a reviewer can paste \
@@ -355,7 +462,13 @@ def _ask(
             )
         if category in FATAL_CATEGORIES:
             raise FatalLLMError(message) from exc
-        raise FixError(message) from exc
+        raise FixError(
+            user_error(
+                "LLM 서버가 요청을 처리하지 못했습니다.",
+                "잠시 뒤 '오류 행 다시 시도'를 누르세요.",
+                message,
+            )
+        ) from exc
     choice = response.choices[0] if response.choices else None
     content = (choice.message.content if choice else None) or ""
     finish_reason = choice.finish_reason if choice else None
@@ -376,20 +489,25 @@ def _ask(
 
 
 def _to_result(
-    content: str, finish_reason: str | None, source: SourceFile, first: int, last: int
+    content: str,
+    finish_reason: str | None,
+    source: SourceFile,
+    first: int,
+    last: int,
+    line: int,
 ) -> FixResult:
     if finish_reason == "length":
-        raise EditMismatch("응답이 출력 길이 제한으로 잘림")
+        raise EditMismatch("응답이 출력 길이 제한으로 잘림", "truncated")
     try:
         data: Any = json.loads(content)
     except json.JSONDecodeError:
-        raise EditMismatch("응답이 JSON이 아님") from None
+        raise EditMismatch("응답이 JSON이 아님", "format") from None
     if (
         not isinstance(data, dict)
         or data.get("decision") not in ("fix", "no_fix")
         or not isinstance(data.get("reason"), str)
     ):
-        raise EditMismatch("decision·reason이 스키마와 다름")
+        raise EditMismatch("decision·reason이 스키마와 다름", "format")
     if data["decision"] == "no_fix":
         return FixResult("no_fix", data["reason"], (), "")
     raw_edits = data.get("edits")
@@ -403,7 +521,7 @@ def _to_result(
             for edit in raw_edits
         )
     ):
-        raise EditMismatch("fix인데 edits가 비었거나 형식이 다름")
+        raise EditMismatch("fix인데 edits가 비었거나 형식이 다름", "format")
     for number, raw in enumerate(raw_edits, start=1):
         # 소스 인코딩(CP949 등)으로 못 쓰는 문자가 있으면 패치를 만들 수 없으므로 지금 다시 요청한다
         try:
@@ -412,9 +530,10 @@ def _to_result(
             char = ord(raw["replacement"][exc.start])
             raise EditMismatch(
                 f"edits[{number}].replacement에 {source.encoding}로 쓸 수 없는 문자 "
-                f"U+{char:04X}가 있음 - ASCII나 한글만 쓰세요"
+                f"U+{char:04X}가 있음 - ASCII나 한글만 쓰세요",
+                "encoding",
             ) from None
-    edits = locate_edits(source.text, first, last, raw_edits)
+    edits = locate_edits(source.text, first, last, raw_edits, line)
     fixed = apply_edits(source.text, edits)
     if fixed == source.text:
         raise EditMismatch("수정해도 원본과 같음")
@@ -433,26 +552,34 @@ def propose_fix(
     transcript를 주면 LLM과 주고받은 요청·응답을 순서대로 담는다.
     """
     line_count = len(split_lines(source.text))
-    if finding.line is None:
-        raise FixError("line 칸이 정수가 아님")
-    if not 1 <= finding.line <= line_count:
-        raise FixError(
-            f"{finding.line}번 줄이 없음 (파일은 {line_count}줄) - "
-            "엑셀과 소스의 버전이 다를 수 있음"
+    line = finding.line
+    if line is None or not 1 <= line <= line_count:
+        detail = (
+            "line 칸이 정수가 아님"
+            if line is None
+            else f"{line}번 줄이 없음 (파일은 {line_count}줄)"
         )
-    first, last = select_region(source.text, finding.line)
+        raise FixError(
+            user_error(
+                "엑셀의 줄 번호가 소스와 맞지 않습니다.",
+                "엑셀을 만든 것과 같은 버전의 소스 폴더를 골라 다시 분석하세요.",
+                detail,
+            )
+        )
+    first, last = select_region(source.text, line)
     client = client.with_options(timeout=FIX_TIMEOUT, max_retries=1)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_prompt(finding, source, first, last)},
     ]
     problem = ""
+    kind = "locate"
     for _ in range(2):
         content, finish_reason = _ask(client, model, messages, transcript)
         try:
-            return _to_result(content, finish_reason, source, first, last)
+            return _to_result(content, finish_reason, source, first, last, line)
         except EditMismatch as exc:
-            problem = str(exc)
+            problem, kind = str(exc), exc.kind
             messages = [
                 *messages,
                 {"role": "assistant", "content": content},
@@ -462,4 +589,4 @@ def propose_fix(
                     "Answer again with the same JSON format.",
                 },
             ]
-    raise FixError(f"LLM 응답을 쓸 수 없음 (2번 시도): {problem}")
+    raise FixError(user_error(MISMATCH_SUMMARIES[kind], RETRY_ACTION, f"{problem} (2번 시도)"))

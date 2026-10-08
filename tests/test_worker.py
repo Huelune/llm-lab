@@ -105,7 +105,7 @@ def test_unexpected_failure_marks_row_error(tmp_path):
 
     row = store.rows(job_id)[0]
     assert row.state == "error"
-    assert "서버 로그" in row.error
+    assert row.error.startswith("처리 중 예상하지 못한 문제가 생겼습니다.\n할 일: ")
     assert store.job(job_id).state == "done"
 
 
@@ -153,7 +153,8 @@ def test_log_records_row_error_and_fatal_stop(tmp_path):
     worker.start(job_id)  # 엑셀 2행은 400 오류, 3행은 401로 작업이 멈춘다
 
     error_log, stop_log = logs(tmp_path)
-    assert "- 결과: 오류: [기능 미지원]" in error_log
+    assert "- 결과: 오류: LLM 서버가 요청을 처리하지 못했습니다. / 할 일: " in error_log
+    assert "[기능 미지원]" in error_log
     assert "### 오류" in error_log
     assert "- 결과: 작업 중단: [인증]" in stop_log
 

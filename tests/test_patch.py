@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_lab.fixer import Edit
+from llm_lab.fixer import Edit, locate_edits
 from llm_lab.patch import (
     APPLY_COMMAND,
     FilePatch,
@@ -161,3 +161,22 @@ def test_git_apply_two_files_and_two_edits_in_one_file(tmp_path):
     assert (tmp_path / "src/a.c").read_text().startswith("long a;\n")
     assert (tmp_path / "src/a.c").read_text().endswith("long z;\n")
     assert (tmp_path / "lib/b.c").read_text() == "long b;\n"
+
+
+def test_fixes_for_neighbouring_lines_no_longer_conflict():
+    # 두 행의 LLM 수정이 같은 두 줄을 통째로 보냈어도 실제로 바꾼 줄은 다르다
+    text = "void f(void)\n{\n    a = a + 1;\n    b = b + 1;\n}\n"
+    block = "    a = a + 1;\n    b = b + 1;\n"
+    first = locate_edits(
+        text, 1, 5, [{"original": block, "replacement": block.replace("a = a + 1", "a = inc(a)")}]
+    )
+    second = locate_edits(
+        text, 1, 5, [{"original": block, "replacement": block.replace("b = b + 1", "b = inc(b)")}]
+    )
+    source = decode_source("f.c", text.encode())
+    edits = [(3, edit) for edit in first] + [(4, edit) for edit in second]
+
+    patch = build_patch([FilePatch("f.c", source, edits)])
+
+    assert b"+    a = inc(a);\n" in patch
+    assert b"+    b = inc(b);\n" in patch

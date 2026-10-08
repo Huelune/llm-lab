@@ -91,20 +91,46 @@ def test_transcript_records_api_errors():
 
 
 @pytest.mark.parametrize(
-    ("bad", "message"),
+    ("bad", "summary", "detail"),
     [
-        (completion("not json"), "JSON이 아님"),
-        (fix_answer(finish_reason="length"), "잘림"),
-        (fix_answer(edits=[]), "edits가 비었거나"),
-        (completion('{"decision": "maybe", "reason": "x", "edits": []}'), "스키마와 다름"),
+        (completion("not json"), "LLM 답을 읽을 수 없었습니다.", "JSON이 아님"),
+        (fix_answer(finish_reason="length"), "LLM 답이 길이 제한에 걸려 잘렸습니다.", "잘림"),
+        (fix_answer(edits=[]), "LLM 답을 읽을 수 없었습니다.", "edits가 비었거나"),
+        (
+            fix_answer(edits=[{"original": "return a % b;", "replacement": "x"}]),
+            "LLM이 고칠 위치를 정확히 짚지 못했습니다.",
+            "찾을 수 없음",
+        ),
     ],
 )
-def test_gives_up_after_two_unusable_answers(bad, message):
+def test_gives_up_after_two_unusable_answers_with_a_plain_message(bad, summary, detail):
     handler, sent = scripted(bad, bad)
 
-    with pytest.raises(FixError, match=message):
+    with pytest.raises(FixError) as caught:
         propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+
+    # 화면용: 첫 줄은 무엇이 문제인지, 다음 줄은 할 일, 개발자용 내용은 "자세히:" 뒤에
+    first, todo, more = str(caught.value).split("\n")
+    assert first == summary
+    assert todo.startswith("할 일: ") and "다시 시도" in todo
+    assert more.startswith("자세히: ") and detail in more
     assert len(sent) == 2
+
+
+def test_repeated_code_is_resolved_with_the_reported_line():
+    # LLM이 고칠 줄로 보낸 코드가 파일에 두 군데 있어도 Polyspace가 가리킨 줄 쪽을 고친다
+    source = decode_source("calc.c", b"int f(int a)\n{\n    a = a + 1;\n    a = a + 1;\n}\n")
+    edit = {"original": "    a = a + 1;", "replacement": "    a = inc(a);"}
+    handler, sent = scripted(fix_answer(edits=[edit]))
+
+    result = propose_fix(make_client(handler), MODEL, finding(line=4), source)
+
+    assert apply_edits(source.text, result.edits).endswith("    a = a + 1;\n    a = inc(a);\n}\n")
+    assert len(sent) == 1
+
+
+def test_prompt_asks_for_small_edits():
+    assert "only the lines you change" in fixer.SYSTEM_PROMPT
 
 
 def test_auth_error_is_fatal_and_not_retried():
@@ -118,16 +144,23 @@ def test_auth_error_is_fatal_and_not_retried():
 def test_other_api_error_fails_only_this_row():
     handler, _ = scripted(error(400, "response_format not supported"))
 
-    with pytest.raises(FixError, match="기능 미지원"):
+    with pytest.raises(FixError) as caught:
         propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+
+    message = str(caught.value)
+    assert message.startswith("LLM 서버가 요청을 처리하지 못했습니다.\n할 일: ")
+    assert "기능 미지원" in message
 
 
 @pytest.mark.parametrize(("line", "message"), [(None, "정수가 아님"), (9, "9번 줄이 없음")])
 def test_bad_line_fails_without_calling_llm(line, message):
     handler, sent = scripted()
 
-    with pytest.raises(FixError, match=message):
+    with pytest.raises(FixError) as caught:
         propose_fix(make_client(handler), MODEL, finding(line=line), SOURCE)
+
+    assert str(caught.value).startswith("엑셀의 줄 번호가 소스와 맞지 않습니다.\n할 일: ")
+    assert message in str(caught.value)
     assert sent == []
 
 

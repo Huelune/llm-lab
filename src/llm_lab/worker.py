@@ -10,7 +10,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from llm_lab.fixer import Exchange, FatalLLMError, cache_key, propose_fix
+from llm_lab.fixer import Exchange, FatalLLMError, cache_key, propose_fix, user_error
 from llm_lab.pages import DECISIONS
 from llm_lab.polyspace import Finding
 from llm_lab.store import Store
@@ -73,7 +73,11 @@ class Worker:
             self._process(job_id, row_id)
         except Exception:  # 작업자 스레드의 예외는 아무 데도 보이지 않으므로 남긴다
             log.exception("행 %s 처리 중 예상하지 못한 오류", row_id)
-            self.store.set_row(row_id, "error", error="예상하지 못한 오류 - 서버 로그 확인")
+            message = user_error(
+                "처리 중 예상하지 못한 문제가 생겼습니다.",
+                "서버를 켠 창에 나온 오류 내용을 알려 주세요.",
+            )
+            self.store.set_row(row_id, "error", error=message)
             self.store.finish_if_done(job_id)
 
     def _process(self, job_id: int, row_id: int) -> None:
@@ -101,7 +105,9 @@ class Worker:
             return
         except Exception as exc:
             error = str(exc) or type(exc).__name__
-            self._save_log(job_id, row.finding, source.name, exchanges, f"오류: {error}")
+            # 기록 파일의 "결과" 줄은 한 줄이어야 목록이 깨지지 않는다
+            outcome = "오류: " + " / ".join(error.splitlines())
+            self._save_log(job_id, row.finding, source.name, exchanges, outcome)
             self.store.set_row(row_id, "error", error=error)
         else:
             if reused:
