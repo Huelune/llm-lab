@@ -17,15 +17,16 @@ from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
 
-# 이 줄 수 이하면 파일 전체를 보낸다. 컨텍스트 길이를 잰 뒤 조정한다.
-WHOLE_FILE_MAX_LINES = 400
+# 이 줄 수 이하면 파일 전체를 보낸다. 2,000줄은 대략 2만~3만 토큰으로, `llm-probe --context`로
+# 잰 컨텍스트 길이에 넉넉히 들어간다. 더 긴 파일은 지적된 줄이 든 함수만 보낸다.
+WHOLE_FILE_MAX_LINES = 2000
 # 함수를 못 찾거나 함수가 너무 길면 지적된 줄 앞뒤로 이만큼 보낸다
 WINDOW_LINES = 60
 # 함수 시그니처를 넣으려고 '{' 위로 거슬러 올라가는 최대 줄 수
 SIGNATURE_LINES = 10
 FIX_TIMEOUT = 120.0
 # 프롬프트나 응답 처리 방식을 바꾸면 올린다 (캐시 키에 들어간다)
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2  # 2: 파일 전체를 보내는 기준 400 → 2,000줄
 
 
 class FixError(Exception):

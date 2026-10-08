@@ -26,7 +26,8 @@ def long_file(function_at: int, body_lines: int = 3) -> str:
     lines += ["/* { not a block } */", "static int", "calc(int a,", "     int b)", "{"]
     lines += [f'    a += {n}; /* "}}" */' for n in range(body_lines)]
     lines += ["    return a;", "}"]
-    lines += [f"int h{n};" for n in range(500)]
+    # 파일 전체를 보내는 기준보다 항상 길게 만든다
+    lines += [f"int h{n};" for n in range(fixer.WHOLE_FILE_MAX_LINES)]
     return "\n".join(lines) + "\n"
 
 
@@ -38,6 +39,13 @@ def test_split_lines_only_splits_on_newline():
 
 def test_small_file_is_sent_whole():
     assert select_region(CODE, 3) == (1, 4)
+
+
+def test_files_up_to_two_thousand_lines_are_sent_whole():
+    # 2,000줄(대략 2만~3만 토큰)까지는 함수만 자르지 않고 파일 전체를 보낸다
+    text = "".join(f"int g{n};\n" for n in range(1500))
+
+    assert select_region(text, 700) == (1, 1500)
 
 
 def test_long_file_sends_enclosing_function_with_signature_and_comment_above():
