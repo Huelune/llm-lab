@@ -10,6 +10,7 @@ from rte_fixtures import CALC_C, finding, fix_answer, rte_excel, rte_row
 
 from llm_lab import web
 from llm_lab.fixer import Edit, FixResult
+from llm_lab.folder_picker import PickerError
 from llm_lab.sources import decode_source
 from llm_lab.store import NewRow, Store
 from llm_lab.worker import Worker
@@ -339,3 +340,43 @@ def test_jobs_from_uploaded_files_still_download_patches(tmp_path):
     assert response.status_code == 200
     assert response.content.startswith(b"--- a/calc.c\n")
     assert "C:\\proj\\src" in client.get(f"/results/{job_id}").text
+
+
+def test_folder_picker_needs_the_page_header(tmp_path, monkeypatch):
+    # 다른 사이트가 몰래 보낸 요청으로는 폴더 선택 창이 뜨지 않아야 한다
+    client, _, _ = make_service(tmp_path)
+    opened = []
+    monkeypatch.setattr(web, "pick_folder", lambda initial: opened.append(initial))
+
+    assert client.post("/pick-folder", data={"initial": ""}).status_code == 403
+    assert opened == []
+
+
+def test_folder_picker_returns_path_cancel_or_error(tmp_path, monkeypatch):
+    client, _, _ = make_service(tmp_path)
+    headers = {"X-Folder-Picker": "1"}
+    answers = iter([r"C:\work\src", None, PickerError("폴더 선택 창(tkinter)이 없습니다")])
+
+    def fake_pick(initial):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(web, "pick_folder", fake_pick)
+
+    def pick():
+        return client.post("/pick-folder", data={"initial": r"C:\work"}, headers=headers).json()
+
+    assert pick() == {"path": r"C:\work\src"}
+    assert pick() == {"path": None}
+    assert pick() == {"error": "폴더 선택 창(tkinter)이 없습니다"}
+
+
+def test_home_has_folder_picker_button(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+
+    assert 'id="pick-folder"' in page
+    assert "폴더 찾기" in page

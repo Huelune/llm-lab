@@ -63,6 +63,10 @@ h2 { font-size: 19px; margin: 32px 0 12px; }
 .hint { color: var(--muted); font-size: 14px; margin: 0 0 8px; }
 input[type=text] { font: 15px Consolas, "D2Coding", monospace; padding: 10px; width: 100%;
   border: 1px solid #b9c3d3; border-radius: 8px; }
+.pickrow { display: flex; gap: 8px; }
+.pickrow input { flex: 1; }
+.pickrow .btn { white-space: nowrap; padding: 10px 16px; }
+#pick-note { margin: 6px 0 0; }
 input[type=file] { font-size: 15px; padding: 10px; border: 2px dashed #b9c3d3;
   border-radius: 8px; width: 100%; background: #fafbfd; }
 .btn { display: inline-block; font: inherit; font-weight: 700; border: 0; border-radius: 8px;
@@ -170,6 +174,32 @@ document.querySelectorAll('[data-copy]').forEach(button => button.addEventListen
     setTimeout(() => { button.textContent = '복사'; }, 1500);
   });
 }));
+// 폴더 찾기: 서버가 같은 PC에서 윈도우 폴더 선택 창을 띄우고 고른 경로를 돌려준다
+const pick = document.getElementById('pick-folder');
+if (pick) pick.addEventListener('click', async () => {
+  const input = document.querySelector('input[name=source_dir]');
+  const note = document.getElementById('pick-note');
+  pick.disabled = true;
+  note.textContent = '폴더 선택 창을 열었습니다. 안 보이면 작업 표시줄에서 찾아 주세요.';
+  try {
+    const response = await fetch('/pick-folder', {
+      method: 'POST',
+      headers: {'X-Folder-Picker': '1'},
+      body: new URLSearchParams({initial: input.value}),
+    });
+    const data = await response.json();
+    if (data.path) {
+      input.value = data.path;
+      note.textContent = '';
+    } else {
+      note.textContent = data.error || '폴더를 고르지 않았습니다.';
+    }
+  } catch (error) {
+    note.textContent = '폴더 선택 창을 열지 못했습니다. 경로를 직접 붙여넣으세요.';
+  } finally {
+    pick.disabled = false;
+  }
+});
 refresh();
 """
 
@@ -243,8 +273,10 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         '<p class="hint">소스 코드가 들어 있는 최상위 폴더 경로. 탐색기 주소창에서 복사해 '
         "붙여넣으면 됩니다. 엑셀에 나온 파일을 이 폴더 안에서 찾고, 패치도 이 폴더 기준으로 "
         "만듭니다.</p>"
-        '<input type="text" name="source_dir" list="recent-dirs" required '
+        '<div class="pickrow"><input type="text" name="source_dir" list="recent-dirs" required '
         r'placeholder="예: C:\work\brake\src" autocomplete="off">'
+        '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
+        '<p class="hint" id="pick-note"></p>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
         '<div class="step"><div class="num">3</div><div><h3>분석 시작</h3>'
         '<p class="hint">결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 있습니다</p>'

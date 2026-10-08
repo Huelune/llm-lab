@@ -14,12 +14,13 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
+from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, SheetError, read_rte
@@ -87,6 +88,26 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     @app.get("/results", response_class=HTMLResponse)
     def results() -> str:
         return results_page(with_rows(store.jobs(limit=LISTED_JOBS)))
+
+    picking = threading.Lock()  # 폴더 선택 창은 한 번에 하나만
+
+    @app.post("/pick-folder")
+    def choose_folder(request: Request, initial: Annotated[str, Form()] = "") -> Response:
+        # 이 페이지의 스크립트만 붙이는 헤더. 다른 사이트가 이 헤더를 붙여 보내려면 브라우저가
+        # 먼저 허락(CORS)을 묻는데 이 서버는 허락하지 않으므로, 몰래 창을 띄울 수 없다.
+        if request.headers.get("x-folder-picker") != "1":
+            return JSONResponse({"error": "허용되지 않은 요청입니다"}, status_code=403)
+        if not picking.acquire(blocking=False):
+            message = "이미 폴더 선택 창이 열려 있습니다. 작업 표시줄을 확인하세요"
+            return JSONResponse({"error": message})
+        try:
+            start = _source_root(initial)
+            chosen = pick_folder(str(start) if start and start.is_dir() else "")
+        except PickerError as exc:
+            return JSONResponse({"error": str(exc)})
+        finally:
+            picking.release()
+        return JSONResponse({"path": chosen})
 
     @app.post("/results")
     def create_job(
