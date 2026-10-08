@@ -9,7 +9,6 @@ import sys
 import threading
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,8 +24,8 @@ from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, SheetError, read_rte
 from llm_lab.sources import DecodeError, Match, SourceFile, decode_source, match_sources
-from llm_lab.store import Job, NewRow, Row, Store
-from llm_lab.worker import Worker
+from llm_lab.store import Job, NewRow, Row, Store, StoreError
+from llm_lab.worker import Worker, daemon_pool
 
 # .env처럼 프로젝트 루트 기준. private/는 git에서 제외되어 있다
 DB_PATH = Path("private/fixer.db")
@@ -187,17 +186,18 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return 1
-    store = Store(DB_PATH)
-    executor = ThreadPoolExecutor(max_workers=WORKERS)
-    worker = Worker(store, get_client(settings), settings.model, executor.submit, log_dir=LOG_DIR)
+    try:
+        store = Store(DB_PATH)
+    except StoreError as exc:
+        print(f"DB 오류: {exc}", file=sys.stderr)
+        return 1
+    submit = daemon_pool(WORKERS)
+    worker = Worker(store, get_client(settings), settings.model, submit, log_dir=LOG_DIR)
     worker.resume()
     url = f"http://127.0.0.1:{args.port}/"
     print(f"\n  접속 주소: {url}   (끄려면 Ctrl+C)\n")
     if not args.no_browser:
         threading.Thread(target=open_when_ready, args=(url, args.port), daemon=True).start()
-    try:
-        uvicorn.run(create_app(store, worker), host="127.0.0.1", port=args.port)
-    finally:
-        # 줄 서 있는 행은 버린다. 다음에 켤 때 resume()이 이어서 처리한다.
-        executor.shutdown(wait=False, cancel_futures=True)
+    # 끄면 처리 중이거나 줄 서 있는 행은 버린다. 다음에 켤 때 resume()이 이어서 처리한다.
+    uvicorn.run(create_app(store, worker), host="127.0.0.1", port=args.port)
     return 0

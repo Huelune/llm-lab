@@ -159,13 +159,14 @@ def _squash(line: str) -> str:
 NUMBER_PREFIX = re.compile(r"^\s*\d+\| ?")
 
 
+def _has_numbers(text: str) -> bool:
+    """줄 번호 표시('    57| ')를 복사한 줄이 하나라도 있는지."""
+    return any(NUMBER_PREFIX.match(line) for line in text.split("\n"))
+
+
 def _strip_numbers(text: str) -> str:
-    """LLM이 줄 번호 표시('    57| ')까지 복사했으면 뗀다 (내용 있는 줄이 모두 그럴 때만)."""
-    lines = text.split("\n")
-    body = [line for line in lines if line.strip()]
-    if body and all(NUMBER_PREFIX.match(line) for line in body):
-        return "\n".join(NUMBER_PREFIX.sub("", line, count=1) for line in lines)
-    return text
+    """줄마다 앞에 붙은 줄 번호 표시를 뗀다."""
+    return "\n".join(NUMBER_PREFIX.sub("", line, count=1) for line in text.split("\n"))
 
 
 def locate_edits(
@@ -178,8 +179,11 @@ def locate_edits(
     region_lines = split_lines(region)
     edits: list[Edit] = []
     for number, raw in enumerate(raw_edits, start=1):
-        original = _strip_numbers(raw["original"].replace("\r\n", "\n"))
-        replacement = _strip_numbers(raw["replacement"].replace("\r\n", "\n"))
+        original = raw["original"].replace("\r\n", "\n")
+        replacement = raw["replacement"].replace("\r\n", "\n")
+        # 줄 번호 표시까지 복사했으면 뗀다. 새로 쓴 줄에는 번호가 없을 수 있어 줄마다 본다.
+        if _has_numbers(original):
+            original, replacement = _strip_numbers(original), _strip_numbers(replacement)
         if not original.strip():
             raise EditMismatch(f"edits[{number}].original이 비어 있음")
         # original과 replacement의 끝 줄바꿈을 맞춘다 (안 맞추면 다음 줄이 붙거나 빈 줄이 생긴다)

@@ -1,7 +1,12 @@
+import sqlite3
+from contextlib import closing
+
+import pytest
+
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import decode_source
-from llm_lab.store import NewRow, Store
+from llm_lab.store import SCHEMA_VERSION, NewRow, Store, StoreError
 
 SOURCE = decode_source("calc.c", "/* 합계 */\r\nint x;\r\n".encode("cp949"))
 FINDING = Finding(
@@ -102,3 +107,48 @@ def test_jobs_lists_newest_first(tmp_path):
     ids = [make_job(store, "pending") for _ in range(3)]
 
     assert [job.id for job in store.jobs(limit=2)] == [ids[2], ids[1]]
+
+
+def test_claim_row_succeeds_only_once(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    row_id = store.rows(make_job(store, "pending"))[0].id
+
+    assert store.claim_row(row_id) is True
+    assert store.claim_row(row_id) is False
+    assert store.row(row_id).state == "running"
+
+
+def user_version(path):
+    with closing(sqlite3.connect(path)) as db:
+        return db.execute("PRAGMA user_version").fetchone()[0]
+
+
+def set_user_version(path, version):
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(f"PRAGMA user_version = {version}")
+
+
+def test_new_database_records_schema_version(tmp_path):
+    Store(tmp_path / "fixer.db")
+
+    assert user_version(tmp_path / "fixer.db") == SCHEMA_VERSION
+
+
+def test_unversioned_database_from_first_release_is_kept(tmp_path):
+    path = tmp_path / "fixer.db"
+    job_id = make_job(Store(path), "pending")
+    set_user_version(path, 0)
+
+    store = Store(path)
+
+    assert user_version(path) == SCHEMA_VERSION
+    assert store.job(job_id) is not None
+
+
+def test_refuses_database_from_newer_version(tmp_path):
+    path = tmp_path / "fixer.db"
+    Store(path)
+    set_user_version(path, SCHEMA_VERSION + 1)
+
+    with pytest.raises(StoreError, match="새 버전"):
+        Store(path)

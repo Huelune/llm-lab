@@ -145,6 +145,30 @@ def test_locate_strips_copied_line_number_prefixes():
     assert apply_edits(CODE, edits) == CODE.replace("a + b", "b + a")
 
 
+def test_locate_strips_prefixes_when_only_some_replacement_lines_have_them():
+    # 원본 줄은 번호째 복사하고 새로 쓴 줄에는 번호를 안 붙인 경우
+    raw = [
+        {
+            "original": "    2| {\n    3|     return a + b;",
+            "replacement": "    2| {\n    if (a > 0) {}\n    3|     return b + a;",
+        }
+    ]
+
+    edits = locate_edits(CODE, 1, 4, raw)
+
+    assert apply_edits(CODE, edits) == CODE.replace(
+        "    return a + b;", "    if (a > 0) {}\n    return b + a;"
+    )
+
+
+def test_locate_strips_prefix_from_some_original_lines():
+    raw = [{"original": "    2| {\n    return a + b;", "replacement": "{\n    return b + a;"}]
+
+    edits = locate_edits(CODE, 1, 4, raw)
+
+    assert apply_edits(CODE, edits) == CODE.replace("a + b", "b + a")
+
+
 def test_locate_only_searches_sent_region():
     text = "int x = 1;\nint f(void)\n{\n    int x = 1;\n}\n"
 

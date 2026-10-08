@@ -1,9 +1,13 @@
+import subprocess
+import sys
+import threading
+
 from fake_llm import API_KEY, MODEL, error, make_client, scripted
 from rte_fixtures import CALC_C, finding, fix_answer
 
 from llm_lab.sources import decode_source
 from llm_lab.store import NewRow, Store
-from llm_lab.worker import Worker
+from llm_lab.worker import Worker, daemon_pool
 
 SOURCE = decode_source("calc.c", CALC_C)
 
@@ -152,3 +156,22 @@ def test_log_records_row_error_and_fatal_stop(tmp_path):
     assert "- 결과: 오류: [기능 미지원]" in error_log
     assert "### 오류" in error_log
     assert "- 결과: 작업 중단: [인증]" in stop_log
+
+
+def test_daemon_pool_runs_tasks():
+    done = threading.Event()
+
+    daemon_pool(2)(done.set)
+
+    assert done.wait(5)
+
+
+def test_daemon_pool_does_not_hold_up_exit():
+    # LLM 응답을 기다리는 작업이 있어도 Ctrl+C 뒤 프로세스가 바로 끝나야 한다
+    code = (
+        "import threading\n"
+        "from llm_lab.worker import daemon_pool\n"
+        "daemon_pool(1)(threading.Event().wait)\n"
+    )
+
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=30)

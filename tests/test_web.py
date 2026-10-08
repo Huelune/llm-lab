@@ -1,5 +1,7 @@
 import socket
+import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 from fake_llm import MODEL, error, make_client, scripted
@@ -264,3 +266,15 @@ def test_open_when_ready_gives_up_quietly(monkeypatch):
     web.open_when_ready(f"http://127.0.0.1:{port}/", port, timeout=0.5)
 
     assert opened == []
+
+
+def test_main_refuses_database_from_newer_version(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("LLM_MODEL", MODEL)
+    Store(web.DB_PATH)
+    with closing(sqlite3.connect(web.DB_PATH)) as db:
+        db.execute("PRAGMA user_version = 999")
+
+    assert web.main(["--no-browser"]) == 1
+    assert "새 버전" in capsys.readouterr().err

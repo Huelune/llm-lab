@@ -15,6 +15,9 @@ from llm_lab.fixer import FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import SourceFile
 
+# 표 구조를 바꾸면 올리고 옛 DB를 옮기는 코드를 넣는다. PRAGMA user_version에 적는다.
+SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
@@ -50,6 +53,10 @@ CREATE TABLE IF NOT EXISTS cache (
     created_at TEXT NOT NULL
 );
 """
+
+
+class StoreError(Exception):
+    """DB를 쓸 수 없음."""
 
 
 @dataclass(frozen=True)
@@ -93,8 +100,16 @@ class Store:
         # 작업자 스레드 여럿이 쓰므로 쓰기는 한 번에 하나씩
         self._lock = threading.Lock()
         with self._db() as db:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise StoreError(
+                    f"{path}은(는) 새 버전 프로그램이 만든 DB입니다 "
+                    f"(DB {version}, 프로그램 {SCHEMA_VERSION}). git pull로 코드를 받으세요."
+                )
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            # 버전 0: 새 DB이거나 버전을 적기 전에 만든 DB (표 구조는 1과 같다)
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -199,6 +214,14 @@ class Store:
                 "UPDATE rows SET state = ?, result = ?, error = ? WHERE id = ?",
                 (state, result.to_json() if result else None, error, row_id),
             )
+
+    def claim_row(self, row_id: int) -> bool:
+        """pending 행을 running으로 바꾼다. 다른 작업자가 먼저 가져갔으면 False."""
+        with self._write() as db:
+            cursor = db.execute(
+                "UPDATE rows SET state = 'running' WHERE id = ? AND state = 'pending'", (row_id,)
+            )
+            return cursor.rowcount == 1
 
     def set_job(self, job_id: int, state: str, message: str = "") -> None:
         with self._write() as db:

@@ -50,6 +50,26 @@ def test_base_folder_and_relative_paths():
     assert relative_path("src/a.c", "") == "src/a.c"
 
 
+def test_base_folder_on_different_drives_is_unknown():
+    assert base_folder([r"C:\proj\a.c", r"D:\proj\b.c"]) is None
+
+
+def test_base_folder_ignores_letter_case_like_windows():
+    paths = [r"C:\Proj\src\a.c", r"c:\proj\lib\b.c"]
+
+    base = base_folder(paths)
+
+    assert base == "C:/Proj"
+    assert [relative_path(path, base) for path in paths] == ["src/a.c", "lib/b.c"]
+
+
+def test_base_folder_of_posix_absolute_paths():
+    paths = ["/proj/a.c", "/work/b.c"]
+
+    assert base_folder(paths) == "/"
+    assert [relative_path(path, "/") for path in paths] == ["proj/a.c", "work/b.c"]
+
+
 def test_patch_for_one_lf_file():
     source = decode_source("a.c", b"int a;\nint b;\nint c;\n")
     item = FilePatch("src/a.c", source, [(2, replace(source, "int b;", "long b;"))])

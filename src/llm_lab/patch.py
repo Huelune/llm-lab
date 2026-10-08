@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import difflib
-import posixpath
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -36,19 +36,32 @@ class FilePatch:
 
 
 def base_folder(excel_paths: Iterable[str]) -> str | None:
-    """짝지은 파일들의 공통 부모 폴더. 파일 이름만 있는 경로가 섞이면 None."""
+    """짝지은 파일들의 공통 부모 폴더 (Windows처럼 대소문자 무시, 표기는 첫 경로 기준).
+
+    파일 이름만 있는 경로가 섞였거나 드라이브가 달라 공통 폴더가 없으면 None.
+    """
     parents = []
     for path in excel_paths:
         normalized = path.replace("\\", "/")
         if "/" not in normalized:
             return None
-        parents.append(normalized.rsplit("/", 1)[0])
+        parents.append(normalized.rsplit("/", 1)[0].split("/"))
     if not parents:
         return None
-    try:
-        return posixpath.commonpath(parents)
-    except ValueError:  # 절대·상대 경로가 섞임
-        return None
+    common = []
+    for parts in zip(*parents, strict=False):
+        if len({part.casefold() for part in parts}) > 1:
+            break
+        common.append(parts[0])
+    if common == [""]:
+        return "/"
+    if not common and any(_absolute(parts) for parts in parents):
+        return None  # 드라이브가 다르거나 절대·상대 경로가 섞임
+    return "/".join(common)
+
+
+def _absolute(parts: list[str]) -> bool:
+    return parts[0] == "" or bool(re.fullmatch(r"[A-Za-z]:", parts[0]))
 
 
 def relative_path(excel_path: str, base: str | None) -> str:
