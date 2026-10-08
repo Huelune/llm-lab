@@ -71,7 +71,7 @@ def test_small_sheet_shows_every_row_with_row_numbers(tmp_path: Path) -> None:
     screen = peek.summarize(_workbook(tmp_path / "p.xlsx"))
     block = _block(screen, "Code Metrics")
 
-    assert "3행 중 앞 3행" in block[0] and "헤더 추정 1행 (열 3개)" in block[0]
+    assert "3행 중 앞 3행" in block[0] and "헤더 추정 1행 / 열 3개" in block[0]
     # 표준 용어가 아닌 머리(Direction)는 길이만
     assert block[1].split() == ["1:", "Metric", "|", "Threshold", "|", "<글", "9자>"]
     assert block[2].split() == ["2:", "Cyclomatic", "Complexity", "|", "10", "|", "max"]
@@ -79,13 +79,13 @@ def test_small_sheet_shows_every_row_with_row_numbers(tmp_path: Path) -> None:
 
 
 def test_kinds_come_from_rows_under_the_guessed_header(tmp_path: Path) -> None:
-    screen = peek.summarize(_workbook(tmp_path / "p.xlsx", misra_rules=12))
+    screen = peek.summarize(_workbook(tmp_path / "p.xlsx", misra_rules=60))
     block = _block(screen, "MISRA_C_2012_Rule")
 
-    # 제목 1 + 헤더 1 + 규칙 12. 빈 행은 세지 않는다
-    assert "14행 중" in block[0] and "헤더 추정 3행 (열 4개)" in block[0]
-    assert any("Applied: Yes 9, No 3" in line for line in block)
-    assert any("Category: Mandatory 4, Required 4, Advisory 4" in line for line in block)
+    # 제목 1 + 헤더 1 + 규칙 60. 빈 행은 세지 않는다. 다 안 들어가니 값 종류 줄이 붙는다
+    assert "62행 중" in block[0] and "헤더 추정 3행 / 열 4개" in block[0]
+    assert any("Applied: Yes 45, No 15" in line for line in block)
+    assert any("Category: Mandatory 20, Required 20, Advisory 20" in line for line in block)
     # 표준 용어가 아닌 글은 길이만
     assert any(line.strip().startswith("4: 0.1 | Mandatory | No | <글 ") for line in block)
     assert "설명" not in "\n".join(block)
@@ -143,7 +143,7 @@ def _secret_workbook(tmp_path: Path) -> Path:
     book.create_sheet("MISRA_Rule_Result").append(["secret_func", r"C:\Users\secret\a.c"])
     sheet = book.create_sheet("MISRA_secret_Rule")
     sheet.append(["Rule", "Category", "secret 열", "Owner", "Description"])
-    for i in range(6):
+    for i in range(50):
         owner = "secret_kim" if i % 2 else "secret_lee"
         sheet.append([f"{i}.1", CATEGORIES[i % 3], 1234567, owner, f"secret_func 설명 {i}"])
     path = folder / "secret_report.xlsx"
@@ -166,8 +166,8 @@ def test_no_company_names_reach_the_screen(
     assert "조건 시트 1개 / 그 밖의 시트 2개" in out
     assert "secret" not in out.casefold()
     assert "1234567" not in out and "<숫자 7자리>" in out  # 사번 같은 긴 번호
-    assert "Category: Mandatory 2, Required 2, Advisory 2" in out
-    assert "<글 10자> 3" in out  # Owner 값 종류는 길이만
+    assert "Category: Mandatory 17, Required 17, Advisory 16" in out
+    assert "<글 10자> 25" in out  # Owner 값 종류는 길이만
     assert str(tmp_path) not in out and "Temp" not in out
 
 
@@ -193,6 +193,8 @@ def test_open_error_shows_only_its_kind(
         ("Red 0건, Orange 검토", "Red 0건, Orange 검토"),
         ("R2023b", "R2023b"),
         ("적용 여부", "적용 여부"),
+        ("약어", "약어"),
+        ("Data Flow Analysis", "Data Flow Analysis"),
         ("123456", "<숫자 6자리>"),
         ("i2c_init", "<글 8자>"),
         ("A project shall not contain unreachable code", "<글 44자>"),
@@ -201,6 +203,61 @@ def test_open_error_shows_only_its_kind(
 )
 def test_safe_keeps_only_numbers_and_standard_words(value: str, shown: str) -> None:
     assert peek.safe(value) == shown
+
+
+def _merged_workbook(path: Path) -> Path:
+    """병합 셀처럼 빈 열이 끼고, 지표 하나가 여러 행(단계)을 차지하는 조건 시트."""
+    book = Workbook()
+    book.active.title = "Cover"
+    metrics = book.create_sheet("Code Metrics")
+    metrics.append([])
+    metrics.append([None, "No", "Metric", None, "설명", None, "기준", None, "Pass / Fail"])
+    metrics.append(
+        [None, 1, "Cyclomatic Complexity", None, "secret 설명", None, "1 ~ 15", None, "Pass"]
+    )
+    metrics.append([None, None, None, None, None, None, ">= 16", None, "Fail (수정 필요)"])
+    rte = book.create_sheet("RTE")
+    rte.append(["No", "종류", None, "약어"])
+    rte.append([1, "Overflow", None, "OVFL"])
+    misra = book.create_sheet("MISRA_C_2012_Rule")
+    misra.append(["Guideline", "Mode"])
+    for i in range(80):
+        misra.append([f"{i}.1", CATEGORIES[i % 3]])
+    book.save(path)
+    return path
+
+
+def test_empty_columns_are_dropped_and_blanks_shown_as_dash(tmp_path: Path) -> None:
+    screen = peek.summarize(_merged_workbook(tmp_path / "m.xlsx"))
+    block = _block(screen, "Code Metrics")
+
+    assert "3행 중 앞 3행 / 헤더 추정 2행 / 열 5개 (빈 열 4개 뺌)" in block[0]
+    assert block[1].strip() == "2: No | Metric | 설명 | 기준 | Pass / Fail"
+    assert block[2].strip() == "3: 1 | Cyclomatic Complexity | <글 9자> | 1 ~ 15 | Pass"
+    assert block[3].strip() == "4: - | - | - | >= 16 | Fail (수정 필요)"
+    # 다 들어가는 시트는 값 종류 줄이 없고, 잘리는 MISRA 시트만 있다
+    assert len(block) == 1 + 3
+    assert any("Mode: Mandatory 27, Required 27, Advisory 26" in line for line in screen)
+
+
+def test_words_after_the_path_pick_sheets(tmp_path: Path) -> None:
+    screen = peek.summarize(_merged_workbook(tmp_path / "m.xlsx"), ("metric", "rte"))
+    text = "\n".join(screen)
+
+    assert screen[0].startswith("조건 시트 3개 중 2개 (metric, rte)")
+    assert "[Code Metrics]" in text and "[RTE]" in text and "MISRA" not in text
+    # 둘 다 화면에 다 들어가므로 값 종류 줄이 없다
+    assert not any(line.startswith("  종류 ") for line in screen)
+
+
+def test_unknown_pick_word_shows_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["peek_conditions.py", "x.xlsx", "secret"])
+
+    assert peek.main() == 2
+    out = capsys.readouterr().out
+    assert "사용법" in out and "secret" not in out
 
 
 def test_share_gives_small_needs_first() -> None:
