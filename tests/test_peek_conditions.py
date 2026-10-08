@@ -63,6 +63,8 @@ def test_finds_condition_sheets_only(tmp_path: Path) -> None:
     text = "\n".join(screen)
 
     assert screen[0] == "조건 시트 3개 / 그 밖의 시트 4개 (이름은 찍지 않음)"
+    # 이 Code Metrics 시트에는 판정 열이 없어 조건으로 읽지 않는다
+    assert screen[1] == "Code Metrics 조건 읽기: 조건 시트 없음: 결과 시트 Threshold만 씀"
     assert all(f"[{t}]" in text for t in ("MISRA_C_2012_Rule", "Code Metrics", "RTE"))
     assert "Cover" not in text and "_Result" not in text and "p.xlsx" not in text
 
@@ -235,6 +237,10 @@ def test_empty_columns_are_dropped_and_blanks_shown_as_dash(tmp_path: Path) -> N
     assert block[1].strip() == "2: No | Metric | 설명 | 기준 | Pass / Fail"
     assert block[2].strip() == "3: 1 | Cyclomatic Complexity | <글 9자> | 1 ~ 15 | Pass"
     assert block[3].strip() == "4: - | - | - | >= 16 | Fail (수정 필요)"
+    # llm-fix-server의 조건 읽기 결과는 개수로만
+    assert screen[1] == (
+        "Code Metrics 조건 읽기: 지표 1개, 단계 2개 (pass 1 / middle 0 / fail 1), 범위 글 못 읽음 0"
+    )
     # 다 들어가는 시트는 값 종류 줄이 없고, 잘리는 MISRA 시트만 있다
     assert len(block) == 1 + 3
     assert any("Mode: Mandatory 27, Required 27, Advisory 26" in line for line in screen)

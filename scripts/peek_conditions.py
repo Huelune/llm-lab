@@ -27,6 +27,8 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from llm_lab.conditions import Metric, read_metrics
+
 KEYWORDS = ("misra", "metric", "rte")
 HEADER_SCAN_ROWS = 30
 WIDTH = 118
@@ -209,6 +211,20 @@ def share(needs: list[int], budget: int) -> list[int]:
     return given
 
 
+def metric_line(metrics: list[Metric], note: str) -> str:
+    """llm-fix-server가 Code Metrics 조건을 어떻게 읽는지 개수로만 (이름·글은 찍지 않는다)."""
+    if not metrics:
+        return f"Code Metrics 조건 읽기: {note}"
+    bands = [band for metric in metrics for band in metric.bands]
+    kinds_ = Counter(band.kind for band in bands)
+    unread = sum(not band.ok for band in bands)
+    return (
+        f"Code Metrics 조건 읽기: 지표 {len(metrics)}개, 단계 {len(bands)}개 "
+        f"(pass {kinds_['pass']} / middle {kinds_['middle']} / fail {kinds_['fail']}), "
+        f"범위 글 못 읽음 {unread}"
+    )
+
+
 def summarize(path: Path, only: tuple[str, ...] = ()) -> list[str]:
     """화면 줄 (SCREEN_LINES - 1 이하).
 
@@ -219,6 +235,7 @@ def summarize(path: Path, only: tuple[str, ...] = ()) -> list[str]:
         workbook = load_workbook(path, read_only=True, data_only=True)
         try:
             sheets = [(sheet.title, read(sheet)) for sheet in workbook.worksheets]
+            reading = metric_line(*read_metrics(workbook))
         finally:
             workbook.close()
 
@@ -238,7 +255,7 @@ def summarize(path: Path, only: tuple[str, ...] = ()) -> list[str]:
     picked = (
         f"{len(conditions)}개 중 {len(found)}개 ({', '.join(only)})" if only else f"{len(found)}개"
     )
-    head = [f"조건 시트 {picked} / 그 밖의 시트 {others}개 (이름은 찍지 않음)"]
+    head = [f"조건 시트 {picked} / 그 밖의 시트 {others}개 (이름은 찍지 않음)", reading]
     limit = MAX_KINDS if len(found) <= 4 else 0
     described = [(title, *compact(rows)) for title, rows in found]
     guessed = [kinds(rows) for _, rows, _ in described]
