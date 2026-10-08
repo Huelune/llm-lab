@@ -54,7 +54,7 @@ uv run llm-fix-server
 ```
 
 1. 브라우저에서 `http://127.0.0.1:8000`을 열고 Polyspace 엑셀과 해당 소스 파일들을 올립니다.
-2. 결과 화면에서 판단·이유·diff가 읽을 만한지 봅니다.
+2. 결과 화면에서 판단·이유·diff가 읽을 만한지 봅니다. LLM에 무엇을 보내고 받았는지는 `private/llm-logs/`의 `.md` 파일에서 볼 수 있습니다.
 3. 몇 개를 골라 패치를 받고, 화면에 나온 폴더에서 `git -c core.autocrlf=false apply --check fixes.patch` 다음 `--check` 없이 적용합니다.
 4. Polyspace를 다시 돌립니다.
 

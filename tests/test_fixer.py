@@ -62,6 +62,34 @@ def test_replacement_not_writable_in_source_encoding_is_retried():
     assert "cp949로 쓸 수 없는 문자 U+2013" in sent[1]["messages"][3]["content"]
 
 
+def test_transcript_records_each_request_and_response():
+    wrong = fix_answer(edits=[{"original": "return a % b;", "replacement": "x"}])
+    handler, _ = scripted(wrong, fix_answer())
+    transcript: list = []
+
+    propose_fix(make_client(handler), MODEL, finding(), SOURCE, transcript)
+
+    first, second = transcript
+    assert first.messages[0]["role"] == "system"
+    assert "    3|     return a / b;" in first.messages[1]["content"]
+    assert '"return a % b;"' in first.content
+    assert first.finish_reason == "stop"
+    assert (first.prompt_tokens, first.completion_tokens) == (12, 3)
+    assert first.raw["choices"][0]["message"]["content"] == first.content
+    assert len(second.messages) == 4  # 다시 요청: 이전 답과 문제 설명이 붙는다
+
+
+def test_transcript_records_api_errors():
+    handler, _ = scripted(error(401, "invalid key"))
+    transcript: list = []
+
+    with pytest.raises(FatalLLMError):
+        propose_fix(make_client(handler), MODEL, finding(), SOURCE, transcript)
+
+    assert "[인증]" in transcript[0].error
+    assert transcript[0].raw is None
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [

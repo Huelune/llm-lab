@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import json
 import re
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -309,8 +310,28 @@ def cache_key(model: str, source: SourceFile, finding: Finding) -> str:
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
-def _ask(client: OpenAI, model: str, messages: list[dict[str, str]]) -> tuple[str, str | None]:
+@dataclass(frozen=True)
+class Exchange:
+    """대화 기록용: LLM에 보낸 메시지와 받은 응답 하나."""
+
+    messages: list[dict[str, str]]
+    raw: dict[str, Any] | None = None  # 응답 원문 (오류면 None)
+    content: str = ""
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    seconds: float = 0.0
+    error: str = ""
+
+
+def _ask(
+    client: OpenAI,
+    model: str,
+    messages: list[dict[str, str]],
+    transcript: list[Exchange] | None,
+) -> tuple[str, str | None]:
     """(응답 내용, finish_reason). 네트워크·SSL·인증 오류면 FatalLLMError."""
+    start = time.perf_counter()
     try:
         response = client.chat.completions.create(
             model=model,
@@ -322,13 +343,31 @@ def _ask(client: OpenAI, model: str, messages: list[dict[str, str]]) -> tuple[st
         )
     except openai.APIError as exc:
         category, hint = classify_error(exc)
+        message = f"[{category}] {hint}"
+        if transcript is not None:
+            transcript.append(
+                Exchange(list(messages), seconds=time.perf_counter() - start, error=message)
+            )
         if category in FATAL_CATEGORIES:
-            raise FatalLLMError(f"[{category}] {hint}") from exc
-        raise FixError(f"[{category}] {hint}") from exc
-    if not response.choices:
-        return "", None
-    choice = response.choices[0]
-    return choice.message.content or "", choice.finish_reason
+            raise FatalLLMError(message) from exc
+        raise FixError(message) from exc
+    choice = response.choices[0] if response.choices else None
+    content = (choice.message.content if choice else None) or ""
+    finish_reason = choice.finish_reason if choice else None
+    if transcript is not None:
+        usage = response.usage
+        transcript.append(
+            Exchange(
+                messages=list(messages),
+                raw=response.model_dump(),
+                content=content,
+                finish_reason=finish_reason,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                completion_tokens=usage.completion_tokens if usage else None,
+                seconds=time.perf_counter() - start,
+            )
+        )
+    return content, finish_reason
 
 
 def _to_result(
@@ -377,8 +416,17 @@ def _to_result(
     return FixResult("fix", data["reason"], edits, display_diff(source.name, source.text, fixed))
 
 
-def propose_fix(client: OpenAI, model: str, finding: Finding, source: SourceFile) -> FixResult:
-    """RTE 행 하나에 대한 판단과 수정. 쓸 수 없는 응답이면 한 번만 다시 요청한다."""
+def propose_fix(
+    client: OpenAI,
+    model: str,
+    finding: Finding,
+    source: SourceFile,
+    transcript: list[Exchange] | None = None,
+) -> FixResult:
+    """RTE 행 하나에 대한 판단과 수정. 쓸 수 없는 응답이면 한 번만 다시 요청한다.
+
+    transcript를 주면 LLM과 주고받은 요청·응답을 순서대로 담는다.
+    """
     line_count = len(split_lines(source.text))
     if finding.line is None:
         raise FixError("line 칸이 정수가 아님")
@@ -395,7 +443,7 @@ def propose_fix(client: OpenAI, model: str, finding: Finding, source: SourceFile
     ]
     problem = ""
     for _ in range(2):
-        content, finish_reason = _ask(client, model, messages)
+        content, finish_reason = _ask(client, model, messages, transcript)
         try:
             return _to_result(content, finish_reason, source, first, last)
         except EditMismatch as exc:

@@ -26,6 +26,8 @@ from llm_lab.worker import Worker
 
 # .env처럼 프로젝트 루트 기준. private/는 git에서 제외되어 있다
 DB_PATH = Path("private/fixer.db")
+# 행마다 LLM과 오간 대화를 Markdown 파일로 남기는 폴더
+LOG_DIR = Path("private/llm-logs")
 WORKERS = 2
 
 
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     store = Store(DB_PATH)
     executor = ThreadPoolExecutor(max_workers=WORKERS)
-    worker = Worker(store, get_client(settings), settings.model, executor.submit)
+    worker = Worker(store, get_client(settings), settings.model, executor.submit, log_dir=LOG_DIR)
     worker.resume()
     print(f"브라우저에서 http://127.0.0.1:{args.port} 을 여세요 (끄려면 Ctrl+C)")
     try:

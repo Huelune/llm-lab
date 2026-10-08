@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fake_llm import MODEL, error, make_client, scripted
 from fastapi.testclient import TestClient
 from rte_fixtures import CALC_C, fix_answer, rte_excel, rte_row
@@ -167,3 +169,21 @@ def test_main_reports_config_error(tmp_path, monkeypatch, capsys):
 
     assert web.main([]) == 1
     assert "설정 오류" in capsys.readouterr().err
+
+
+def test_main_keeps_conversation_logs_in_private(tmp_path, monkeypatch):
+    # 실제 서버 대신 앱을 받아 두기만 하고, 작업자가 어디에 대화를 남기는지 본다
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("LLM_MODEL", MODEL)
+    started = []
+    monkeypatch.setattr(web.uvicorn, "run", lambda app, **kwargs: started.append(app))
+    workers = []
+    monkeypatch.setattr(
+        web, "Worker", lambda *args, **kwargs: workers.append(kwargs) or Worker(*args, **kwargs)
+    )
+
+    assert web.main([]) == 0
+
+    assert len(started) == 1
+    assert workers[0]["log_dir"] == Path("private/llm-logs")
