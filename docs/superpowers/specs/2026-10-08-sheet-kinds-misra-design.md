@@ -1,7 +1,7 @@
 # Polyspace 시트 종류 기반과 MISRA 지원 설계
 
 - 작성일: 2026-10-08
-- 상태: 초안 (사용자 검토 대기)
+- 상태: 승인됨 (2026-10-08). 같은 날 정한 MISRA 조건 시트(3.5절)를 반영함
 - 바탕: `2026-10-07-rte-fixer-design.md`(이하 RTE 설계). 이 문서에 적지 않은 것은 RTE 설계를 그대로 따른다.
 
 ## 1. 배경과 목표
@@ -19,13 +19,14 @@
 - 묶음 처리: LLM 호출 하나가 행 여러 개를 맡고, 판단·이유는 행마다, 수정은 묶음이 함께 쓴다
 - 공통 LLM 답 형식(RTE도 바뀜)
 - 중요한 대상부터 처리, 작업 멈춤과 이어서 처리
+- MISRA 조건 시트에서 규칙별 분류와 적용 여부 읽기
 - DB 스키마 3, 화면, 테스트
 
 제외(13절):
 - CodeMetrics 종류(다른 세션)
+- RTE·CodeMetrics 조건 시트
 - 작업 하나에 여러 시트
 - 규칙별로 골라 돌리기
-- 조건 시트 반영
 - 엑셀에 결과 다시 쓰기
 
 ### 성공 기준
@@ -35,6 +36,7 @@
 3. 고른 수정을 패치 하나로 받아 `git apply`로 적용할 수 있다. 같은 묶음의 "수정" 행들은 같은 수정을 함께 쓰므로 서로 겹치지 않는다.
 4. 패치를 적용하고 Polyspace를 다시 돌리면 "수정" 행의 위반이 사라지고, 다른 규칙 위반이나 새 Red/Orange가 생기지 않는다. 이 항목은 회사 PC에서 사람이 확인한다(12절).
 5. "수정 불필요" 행의 이유는 Polyspace comment에 일탈(deviation) 사유로 그대로 옮길 수 있는 수준이다.
+6. MISRA 규칙의 분류와 적용 여부는 작업마다 엑셀의 조건 시트에서 읽는다. 코드와 지시문에는 규칙별 값을 고정하지 않는다.
 
 ## 2. 사용자 결정 (2026-10-08)
 
@@ -45,6 +47,8 @@
 | 작업 단위 | 작업 하나에 시트(종류) 하나. 첫 화면에서 고른다. |
 | 묶음 | 종류별 묶음. 판단·이유는 행마다, 수정은 묶음 공유. RTE는 행 하나씩, MISRA는 같은 파일의 같은 줄. |
 | MISRA 대상 기본값 | Mandatory·Required 체크, Advisory는 해제 |
+| MISRA 분류와 적용 여부 | 조건 시트 우선. 작업마다 엑셀의 MISRA 조건 시트에서 읽고, 조건 시트에 없으면 결과 시트의 Category를 쓴다(3.5절). |
+| 조건 값 | 바뀔 수 있으므로 코드와 지시문에 고정하지 않는다. |
 | 처리량 | 중요한 대상부터 처리하고, 작업을 멈출 수 있게 한다. |
 | Mandatory를 못 고칠 때 | `no_fix`로 답하되, 이유에 직접 고쳐야 한다는 것과 무엇이 부족한지 적는다. |
 | 사내 정보 | 설계 문서·테스트·커밋에는 회사 값을 넣지 않는다(10절). |
@@ -58,7 +62,7 @@ src/llm_lab/
 ├─ kinds/
 │  ├─ __init__.py   # Kind 정의, KINDS 목록, get_kind(), 공통 기본 함수
 │  ├─ rte.py        # RTE 종류 (지금 fixer.py의 RTE 지시문을 옮긴다)
-│  └─ misra.py      # MISRA 종류
+│  └─ misra.py      # MISRA 종류, 조건 시트 읽기
 ├─ polyspace.py     # read_sheet(엑셀, 종류, 고른 대상): 공통 시트·헤더 찾기
 ├─ fixer.py         # propose_fixes(종류, 묶음의 행들, 소스): 공통 답 형식
 ├─ worker.py        # 묶음 단위 처리, 중요한 대상부터
@@ -80,7 +84,8 @@ src/llm_lab/
 | `title` | 화면 이름: `RTE`, `MISRA C:2012` |
 | `sheet_word` | 시트 이름에 들어가는 낱말(소문자): `rte`, `misra` |
 | `required`, `optional` | 필수 열, 선택 열(비교용 소문자) |
-| `read_row(cell, row)` | 칸 읽기 함수와 엑셀 행 번호를 받아, 대상이면 `Finding`을, 아니면 뺀 이유(문자열)를 돌려준다. |
+| `read_conditions(workbook)` | 엑셀 전체에서 이 종류의 조건을 읽어 (조건, 작업 메모에 남길 한 줄)을 돌려준다. 기본은 `(None, '')`. |
+| `read_row(cell, row, conditions)` | 칸 읽기 함수, 엑셀 행 번호, 위의 조건을 받아, 대상이면 `Finding`을, 아니면 뺀 이유(문자열)를 돌려준다. |
 | `label(finding)` | 배지 글자. 대상 고르기와 우선순위에도 쓴다. |
 | `choices` | 첫 화면에서 고르는 대상. 중요한 것부터 적는다. |
 | `defaults` | 처음에 체크된 대상 |
@@ -115,16 +120,49 @@ MISRA 시트의 열은 RTE와 같고 `ID`만 없다: `TYPE`, `Group`, `informati
 
 | 항목 | 값 |
 |---|---|
-| 분석할 행 | 모든 행. TYPE에는 규칙 표준 이름(`MISRA C:2012`)이 들어 있어 거르지 않는다. |
-| 배지·대상 | `information` 칸에서 분류 낱말(mandatory/required/advisory, 대소문자 무시)을 찾아 `Mandatory`(빨강), `Required`(주황), `Advisory`(회색). 칸 형식은 `Category: Required`다. 낱말이 없으면 `분류 없음`(회색). |
+| 분석할 행 | 모든 행. TYPE에는 규칙 표준 이름(`MISRA C:2012`)이 들어 있어 거르지 않는다. 다만 조건 시트에서 꺼진 규칙의 행은 "적용 안 함 (조건 시트)"로 뺀다(3.5). |
+| 배지·대상 | 실제 분류 `Finding.category`(3.5): `Mandatory`(빨강), `Required`(주황), `Advisory`(회색). 그 밖의 분류와 `분류 없음`은 회색이다. |
 | 기본 체크 | Mandatory, Required |
 | 묶음 | 같은 파일의 같은 줄: `f"{file_name}:{line}"`. 줄 번호가 정수가 아니면 혼자(`''`). |
+| `facts` | `TYPE`, `check`, `detail`, `Group`, `category`, `Function`, `File`, `line`. `information` 대신 실제 분류를 보낸다. 두 값이 다를 때 LLM이 헷갈리지 않게 하기 위해서다. |
 | 지시문 | 6.5의 MISRA 지시문 |
 | `heading` | `Polyspace MISRA C:2012 results` |
 | `prompt_version` | 1 |
 
 - `Check`에는 규칙 번호와 규칙 문장이 함께 있다. 그래서 규칙 설명을 따로 올리는 기능은 만들지 않는다.
-- MISRA 행에서 `Finding.color`는 `''`다. 나머지 칸은 지금 `Finding` 필드에 그대로 담긴다(`type`, `group`, `information`, `check`, `detail`, `function`, `status`, `comment`).
+- MISRA 행에서 `Finding.color`는 `''`다. 나머지 칸은 지금 `Finding` 필드에 그대로 담긴다(`type`, `group`, `information`, `check`, `detail`, `function`, `status`, `comment`). 새 필드 `category`, `note`는 4절에 적는다.
+
+### 3.5 MISRA 조건 시트 (`kinds/misra.py`의 `read_conditions`)
+
+엑셀에는 결과 시트와 별도로 규칙마다 프로젝트 분류(Mode)와 적용 여부(Enabled)를 적은 조건 시트가 있다. 사용자 결정은 "조건 시트 우선"이다. 내용은 바뀔 수 있으므로 작업마다 엑셀에서 읽는다.
+
+**찾기**
+- 이름이 `_Result`로 끝나지 않는 시트 중에서, 위 30행 안에 `guideline`과 `mode` 열이 있는 헤더 행을 가진 시트를 찾는다. 시트 이름은 고정하지 않는다.
+- 그런 시트가 여럿이면 이름에 `misra`가 들어간 시트를 쓰고, 그래도 여럿이면 첫 시트를 쓴다.
+- 열 이름은 대소문자, 공백, 끝의 콜론(`:`)을 무시하고 비교한다. 이 비교는 결과 시트 헤더에도 똑같이 쓴다.
+- 필수 열은 `guideline`, `mode`, 선택 열은 `enabled`다. 다른 열(설명, 코멘트, 검토 범위 등)은 쓰지 않는다.
+
+**규칙 번호 맞추기 (`rule_key`)**
+- 글 맨 앞의 규칙 번호(`10.3`처럼 점으로 이은 숫자)를 뽑는다. 앞에 `Rule`이 붙어도 된다. 결과 시트는 `Check`에서, 조건 시트는 `Guideline`에서 뽑는다.
+- `Dir`, `Directive`, `D`가 붙었거나 결과 행의 `Group`에 `directive`가 들어 있으면 디렉티브로 보고 `D`를 앞에 붙인다. Rule 4.1과 Dir 4.1이 섞이지 않게 하기 위해서다.
+- 번호를 뽑지 못한 결과 행은 조건 시트를 쓰지 않는다.
+
+**값 읽기**
+- Mode는 공백을 정리하고 대소문자를 무시한다. mandatory, required, advisory는 `Mandatory`, `Required`, `Advisory`로 쓴다. 그 밖의 값은 첫 글자만 대문자로 바꿔 그대로 쓴다. 이런 값은 `choices`에 없으므로 그 행은 늘 남는다. Mode가 빈 규칙은 조건 시트에 없는 것으로 본다.
+- Enabled도 공백을 정리하고 대소문자를 무시한다. `no`, `n`, `off`, `false`, `0`, `disabled`이면 꺼진 규칙이다. 그 밖의 값, 빈 칸, Enabled 열이 없을 때는 켜진 것으로 본다.
+
+**분류 정하기 (`Finding.category`)**
+1. 조건 시트에 그 규칙이 있으면 그 Mode를 쓴다.
+2. 없으면 결과 시트 `information`에서 분류 낱말(mandatory/required/advisory, 대소문자 무시)을 찾아 쓴다. 칸 형식은 `Category: Required`다.
+3. 그것도 없으면 `분류 없음`이다.
+- 1과 2가 둘 다 있고 다르면 `Finding.note`에 `분류: 조건 시트 Advisory (결과 시트 Required)` 형식으로 남긴다. 결과 카드에 보인다.
+
+**작업 메모**
+- 조건 시트를 읽었으면 `조건 시트: 규칙 N개`를, 못 찾았거나 읽을 규칙이 없으면 `조건 시트 없음: 결과 시트 분류를 씀`을 작업 메모(7.1)에 남긴다.
+
+**고정하지 않는 것**
+- 규칙 번호, 규칙별 분류와 적용 여부, 시트 이름은 모두 작업마다 엑셀에서 읽는다.
+- 코드에 고정된 것은 MISRA 표준 분류 이름 세 개(대상 체크 상자와 우선순위)와, 꺼짐을 뜻하는 낱말 목록뿐이다.
 
 ## 4. 엑셀 읽기 (`polyspace.read_sheet`)
 
@@ -136,9 +174,12 @@ MISRA 시트의 열은 RTE와 같고 `ID`만 없다: `TYPE`, `Group`, `informati
 - MISRA와 RTE 시트는 열이 같으므로, 이름으로 고르는 것이 유일한 구분이다. 지금처럼 "이름이 맞지 않아도 첫 시트를 쓰는" 대체 규칙은 없앤다.
 - 못 찾으면 `SheetError`를 낸다. 예: "MISRA C:2012 시트를 찾지 못했습니다. 이름에 'misra'가 들어가고 _Result로 끝나는 시트가 필요합니다." 지금처럼 시트 이름과 각 시트에서 찾은 헤더를 함께 담는다. 이 오류는 회사 PC의 화면에만 나온다.
 
+**조건 읽기**
+- 시트를 고르기 전에 `kind.read_conditions(workbook)`으로 조건과 작업 메모 한 줄을 얻는다. MISRA는 3.5절, RTE는 조건이 없다.
+
 **행 읽기**
 - 모든 칸이 빈 행은 세지 않고 건너뛴다(지금과 같음).
-- `kind.read_row`가 이유를 돌려주면 그 이유로 센다.
+- `kind.read_row(cell, row, conditions)`가 이유를 돌려주면 그 이유로 센다.
 - `Finding`이면 `kind.label`을 구한다. 그 글자가 `kind.choices`에 있는데 `selected`에 없으면 `"{글자} (고르지 않음)"` 이유로 센다.
 
 **결과**
@@ -149,9 +190,15 @@ class Sheet:  # 지금의 RteSheet
     sheet: str
     findings: list[Finding]
     skipped: dict[str, int]  # 뺀 이유 → 행 수 (처음 나온 순서)
+    conditions_note: str = ""  # read_conditions가 준 작업 메모 한 줄
 ```
 
-`Finding`의 필드는 바꾸지 않는다. 나중에 종류가 필드를 더할 때는 기본값을 둔다. 그래야 DB에 저장된 예전 행 JSON이 그대로 읽힌다.
+`Finding`에는 기본값이 있는 필드 두 개를 더한다. 기본값이 있으므로 DB에 저장된 예전 행 JSON도 그대로 읽힌다. 나중에 다른 종류가 필드를 더할 때도 같은 규칙을 따른다.
+
+| 필드 | 뜻 |
+|---|---|
+| `category: str = ""` | MISRA의 실제 분류(3.5). 다른 종류는 비워 둔다. |
+| `note: str = ""` | 결과 카드에 보일 짧은 메모. MISRA는 분류가 다를 때 쓴다. CodeMetrics는 "Actual 19 > 기준 15" 같은 값을 쓸 수 있다. |
 
 ## 5. 묶음과 처리 순서
 
@@ -193,7 +240,8 @@ Code (lines {first}-{last} of {source.name}; each line starts with its number an
 ```
 ```
 
-- 기본 `facts`는 지금 RTE와 같은 순서이고, 빈 값은 뺀다.
+- 기본 `facts`는 지금 RTE와 같은 순서이고, 빈 값은 뺀다. 위 모양은 RTE 기준이다.
+- MISRA는 `information` 줄 대신 `- category: …`(실제 분류) 줄을 넣는다(3.4).
 - RTE도 묶음이 하나뿐이지만 같은 모양(`Finding 1:`)을 쓴다.
 
 ### 6.3 공통 답 형식 (`json_schema`, strict)
@@ -240,7 +288,7 @@ Answer with JSON only. "findings" has one entry for each numbered finding. "edit
 
 ```
 You review Polyspace results for MISRA C:2012 in C code. All findings in one request are on the same line. For each finding, decide whether the code must change.
-- "check" gives the rule number and its headline, "detail" what Polyspace found, and "information" the rule category.
+- "check" gives the rule number and its headline, "detail" what Polyspace found, and "category" the rule category this project uses.
 - Mandatory: no deviation is allowed, so fix it. If the code shown is not enough to fix it, answer no_fix and say in reason that it must be fixed by hand and what is missing.
 - Required and Advisory: answer fix when a small change removes the violation without changing behavior. Otherwise answer no_fix with a deviation rationale.
 When you fix:
@@ -269,12 +317,12 @@ Answer with JSON only. "findings" has one entry for each numbered finding. "edit
 | 표 | 더하는 칸 | 예전 DB의 값 |
 |---|---|---|
 | `jobs` | `kind TEXT NOT NULL DEFAULT 'rte'` | `rte` (예전 작업은 모두 RTE) |
-| `jobs` | `skip_note TEXT NOT NULL DEFAULT ''` | `''` |
+| `jobs` | `note TEXT NOT NULL DEFAULT ''` | `''` |
 | `rows` | `grp TEXT NOT NULL DEFAULT ''` | `''` (행 하나씩) |
 
 - `SCHEMA_VERSION`을 3으로 올린다. 켤 때 없는 칸은 `ALTER TABLE … ADD COLUMN`으로 더한다(스키마 2의 `source_root`와 같은 방식).
-- `skip_note`는 뺀 이유별 개수를 한 줄로 적는다. 예: `Gray Check 3 · Advisory (고르지 않음) 40`. `skipped`(합계)는 그대로 둔다.
-- `Job`에 `kind`, `skip_note`, `Row`·`NewRow`에 `grp`를 더한다(기본값 있음).
+- `note`는 작업 메모 한 줄이다. 조건 메모(`Sheet.conditions_note`)와 뺀 이유별 개수를 ` · `로 잇는다. 예: `조건 시트: 규칙 12개 · 제외: Advisory (고르지 않음) 40, 적용 안 함 (조건 시트) 2`. `skipped`(합계)는 그대로 둔다.
+- `Job`에 `kind`, `note`, `Row`·`NewRow`에 `grp`를 더한다(기본값 있음).
 - `claim_rows(ids)`: 모든 행이 `pending`일 때만 한꺼번에 `running`으로 바꾸고 `True`를 돌려준다. 하나라도 아니면 아무것도 바꾸지 않고 `False`다. 쓰기 잠금 안에서 한 번에 한다.
 - `stop(job_id)`: `running` 작업만 `stopped`로 바꾸고 메시지에 `USER_STOP`(사용자가 멈춤)을 적는다.
 - `cache_get`·`cache_put`은 `FixResult` 목록을 다룬다.
@@ -322,7 +370,7 @@ Answer with JSON only. "findings" has one entry for each numbered finding. "edit
 - "Red / Orange" 칸을 "종류 · 대상"으로 바꾼다. 종류 이름과 대상별 개수 배지(`choices` 순서, 그 밖의 글자는 뒤)를 보여 준다.
 
 **결과 화면 (`GET /results/{id}`)**
-- 머리말: 종류 · 시트 · 시각 · 소스 폴더. 뺀 행이 있으면 "제외 N (skip_note)"
+- 머리말: 종류 · 시트 · 시각 · 소스 폴더. 그 아래 줄에 작업 메모(`note`)가 있으면 보여 준다.
 - 처리 중: 진행 막대 옆에 "멈춤" 버튼(`POST /results/{id}/stop`)
 - 멈춘 작업:
   - 사용자가 멈췄으면 회색 안내 "멈춘 작업입니다. '이어서 처리'를 누르면 남은 행을 처리합니다."
@@ -332,13 +380,14 @@ Answer with JSON only. "findings" has one entry for each numbered finding. "edit
 - 개수 한 줄: 대상별 개수(`choices` 순서), 제외 | 수정, 수정 불필요, 확인 필요, 대기
 - "한눈에 보기" 표: 종류 칸에 배지. check 칸은 한 줄로 자르고(`text-overflow: ellipsis`), 마우스를 올리면 전체가 보인다. MISRA의 긴 규칙 문장 때문이다.
 - "자세히 보기" 카드:
+  - `Finding.note`가 있으면 detail 줄 아래에 보여 준다. 한눈에 보기 표의 배지에도 마우스를 올리면 보인다.
   - 묶음으로 보낸 행이면 "함께 보낸 행: 엑셀 13, 14행"을 보여 준다.
   - 대화 기록 파일 이름에는 묶음의 가장 작은 엑셀 행을 쓴다.
 - "수정 모두 선택"의 순서: (우선순위, 엑셀 행). RTE는 지금처럼 Red 먼저다.
 - 행이 없으면 "분석할 행이 없습니다".
 
 **API (`GET /api/results/{id}`)**
-- 작업에 `kind`, `skip_note`가 더해진다(`asdict(job)`). 행마다 `grp`를 더한다.
+- 작업에 `kind`, `note`가 더해진다(`asdict(job)`). 행마다 `grp`를 더한다. `finding`에는 `category`, `note`가 들어 있다.
 
 ## 9. 오류 처리
 
@@ -350,6 +399,9 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
 | 알 수 없는 종류 | `400` |
 | 대상을 하나도 고르지 않음 | `400` "분석할 대상을 하나 이상 고르세요." |
 | 고른 대상의 행이 없음 | 작업은 만들되 바로 `done`. "분석할 행이 없습니다" |
+| MISRA 조건 시트가 없거나 읽을 규칙이 없음 | 결과 시트 분류를 쓰고 작업 메모에 "조건 시트 없음: 결과 시트 분류를 씀"을 남긴다. 오류는 아니다. |
+| 조건 시트에서 꺼진 규칙 | 그 행은 "적용 안 함 (조건 시트)"로 뺀다. |
+| 조건 시트와 결과 시트의 분류가 다름 | 조건 시트를 따르고, 카드에 두 값을 보여 준다(`Finding.note`). |
 | 묶음의 줄 번호 오류, LLM 답 오류 | 묶음의 모든 행이 같은 오류(확인 필요) |
 | 치명 오류 | 묶음의 행은 `pending`, 작업은 `stopped`(지금과 같음) |
 | 사용자가 멈춤 | 작업 `stopped`, 메시지 `USER_STOP`. "이어서 처리"로 계속한다. |
@@ -358,7 +410,8 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
 
 전역 규칙(사용자 CLAUDE.md, "회사 내부 정보는 절대 회사 밖으로 내보내지 않는다")을 이 일에 이렇게 적용한다.
 
-- 설계 문서, 구현 계획, 테스트, 커밋 메시지에는 회사 엑셀의 값(시트 이름, 행 수, 파일·함수 이름, 칸 원문)을 넣지 않는다. 테스트의 엑셀과 소스는 만들어 낸 것만 쓴다.
+- 설계 문서, 구현 계획, 테스트, 커밋 메시지에는 회사 엑셀의 값(시트 이름, 행 수, 파일·함수 이름, 칸 원문, 규칙별 분류와 적용 여부)을 넣지 않는다. 테스트의 엑셀과 소스는 만들어 낸 것만 쓴다.
+- 테스트의 조건 시트는 실제와 상관없는 가짜 값을 섞어 쓴다: 대소문자가 섞인 Mode, 끝에 콜론이 붙은 헤더, 꺼진 규칙, 결과 시트와 다른 분류, 다른 이름의 시트.
 - 결과 화면, 오류 화면, 대화 기록은 회사 PC 안에서만 본다. 그래서 지금처럼 파일 이름과 원문을 보여 준다.
 - todo.md의 회사 PC 확인 절은 이 화면들의 캡처를 부탁하지 않는다. "알려줄 것"은 개수와 종류를 말로만 받는다. 이상했던 판단은 코드와 이름 없이 말로 설명해 달라고 적는다.
 
@@ -368,6 +421,10 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
 
 - `test_kinds.py` (새 파일)
   - MISRA 분류 읽기: `Category: Required` → Required, 대소문자 차이, 낱말 없음 → 분류 없음
+  - `rule_key`: `10.3 …` → `10.3`, `Rule 10.3` → `10.3`, `Dir 4.1`·`D4.1` → `D4.1`, Group에 directive → `D` 접두, 맨 앞에 번호가 없으면 없음(규칙 문장 속 숫자는 뽑지 않음)
+  - 조건 시트 찾기: 이름이 아니라 열로 찾는다, 끝 콜론 헤더, 여럿이면 이름에 misra가 든 시트, `_Result` 시트는 보지 않는다
+  - 조건 값: Mode 대소문자, 빈 Mode는 없는 규칙, Enabled 꺼짐 낱말들과 그 밖의 값, Enabled 열 없음
+  - 분류 정하기: 조건 시트 우선, 없으면 결과 시트, 다르면 `note`, 꺼진 규칙은 "적용 안 함 (조건 시트)"
   - MISRA 묶음 키: 같은 파일·같은 줄은 같은 키, 줄이 다르거나 파일이 다르면 다른 키, 줄 번호 없음 → `''`
   - RTE `read_row`: Red/Orange는 `Finding`, Gray와 빈 TYPE은 이유
   - `KINDS` 이름이 겹치지 않고, `defaults`가 `choices` 안에 있는지
@@ -376,6 +433,8 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
   - 이름이 맞는 시트가 없으면 종류 이름이 든 오류
   - ID 열이 없는 MISRA 헤더
   - 고르지 않은 대상과 Gray를 이유별로 센다.
+  - 조건 시트가 있는 엑셀: 조건 시트 분류로 대상을 고른다, 꺼진 규칙을 뺀다, `conditions_note`에 규칙 수
+  - 조건 시트가 없는 엑셀: 결과 시트 분류를 쓰고 "조건 시트 없음" 메모
 - `test_fixer.py`
   - 묶음 메시지: 번호 붙은 Finding 목록, RTE·MISRA 지시문
   - 행별 판단: `fix`·`no_fix`가 섞인 답에서 수정이 `fix` 행에만 붙는다.
@@ -395,7 +454,7 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
   - 캐시 목록 저장과 읽기, 목록이 아닌 예전 값은 없는 것으로 본다.
 - `test_web.py`
   - 첫 화면에 종류 라디오와 대상 체크 상자가 있다.
-  - `kind=misra`와 대상으로 작업을 만들면 MISRA 배지와 제외 이유가 보인다.
+  - `kind=misra`와 대상으로 작업을 만들면 MISRA 배지, 작업 메모(조건 시트, 제외 이유), 분류가 다른 행의 메모가 보인다.
   - 알 수 없는 종류, 대상 없음 → `400`
   - 멈춤 경로, 멈춘 작업의 "이어서 처리"
   - 같은 묶음의 `fix` 행 두 개를 함께 골라도 패치가 만들어진다(같은 수정 합치기).
@@ -408,11 +467,12 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
 1. `git pull` 뒤 `uv run llm-fix-server`를 켠다.
 2. 첫 화면에서 MISRA를 고르고 Mandatory만 체크해 작게 분석한다.
 3. 결과를 훑어보고 패치를 받아 적용한 뒤 Polyspace를 다시 돌린다.
-4. 알려줄 것: 수정 / 수정 불필요 / 확인 필요 개수, 함께 보낸 묶음이 있었는지, 패치 적용이 됐는지(안 됐다면 오류 종류), Polyspace 재실행 뒤 "수정" 행의 위반이 없어졌는지와 새 위반 수, 이상했던 판단(코드·이름 없이 말로)
+4. 알려줄 것: 수정 / 수정 불필요 / 확인 필요 개수, 작업 메모에 조건 시트가 읽혔다고 나왔는지와 분류가 다르다는 메모가 붙은 행 수, 함께 보낸 묶음이 있었는지, 패치 적용이 됐는지(안 됐다면 오류 종류), Polyspace 재실행 뒤 "수정" 행의 위반이 없어졌는지와 새 위반 수, 이상했던 판단(코드·이름 없이 말로)
 
 ## 13. 나중에 (이번에 하지 않는 것)
 
 - **CodeMetrics 종류:** 다른 세션이 `kinds/codemetrics.py`로 더한다. 필요한 것은 이 기반에 자리가 있다: 종류별 필수 열, `read_row`, 함수 단위 `group_key`, 함수 전체를 보내는 `region`(너무 길면 오류), 지시문, `facts`(Threshold·Actual Value), 대상 없는 `choices`. `Finding`에 필드를 더할 때는 기본값을 둔다.
-- **조건 시트:** 엑셀에는 종류별 조건 시트가 따로 있고, 다른 세션이 내용을 확인하고 있다. 규칙 적용 여부 같은 정보로 행을 거르려면, 종류에 "엑셀에서 조건 읽기" 함수를 더하고 그 결과를 `read_row`에 넘긴다. 예를 들어 적용하지 않는 규칙은 "적용 안 함 (조건 시트)" 이유로 뺀다. `read_sheet`가 엑셀 전체를 이미 열고 있으므로 같은 자리에서 읽으면 된다.
+- **RTE·CodeMetrics 조건 시트:** 다른 세션이 내용을 확인하고 있다. 반영할 때는 그 종류의 `read_conditions`를 채우고 `read_row`에서 쓴다(MISRA와 같은 방식).
+- **MISRA 조건 시트의 나머지 열:** 검토 범위(Review Scope)와 Comment 열은 뜻을 알게 되면 반영한다. 지금은 쓰지 않는다.
 - 작업 하나에 여러 시트, 규칙별로 골라 돌리기, 엑셀 `status`·`comment`에 결과 다시 쓰기
 - Mandatory인데 `no_fix`인 행을 따로 눈에 띄게 표시하기
