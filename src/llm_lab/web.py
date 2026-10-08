@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import io
+import socket
 import sys
+import threading
+import time
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -17,7 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
-from llm_lab.pages import error_page, index_page, job_page
+from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, SheetError, read_rte
 from llm_lab.sources import DecodeError, Match, SourceFile, decode_source, match_sources
@@ -29,6 +33,8 @@ DB_PATH = Path("private/fixer.db")
 # 행마다 LLM과 오간 대화를 Markdown 파일로 남기는 폴더
 LOG_DIR = Path("private/llm-logs")
 WORKERS = 2
+RECENT_JOBS = 10  # 첫 화면에 보여줄 최근 작업 수
+LISTED_JOBS = 100  # 작업 목록 화면에 보여줄 작업 수
 
 
 def _new_row(finding: Finding, match: Match) -> NewRow:
@@ -64,11 +70,18 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             raise HTTPException(status_code=404, detail="작업이 없습니다")
         return job
 
+    def with_rows(jobs: list[Job]) -> list[tuple[Job, list[Row]]]:
+        return [(job, store.rows(job.id)) for job in jobs]
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return index_page(store.jobs())
+        return index_page(with_rows(store.jobs(limit=RECENT_JOBS)))
 
-    @app.post("/jobs")
+    @app.get("/results", response_class=HTMLResponse)
+    def results() -> str:
+        return results_page(with_rows(store.jobs(limit=LISTED_JOBS)))
+
+    @app.post("/results")
     def create_job(
         excel: Annotated[UploadFile, File()], sources: Annotated[list[UploadFile], File()]
     ) -> Response:
@@ -91,15 +104,15 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         files = [source for source in decoded if source.name in used]
         job_id = store.create_job(excel.filename or "", sheet.sheet, sheet.skipped, files, rows)
         worker.start(job_id)
-        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+        return RedirectResponse(f"/results/{job_id}", status_code=303)
 
-    @app.get("/jobs/{job_id}", response_class=HTMLResponse)
+    @app.get("/results/{job_id}", response_class=HTMLResponse)
     def job_view(job_id: int) -> str:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         return job_page(job, rows, _base(rows))
 
-    @app.post("/jobs/{job_id}/patch")
+    @app.post("/results/{job_id}/fixes.patch")
     def download_patch(job_id: int, row: Annotated[list[int] | None, Form()] = None) -> Response:
         job_or_404(job_id)
         rows = store.rows(job_id)
@@ -130,14 +143,14 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             headers={"Content-Disposition": 'attachment; filename="fixes.patch"'},
         )
 
-    @app.post("/jobs/{job_id}/retry")
+    @app.post("/results/{job_id}/retry")
     def retry(job_id: int) -> Response:
         job_or_404(job_id)
         store.retry(job_id)
         worker.start(job_id)
-        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+        return RedirectResponse(f"/results/{job_id}", status_code=303)
 
-    @app.get("/api/jobs/{job_id}")
+    @app.get("/api/results/{job_id}")
     def job_json(job_id: int) -> dict[str, Any]:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
@@ -146,11 +159,28 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     return app
 
 
+def open_when_ready(url: str, port: int, timeout: float = 15.0) -> None:
+    """서버가 포트를 열면 브라우저로 url을 연다. 시간 안에 안 열리면 조용히 넘어간다."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.2)
+    else:
+        return
+    webbrowser.open(url)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="llm-fix-server", description="Polyspace RTE 수정 제안 서비스"
     )
     parser.add_argument("--port", type=int, default=8000, help="접속 포트 (기본 8000)")
+    parser.add_argument(
+        "--no-browser", action="store_true", help="서버를 켤 때 브라우저를 자동으로 열지 않음"
+    )
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -161,7 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     executor = ThreadPoolExecutor(max_workers=WORKERS)
     worker = Worker(store, get_client(settings), settings.model, executor.submit, log_dir=LOG_DIR)
     worker.resume()
-    print(f"브라우저에서 http://127.0.0.1:{args.port} 을 여세요 (끄려면 Ctrl+C)")
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"\n  접속 주소: {url}   (끄려면 Ctrl+C)\n")
+    if not args.no_browser:
+        threading.Thread(target=open_when_ready, args=(url, args.port), daemon=True).start()
     try:
         uvicorn.run(create_app(store, worker), host="127.0.0.1", port=args.port)
     finally:
