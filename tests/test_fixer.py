@@ -1,18 +1,35 @@
+import json
+from dataclasses import replace
+
 import pytest
 from fake_llm import MODEL, completion, error, make_client, scripted
-from rte_fixtures import CALC_C, REASON, finding, fix_answer
+from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
-from llm_lab import fixer
-from llm_lab.fixer import FatalLLMError, FixError, apply_edits, cache_key, propose_fix
+from llm_lab.fixer import (
+    EditMismatch,
+    FatalLLMError,
+    FixError,
+    FixResult,
+    apply_edits,
+    cache_key,
+    make_request,
+    propose_fixes,
+)
+from llm_lab.kinds import RTE
 from llm_lab.sources import decode_source
 
 SOURCE = decode_source("calc.c", CALC_C)
 
 
+def ask(handler, findings=None, *, source=SOURCE, kind=RTE, transcript=None):
+    request = make_request(kind, findings or [finding()], source)
+    return propose_fixes(make_client(handler), MODEL, request, transcript)
+
+
 def test_fix_returns_edits_diff_and_sends_schema_and_numbered_code():
     handler, sent = scripted(fix_answer())
 
-    result = propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+    (result,) = ask(handler)
 
     assert result.decision == "fix"
     assert result.reason == REASON
@@ -20,11 +37,14 @@ def test_fix_returns_edits_diff_and_sends_schema_and_numbered_code():
     assert "+    return (b != 0) ? a / b : 0;" in result.diff
     request = sent[0]
     assert request["model"] == MODEL
-    assert request["response_format"]["json_schema"]["name"] == "rte_fix"
-    assert request["messages"][0]["role"] == "system"
+    schema = request["response_format"]["json_schema"]
+    assert schema["name"] == "polyspace_fix"
+    assert schema["schema"]["required"] == ["findings", "edits"]
+    assert request["messages"][0] == {"role": "system", "content": RTE.system_prompt}
     prompt = request["messages"][1]["content"]
+    assert prompt.startswith("Polyspace Code Prover result:\n\nFinding 1:\n- TYPE: Orange Check\n")
     assert "- check: Division by zero" in prompt
-    assert "- line: 3" in prompt
+    assert "- File: calc.c\n- line: 3\n\nCode (lines 1-4 of calc.c;" in prompt
     assert "    3|     return a / b;" in prompt
     assert "max_tokens" not in request  # 생각 토큰 때문에 출력 한도를 걸지 않는다
 
@@ -32,16 +52,55 @@ def test_fix_returns_edits_diff_and_sends_schema_and_numbered_code():
 def test_no_fix_ignores_edits():
     handler, _ = scripted(fix_answer("no_fix", edits=[{"original": "x", "replacement": "y"}]))
 
-    result = propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+    (result,) = ask(handler)
 
     assert (result.decision, result.edits, result.diff) == ("no_fix", (), "")
+
+
+def test_group_gets_a_decision_per_finding_and_shares_the_edits():
+    findings = [finding(), finding(row=3, check="Overflow")]
+    handler, sent = scripted(
+        answer(("no_fix", "범위가 보장됨"), ("fix", REASON), edits=[DIVIDE_FIX])
+    )
+
+    first, second = ask(handler, findings)
+
+    assert (first.decision, first.reason, first.edits, first.diff) == (
+        "no_fix",
+        "범위가 보장됨",
+        (),
+        "",
+    )
+    assert (second.decision, second.reason) == ("fix", REASON)
+    assert "(b != 0) ? a / b : 0;" in apply_edits(SOURCE.text, second.edits)
+    prompt = sent[0]["messages"][1]["content"]
+    assert "Finding 1:\n- TYPE: Orange Check\n- check: Division by zero\n" in prompt
+    assert "Finding 2:\n- TYPE: Orange Check\n- check: Overflow\n" in prompt
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("numbers", [[1], [1, 1], [1, 3], [2, 1, 3]])
+def test_findings_must_answer_each_number_once(numbers):
+    body = {
+        "findings": [{"number": n, "decision": "no_fix", "reason": "r"} for n in numbers],
+        "edits": [],
+    }
+    handler, sent = scripted(completion(json.dumps(body)), completion(json.dumps(body)))
+
+    with pytest.raises(FixError) as caught:
+        ask(handler, [finding(), finding(row=3)])
+
+    first, _, more = str(caught.value).split("\n")
+    assert first == "LLM 답에 빠진 행이 있습니다."
+    assert "1부터 2까지 한 번씩" in more
+    assert "findings의 number" in sent[1]["messages"][3]["content"]
 
 
 def test_unusable_answer_is_retried_once_with_the_problem():
     wrong = fix_answer(edits=[{"original": "return a % b;", "replacement": "x"}])
     handler, sent = scripted(wrong, fix_answer())
 
-    result = propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+    (result,) = ask(handler)
 
     assert result.decision == "fix"
     retry = sent[1]["messages"]
@@ -55,7 +114,7 @@ def test_replacement_not_writable_in_source_encoding_is_retried():
     dash = {"original": "    return a / b;", "replacement": "    return b ? a / b : 0; /* b – 0 */"}
     handler, sent = scripted(fix_answer(edits=[dash]), fix_answer())
 
-    result = propose_fix(make_client(handler), MODEL, finding(line=4), source)
+    (result,) = ask(handler, [finding(line=4)], source=source)
 
     assert result.decision == "fix"
     assert "–" not in apply_edits(source.text, result.edits)
@@ -67,7 +126,7 @@ def test_transcript_records_each_request_and_response():
     handler, _ = scripted(wrong, fix_answer())
     transcript: list = []
 
-    propose_fix(make_client(handler), MODEL, finding(), SOURCE, transcript)
+    ask(handler, transcript=transcript)
 
     first, second = transcript
     assert first.messages[0]["role"] == "system"
@@ -84,7 +143,7 @@ def test_transcript_records_api_errors():
     transcript: list = []
 
     with pytest.raises(FatalLLMError):
-        propose_fix(make_client(handler), MODEL, finding(), SOURCE, transcript)
+        ask(handler, transcript=transcript)
 
     assert "[인증]" in transcript[0].error
     assert transcript[0].raw is None
@@ -94,6 +153,8 @@ def test_transcript_records_api_errors():
     ("bad", "summary", "detail"),
     [
         (completion("not json"), "LLM 답을 읽을 수 없었습니다.", "JSON이 아님"),
+        (completion("[]"), "LLM 답을 읽을 수 없었습니다.", "JSON 객체가 아님"),
+        (completion('{"findings": "x"}'), "LLM 답을 읽을 수 없었습니다.", "스키마와 다름"),
         (fix_answer(finish_reason="length"), "LLM 답이 길이 제한에 걸려 잘렸습니다.", "잘림"),
         (fix_answer(edits=[]), "LLM 답을 읽을 수 없었습니다.", "edits가 비었거나"),
         (
@@ -107,7 +168,7 @@ def test_gives_up_after_two_unusable_answers_with_a_plain_message(bad, summary, 
     handler, sent = scripted(bad, bad)
 
     with pytest.raises(FixError) as caught:
-        propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+        ask(handler)
 
     # 화면용: 첫 줄은 무엇이 문제인지, 다음 줄은 할 일, 개발자용 내용은 "자세히:" 뒤에
     first, todo, more = str(caught.value).split("\n")
@@ -123,53 +184,103 @@ def test_repeated_code_is_resolved_with_the_reported_line():
     edit = {"original": "    a = a + 1;", "replacement": "    a = inc(a);"}
     handler, sent = scripted(fix_answer(edits=[edit]))
 
-    result = propose_fix(make_client(handler), MODEL, finding(line=4), source)
+    (result,) = ask(handler, [finding(line=4)], source=source)
 
     assert apply_edits(source.text, result.edits).endswith("    a = a + 1;\n    a = inc(a);\n}\n")
     assert len(sent) == 1
 
 
-def test_prompt_asks_for_small_edits():
-    assert "only the lines you change" in fixer.SYSTEM_PROMPT
+def test_rte_prompt_asks_for_small_edits_and_the_common_answer():
+    assert "only the lines you change" in RTE.system_prompt
+    assert '"findings" has one entry for each numbered finding' in RTE.system_prompt
 
 
 def test_auth_error_is_fatal_and_not_retried():
     handler, sent = scripted(error(401, "invalid key"))
 
     with pytest.raises(FatalLLMError, match="인증"):
-        propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+        ask(handler)
     assert len(sent) == 1
 
 
-def test_other_api_error_fails_only_this_row():
+def test_other_api_error_fails_only_this_group():
     handler, _ = scripted(error(400, "response_format not supported"))
 
     with pytest.raises(FixError) as caught:
-        propose_fix(make_client(handler), MODEL, finding(), SOURCE)
+        ask(handler)
 
     message = str(caught.value)
     assert message.startswith("LLM 서버가 요청을 처리하지 못했습니다.\n할 일: ")
     assert "기능 미지원" in message
 
 
-@pytest.mark.parametrize(("line", "message"), [(None, "정수가 아님"), (9, "9번 줄이 없음")])
-def test_bad_line_fails_without_calling_llm(line, message):
-    handler, sent = scripted()
-
+@pytest.mark.parametrize(
+    ("line", "message"), [(None, "line 칸이 정수가 아님"), (9, "9번 줄이 없음")]
+)
+def test_bad_line_is_found_before_calling_llm(line, message):
     with pytest.raises(FixError) as caught:
-        propose_fix(make_client(handler), MODEL, finding(line=line), SOURCE)
+        make_request(RTE, [finding(), finding(row=4, line=line)], SOURCE)
 
     assert str(caught.value).startswith("엑셀의 줄 번호가 소스와 맞지 않습니다.\n할 일: ")
-    assert message in str(caught.value)
-    assert sent == []
+    assert f"엑셀 4행: {message}" in str(caught.value)
 
 
-def test_cache_key_depends_on_file_content_finding_and_prompt_version(monkeypatch):
-    key = cache_key(MODEL, SOURCE, finding())
+def test_cache_key_depends_on_the_messages_file_and_kind():
+    def key(findings=None, *, source=SOURCE, kind=RTE, model=MODEL):
+        return cache_key(model, make_request(kind, findings or [finding()], source))
 
-    assert key == cache_key(MODEL, SOURCE, finding(row=99))  # 엑셀 행 번호는 상관없다
-    assert key != cache_key(MODEL, decode_source("calc.c", b"int x;\n"), finding())
-    assert key != cache_key(MODEL, SOURCE, finding(line=2))
-    assert key != cache_key("other-model", SOURCE, finding())
-    monkeypatch.setattr(fixer, "PROMPT_VERSION", fixer.PROMPT_VERSION + 1)
-    assert key != cache_key(MODEL, SOURCE, finding())
+    assert key() == key([finding(row=99)])  # 엑셀 행 번호는 상관없다
+    assert key() != key(source=decode_source("calc.c", CALC_C + b"int x;\n"))
+    assert key() != key([finding(line=2)])
+    assert key() != key([finding(), finding(row=3)])
+    assert key() != key(model="other-model")
+    assert key() != key(kind=replace(RTE, prompt_version=RTE.prompt_version + 1))
+    assert key() != key(kind=replace(RTE, system_prompt=RTE.system_prompt + "Be brief.\n"))
+
+
+def test_kind_can_add_a_message_tail_its_own_answer_format_and_timeout():
+    schema = {
+        "type": "object",
+        "properties": {"verdict": {"type": "string"}},
+        "required": ["verdict"],
+        "additionalProperties": False,
+    }
+
+    def tail(context, findings, source):
+        return f"Limit {context['limit']} for {len(findings)} finding(s) in {source.name}."
+
+    def to_results(data, request):
+        assert request.context == {"limit": 10}
+        return [FixResult("no_fix", data["verdict"], (), "")]
+
+    kind = replace(
+        RTE, prompt_tail=tail, answer_schema=schema, to_results=to_results, timeout=300.0
+    )
+    timeouts = []
+
+    def handler(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        return completion('{"verdict": "그대로 둠"}')
+
+    request = make_request(kind, [finding()], SOURCE, {"limit": 10})
+    (result,) = propose_fixes(make_client(handler), MODEL, request)
+
+    assert result.reason == "그대로 둠"
+    prompt = request.messages[1]["content"]
+    assert "- line: 3\n\nLimit 10 for 1 finding(s) in calc.c.\n\nCode (lines" in prompt
+    assert timeouts == [300.0]
+
+
+def test_kind_answer_check_can_name_its_own_problem():
+    def to_results(data, request):
+        raise EditMismatch("함수 시그니처가 바뀜", summary="LLM이 함수 이름이나 인자를 바꿨습니다.")
+
+    handler, sent = scripted(fix_answer(), fix_answer())
+
+    with pytest.raises(FixError) as caught:
+        ask(handler, kind=replace(RTE, to_results=to_results))
+
+    first, _, more = str(caught.value).split("\n")
+    assert first == "LLM이 함수 이름이나 인자를 바꿨습니다."
+    assert more == "자세히: 함수 시그니처가 바뀜 (2번 시도)"
+    assert "함수 시그니처가 바뀜" in sent[1]["messages"][3]["content"]

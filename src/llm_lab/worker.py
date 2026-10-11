@@ -10,7 +10,15 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from llm_lab.fixer import Exchange, FatalLLMError, cache_key, propose_fix, user_error
+from llm_lab.fixer import (
+    Exchange,
+    FatalLLMError,
+    cache_key,
+    make_request,
+    propose_fixes,
+    user_error,
+)
+from llm_lab.kinds import RTE
 from llm_lab.pages import DECISIONS
 from llm_lab.polyspace import Finding
 from llm_lab.store import Store
@@ -88,15 +96,18 @@ class Worker:
         row = self.store.row(row_id)
         assert row.file_name is not None
         source = self.store.source(job_id, row.file_name)
-        key = cache_key(self.model, source, row.finding)
         exchanges: list[Exchange] = []
         reused = False
         try:
-            result = self.store.cache_get(key)
-            reused = result is not None
-            if result is None:
-                result = propose_fix(self.client, self.model, row.finding, source, exchanges)
-                self.store.cache_put(key, result)
+            # 작업에 종류를 저장하기 전이라 모든 작업을 RTE로 처리한다
+            request = make_request(RTE, [row.finding], source)
+            key = cache_key(self.model, request)
+            results = self.store.cache_get(key)
+            reused = results is not None
+            if results is None:
+                results = propose_fixes(self.client, self.model, request, exchanges)
+                self.store.cache_put(key, results)
+            (result,) = results
         except FatalLLMError as exc:
             # 나머지 행도 같은 이유로 실패하므로 작업을 멈춘다. 이 행은 다시 시도 때 처리한다.
             self._save_log(job_id, row.finding, source.name, exchanges, f"작업 중단: {exc}")

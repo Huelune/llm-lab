@@ -78,11 +78,24 @@ def finding(**overrides: object) -> Finding:
     return Finding(**{**values, **overrides})
 
 
+def answer(
+    *findings: tuple[str, str], edits: list[dict] | None = None, finish_reason: str = "stop"
+) -> httpx2.Response:
+    """LLM의 공통 답. findings는 1번부터 차례로 (판단, 이유)."""
+    body = {
+        "findings": [
+            {"number": number, "decision": decision, "reason": reason}
+            for number, (decision, reason) in enumerate(findings, start=1)
+        ],
+        "edits": edits if edits is not None else [],
+    }
+    return completion(json.dumps(body, ensure_ascii=False), finish_reason=finish_reason)
+
+
 def fix_answer(
     decision: str = "fix", edits: list[dict] | None = None, *, finish_reason: str = "stop"
 ) -> httpx2.Response:
-    """LLM의 json_schema 답변. edits를 안 주면 calc.c의 0 나누기 수정."""
+    """행 하나짜리 답. edits를 안 주면 calc.c의 0 나누기 수정."""
     if edits is None:
         edits = [DIVIDE_FIX] if decision == "fix" else []
-    body = {"decision": decision, "reason": REASON, "edits": edits}
-    return completion(json.dumps(body, ensure_ascii=False), finish_reason=finish_reason)
+    return answer((decision, REASON), edits=edits, finish_reason=finish_reason)

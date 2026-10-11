@@ -1,4 +1,5 @@
-"""엔진: RTE 행 하나를 LLM에 보내 수정 / 수정 불필요 판단과 수정안을 받는다."""
+"""엔진: 묶음 하나(함께 보낼 행들)를 LLM에 보내 행마다 수정 / 수정 불필요 판단과
+그 묶음이 함께 쓸 수정안을 받는다."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import json
 import re
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import openai
 from openai import OpenAI
@@ -17,6 +18,9 @@ from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
 
+if TYPE_CHECKING:
+    from llm_lab.kinds import Kind
+
 # 이 줄 수 이하면 파일 전체를 보낸다. 2,000줄은 대략 2만~3만 토큰으로, `llm-probe --context`로
 # 잰 컨텍스트 길이에 넉넉히 들어간다. 더 긴 파일은 지적된 줄이 든 함수만 보낸다.
 WHOLE_FILE_MAX_LINES = 2000
@@ -24,10 +28,8 @@ WHOLE_FILE_MAX_LINES = 2000
 WINDOW_LINES = 60
 # 함수 시그니처를 넣으려고 '{' 위로 거슬러 올라가는 최대 줄 수
 SIGNATURE_LINES = 10
+# 종류가 따로 정하지 않으면 쓰는 LLM 대기 시간(초)
 FIX_TIMEOUT = 120.0
-# 프롬프트나 응답 처리 방식을 바꾸면 올린다 (캐시 키에 들어간다)
-# 2: 파일 전체를 보내는 기준 400 → 2,000줄, 3: 바꾸는 줄만 짧게 보내라는 지시
-PROMPT_VERSION = 3
 
 
 class FixError(Exception):
@@ -39,14 +41,16 @@ class FatalLLMError(Exception):
 
 
 class EditMismatch(Exception):
-    """LLM이 준 수정을 원본에 적용할 수 없음 (LLM에 다시 요청할 사유).
+    """LLM 답을 쓸 수 없음 (LLM에 다시 요청할 사유).
 
-    kind는 화면에 보일 설명을 고르는 데 쓴다: locate / format / truncated / encoding
+    kind는 화면에 보일 설명을 고르는 데 쓴다: locate / format / truncated / encoding / missing.
+    summary를 주면 그 글을 설명으로 쓴다 (종류가 자기 검사에 맞는 설명을 붙일 때).
     """
 
-    def __init__(self, detail: str, kind: str = "locate") -> None:
+    def __init__(self, detail: str, kind: str = "locate", summary: str = "") -> None:
         super().__init__(detail)
         self.kind = kind
+        self.summary = summary or MISMATCH_SUMMARIES[kind]
 
 
 # 두 번 물어도 쓸 수 없는 답이었을 때 화면에 보일 설명 (kind별)
@@ -55,6 +59,7 @@ MISMATCH_SUMMARIES = {
     "format": "LLM 답을 읽을 수 없었습니다.",
     "truncated": "LLM 답이 길이 제한에 걸려 잘렸습니다.",
     "encoding": "LLM이 이 파일의 인코딩으로 쓸 수 없는 문자를 썼습니다.",
+    "missing": "LLM 답에 빠진 행이 있습니다.",
 }
 RETRY_ACTION = "'오류 행 다시 시도'를 누르세요. 그래도 같으면 대화 기록을 보고 직접 고치세요."
 
@@ -86,7 +91,10 @@ class FixResult:
 
     @classmethod
     def from_json(cls, text: str) -> FixResult:
-        data = json.loads(text)
+        return cls.from_dict(json.loads(text))
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FixResult:
         edits = tuple(Edit(**edit) for edit in data["edits"])
         return cls(data["decision"], data["reason"], edits, data["diff"])
 
@@ -344,34 +352,23 @@ def display_diff(name: str, old: str, new: str) -> str:
     return "\n".join(lines)
 
 
-SYSTEM_PROMPT = """\
-You review one Polyspace Code Prover run-time check in C code \
-and decide whether the code must change.
-- Red Check: Polyspace proved that the operation fails whenever it runs. Fix it.
-- Orange Check: Polyspace could not prove the operation safe. \
-Fix it if some execution can really fail. \
-If the code shown guarantees safety, answer no_fix and name the lines that guarantee it.
-When you fix:
-- Make the safety provable by static analysis: explicit range checks, \
-division-by-zero checks, initialization and similar.
-- Change as little as possible. Do not touch lines unrelated to the check. \
-Keep the behavior for valid inputs.
-- Copy each edit's "original" exactly from the code shown, as whole consecutive lines, \
-without the line-number prefix. "replacement" is the new text for those lines.
-- Keep each edit small: "original" holds only the lines you change, not the whole function. \
-Add one unchanged neighbouring line only when the changed line appears more than once.
-Do not guess definitions (macros, types, other functions) that are not shown. \
-If they matter, say so in reason.
-Write "reason" in Korean, one to three sentences that a reviewer can paste \
-into a Polyspace comment.
-Answer with JSON only. For no_fix, "edits" is [].
-"""
-
+# 공통 답 형식: 판단과 이유는 행마다, 수정(edits)은 묶음이 함께 쓴다
 FIX_SCHEMA = {
     "type": "object",
     "properties": {
-        "decision": {"type": "string", "enum": ["fix", "no_fix"]},
-        "reason": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "number": {"type": "integer"},
+                    "decision": {"type": "string", "enum": ["fix", "no_fix"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["number", "decision", "reason"],
+                "additionalProperties": False,
+            },
+        },
         "edits": {
             "type": "array",
             "items": {
@@ -385,43 +382,83 @@ FIX_SCHEMA = {
             },
         },
     },
-    "required": ["decision", "reason", "edits"],
+    "required": ["findings", "edits"],
     "additionalProperties": False,
 }
 
 
-def build_prompt(finding: Finding, source: SourceFile, first: int, last: int) -> str:
-    facts = [
-        ("TYPE", finding.type),
-        ("check", finding.check),
-        ("detail", finding.detail),
-        ("Group", finding.group),
-        ("information", finding.information),
-        ("Function", finding.function),
-        ("File", source.name),
-        ("line", str(finding.line)),
-    ]
-    listed = "\n".join(f"- {name}: {value}" for name, value in facts if value)
+@dataclass(frozen=True)
+class Request:
+    """LLM에 보낼 요청 하나 (묶음 하나)."""
+
+    kind: Kind
+    findings: list[Finding]  # 메시지의 Finding 1, 2 … 순서
+    source: SourceFile
+    first: int  # 보낸 코드 범위 (1부터, 양 끝 포함)
+    last: int
+    context: Any  # 작업 정보 (polyspace.Prepared.data)
+    messages: list[dict[str, str]]
+
+
+def build_prompt(
+    kind: Kind, findings: list[Finding], source: SourceFile, first: int, last: int, context: Any
+) -> str:
+    blocks = []
+    for number, finding in enumerate(findings, start=1):
+        facts = [*kind.facts(finding), ("File", source.name), ("line", str(finding.line))]
+        listed = "\n".join(f"- {name}: {value}" for name, value in facts if value)
+        blocks.append(f"Finding {number}:\n{listed}")
+    tail = kind.prompt_tail(context, findings, source)
     return (
-        f"Polyspace Code Prover result:\n{listed}\n\n"
-        f"Code (lines {first}-{last} of {source.name}; "
+        f"{kind.heading}:\n\n"
+        + "\n\n".join(blocks)
+        + (f"\n\n{tail}" if tail else "")
+        + f"\n\nCode (lines {first}-{last} of {source.name}; "
         "each line starts with its number and '| '):\n"
         f"```c\n{numbered(source.text, first, last)}\n```"
     )
 
 
-def cache_key(model: str, source: SourceFile, finding: Finding) -> str:
+def make_request(
+    kind: Kind, findings: list[Finding], source: SourceFile, context: Any = None
+) -> Request:
+    """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError."""
+    line_count = len(split_lines(source.text))
+    for finding in findings:
+        line = finding.line
+        if line is None or not 1 <= line <= line_count:
+            problem = (
+                "line 칸이 정수가 아님"
+                if line is None
+                else f"{line}번 줄이 없음 (파일은 {line_count}줄)"
+            )
+            raise FixError(
+                user_error(
+                    "엑셀의 줄 번호가 소스와 맞지 않습니다.",
+                    "엑셀을 만든 것과 같은 버전의 소스 폴더를 골라 다시 분석하세요.",
+                    f"엑셀 {finding.row}행: {problem}",
+                )
+            )
+    first, last = kind.region(source.text, findings)
+    messages = [
+        {"role": "system", "content": kind.system_prompt},
+        {"role": "user", "content": build_prompt(kind, findings, source, first, last, context)},
+    ]
+    return Request(kind, list(findings), source, first, last, context, messages)
+
+
+def cache_key(model: str, request: Request) -> str:
+    """보내는 메시지와 원본 파일이 같으면 같은 키. 엑셀 행 번호는 들어가지 않는다.
+
+    결과의 수정 위치가 파일 전체 기준이라 원본 sha256도 넣는다. 지시문 글은 메시지에 있으므로,
+    prompt_version은 답 처리 방식을 바꿀 때 올린다.
+    """
     parts = [
-        str(PROMPT_VERSION),
+        request.kind.name,
+        str(request.kind.prompt_version),
         model,
-        source.sha256,
-        finding.type,
-        finding.check,
-        finding.detail,
-        finding.group,
-        finding.information,
-        finding.function,
-        str(finding.line),
+        request.source.sha256,
+        *(message["content"] for message in request.messages),
     ]
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
@@ -444,6 +481,7 @@ def _ask(
     client: OpenAI,
     model: str,
     messages: list[dict[str, str]],
+    schema: Any,
     transcript: list[Exchange] | None,
 ) -> tuple[str, str | None]:
     """(응답 내용, finish_reason). 네트워크·SSL·인증 오류면 FatalLLMError."""
@@ -454,7 +492,7 @@ def _ask(
             messages=messages,  # type: ignore[arg-type]
             response_format={
                 "type": "json_schema",
-                "json_schema": {"name": "rte_fix", "schema": FIX_SCHEMA, "strict": True},
+                "json_schema": {"name": "polyspace_fix", "schema": schema, "strict": True},
             },
         )
     except openai.APIError as exc:
@@ -492,29 +530,54 @@ def _ask(
     return content, finish_reason
 
 
-def _to_result(
-    content: str,
-    finish_reason: str | None,
-    source: SourceFile,
-    first: int,
-    last: int,
-    line: int,
-) -> FixResult:
-    if finish_reason == "length":
-        raise EditMismatch("응답이 출력 길이 제한으로 잘림", "truncated")
-    try:
-        data: Any = json.loads(content)
-    except json.JSONDecodeError:
-        raise EditMismatch("응답이 JSON이 아님", "format") from None
-    if (
-        not isinstance(data, dict)
-        or data.get("decision") not in ("fix", "no_fix")
-        or not isinstance(data.get("reason"), str)
+def read_decisions(data: dict[str, Any], count: int) -> list[tuple[str, str]]:
+    """findings에서 번호 순서대로 (판단, 이유)를 꺼낸다. 종류별 답 처리도 이 함수를 쓴다.
+
+    번호가 1부터 count까지 한 번씩이 아니면 EditMismatch다.
+    """
+    answers = data.get("findings")
+    if not isinstance(answers, list) or not all(
+        isinstance(item, dict)
+        and type(item.get("number")) is int
+        and item.get("decision") in ("fix", "no_fix")
+        and isinstance(item.get("reason"), str)
+        for item in answers
     ):
-        raise EditMismatch("decision·reason이 스키마와 다름", "format")
-    if data["decision"] == "no_fix":
-        return FixResult("no_fix", data["reason"], (), "")
-    raw_edits = data.get("edits")
+        raise EditMismatch("findings가 스키마와 다름", "format")
+    numbers = sorted(item["number"] for item in answers)
+    if numbers != list(range(1, count + 1)):
+        raise EditMismatch(
+            f"findings의 number는 1부터 {count}까지 한 번씩이어야 함 (받은 번호: {numbers})",
+            "missing",
+        )
+    by_number = {item["number"]: item for item in answers}
+    return [(by_number[n]["decision"], by_number[n]["reason"]) for n in range(1, count + 1)]
+
+
+def share(decisions: list[tuple[str, str]], edits: tuple[Edit, ...], diff: str) -> list[FixResult]:
+    """판단마다 결과 하나. fix 행은 묶음이 함께 쓰는 수정과 diff를 갖는다."""
+    return [
+        FixResult("fix", reason, edits, diff)
+        if decision == "fix"
+        else FixResult("no_fix", reason, (), "")
+        for decision, reason in decisions
+    ]
+
+
+def edits_results(data: dict[str, Any], request: Request) -> list[FixResult]:
+    """공통 답 처리: 행별 판단과, fix가 하나라도 있으면 edits로 만든 묶음 공통 수정.
+
+    모두 no_fix면 edits는 버린다.
+    """
+    decisions = read_decisions(data, len(request.findings))
+    if all(decision == "no_fix" for decision, _ in decisions):
+        return share(decisions, (), "")
+    edits, diff = _located_edits(data.get("edits"), request)
+    return share(decisions, edits, diff)
+
+
+def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
+    source = request.source
     if (
         not isinstance(raw_edits, list)
         or not raw_edits
@@ -537,53 +600,44 @@ def _to_result(
                 f"U+{char:04X}가 있음 - ASCII나 한글만 쓰세요",
                 "encoding",
             ) from None
-    edits = locate_edits(source.text, first, last, raw_edits, line)
+    line = request.findings[0].line
+    edits = locate_edits(source.text, request.first, request.last, raw_edits, line)
     fixed = apply_edits(source.text, edits)
     if fixed == source.text:
         raise EditMismatch("수정해도 원본과 같음")
-    return FixResult("fix", data["reason"], edits, display_diff(source.name, source.text, fixed))
+    return edits, display_diff(source.name, source.text, fixed)
 
 
-def propose_fix(
-    client: OpenAI,
-    model: str,
-    finding: Finding,
-    source: SourceFile,
-    transcript: list[Exchange] | None = None,
-) -> FixResult:
-    """RTE 행 하나에 대한 판단과 수정. 쓸 수 없는 응답이면 한 번만 다시 요청한다.
+def _to_results(content: str, finish_reason: str | None, request: Request) -> list[FixResult]:
+    if finish_reason == "length":
+        raise EditMismatch("응답이 출력 길이 제한으로 잘림", "truncated")
+    try:
+        data: Any = json.loads(content)
+    except json.JSONDecodeError:
+        raise EditMismatch("응답이 JSON이 아님", "format") from None
+    if not isinstance(data, dict):
+        raise EditMismatch("응답이 JSON 객체가 아님", "format")
+    return request.kind.to_results(data, request)
 
+
+def propose_fixes(
+    client: OpenAI, model: str, request: Request, transcript: list[Exchange] | None = None
+) -> list[FixResult]:
+    """묶음 하나에 대한 행별 판단과 함께 쓰는 수정. 쓸 수 없는 답이면 한 번만 다시 요청한다.
+
+    돌려주는 목록은 request.findings와 같은 순서다.
     transcript를 주면 LLM과 주고받은 요청·응답을 순서대로 담는다.
     """
-    line_count = len(split_lines(source.text))
-    line = finding.line
-    if line is None or not 1 <= line <= line_count:
-        detail = (
-            "line 칸이 정수가 아님"
-            if line is None
-            else f"{line}번 줄이 없음 (파일은 {line_count}줄)"
-        )
-        raise FixError(
-            user_error(
-                "엑셀의 줄 번호가 소스와 맞지 않습니다.",
-                "엑셀을 만든 것과 같은 버전의 소스 폴더를 골라 다시 분석하세요.",
-                detail,
-            )
-        )
-    first, last = select_region(source.text, line)
-    client = client.with_options(timeout=FIX_TIMEOUT, max_retries=1)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_prompt(finding, source, first, last)},
-    ]
-    problem = ""
-    kind = "locate"
+    kind = request.kind
+    client = client.with_options(timeout=kind.timeout, max_retries=1)
+    messages = list(request.messages)
+    problem, summary = "", MISMATCH_SUMMARIES["locate"]
     for _ in range(2):
-        content, finish_reason = _ask(client, model, messages, transcript)
+        content, finish_reason = _ask(client, model, messages, kind.answer_schema, transcript)
         try:
-            return _to_result(content, finish_reason, source, first, last, line)
+            return _to_results(content, finish_reason, request)
         except EditMismatch as exc:
-            problem, kind = str(exc), exc.kind
+            problem, summary = str(exc), exc.summary
             messages = [
                 *messages,
                 {"role": "assistant", "content": content},
@@ -593,4 +647,4 @@ def propose_fix(
                     "Answer again with the same JSON format.",
                 },
             ]
-    raise FixError(user_error(MISMATCH_SUMMARIES[kind], RETRY_ACTION, f"{problem} (2번 시도)"))
+    raise FixError(user_error(summary, RETRY_ACTION, f"{problem} (2번 시도)"))

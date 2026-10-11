@@ -277,13 +277,16 @@ class Store:
             found = db.execute("SELECT id FROM jobs WHERE state = 'running' ORDER BY id")
             return [row["id"] for row in found.fetchall()]
 
-    def cache_get(self, key: str) -> FixResult | None:
+    def cache_get(self, key: str) -> list[FixResult] | None:
+        """묶음의 행별 결과 (행 순서대로). 묶음 처리 전의 예전 값(결과 하나)은 없는 것으로 본다."""
         with self._db() as db:
             found = db.execute("SELECT result FROM cache WHERE key = ?", (key,)).fetchone()
-        return FixResult.from_json(found["result"]) if found else None
+        data = json.loads(found["result"]) if found else None
+        if not isinstance(data, list):
+            return None
+        return [FixResult.from_dict(item) for item in data]
 
-    def cache_put(self, key: str, result: FixResult) -> None:
+    def cache_put(self, key: str, results: list[FixResult]) -> None:
+        text = json.dumps([asdict(result) for result in results], ensure_ascii=False)
         with self._write() as db:
-            db.execute(
-                "INSERT OR REPLACE INTO cache VALUES (?, ?, ?)", (key, result.to_json(), _now())
-            )
+            db.execute("INSERT OR REPLACE INTO cache VALUES (?, ?, ?)", (key, text, _now()))

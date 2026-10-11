@@ -94,12 +94,22 @@ def test_recover_returns_running_jobs_and_requeues_running_rows(tmp_path):
     assert done not in store.recover()
 
 
-def test_cache_round_trip(tmp_path):
+def test_cache_keeps_the_results_of_a_group_in_order(tmp_path):
     store = Store(tmp_path / "fixer.db")
+    results = [RESULT, FixResult("no_fix", "범위가 보장됨", (), "")]
 
     assert store.cache_get("k") is None
-    store.cache_put("k", RESULT)
-    assert store.cache_get("k") == RESULT
+    store.cache_put("k", results)
+    assert store.cache_get("k") == results
+
+
+def test_cache_entry_from_before_groups_is_ignored(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    with closing(sqlite3.connect(tmp_path / "fixer.db")) as db:  # 결과 하나를 그대로 저장하던 때
+        db.execute("INSERT INTO cache VALUES ('k', ?, '2026-10-07T00:00:00')", (RESULT.to_json(),))
+        db.commit()
+
+    assert store.cache_get("k") is None
 
 
 def test_jobs_lists_newest_first(tmp_path):
