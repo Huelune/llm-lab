@@ -21,9 +21,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
 from llm_lab.folder_picker import PickerError, pick_folder
+from llm_lab.kinds import RTE
 from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
-from llm_lab.polyspace import Finding, SheetError, read_rte
+from llm_lab.polyspace import Finding, SheetError, read_sheet
 from llm_lab.sources import Match, load_from_folder
 from llm_lab.store import Job, NewRow, Row, Store, StoreError
 from llm_lab.worker import Worker, daemon_pool
@@ -120,7 +121,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             ) + " 탐색기 주소창의 경로를 그대로 붙여넣으면 됩니다."
             return HTMLResponse(error_page("소스 폴더를 찾을 수 없음", message), status_code=400)
         try:
-            sheet = read_rte(io.BytesIO(excel.file.read()))
+            sheet = read_sheet(io.BytesIO(excel.file.read()), RTE, RTE.defaults)
         except SheetError as exc:
             return HTMLResponse(error_page("엑셀을 읽을 수 없음", str(exc)), status_code=400)
         # 엑셀에 나온 파일만 폴더에서 찾아 읽는다. 읽은 내용은 작업에 함께 저장해
@@ -129,8 +130,9 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         rows = [_new_row(finding, matches[finding.file]) for finding in sheet.findings]
         used = {row.file_name for row in rows if row.file_name}
         files = [source for source in files if source.name in used]
+        skipped = sum(sheet.skipped.values())
         job_id = store.create_job(
-            excel.filename or "", sheet.sheet, sheet.skipped, files, rows, source_root=str(root)
+            excel.filename or "", sheet.sheet, skipped, files, rows, source_root=str(root)
         )
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
