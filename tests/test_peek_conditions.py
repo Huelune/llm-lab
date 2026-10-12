@@ -31,9 +31,9 @@ def _workbook(path: Path, misra_rules: int = 5) -> Path:
     book = Workbook()
     book.active.title = "Cover"
     book.active.append(["Polyspace 보고서"])
-    for title in ("MISRA_Rule_Result", "CodeMetrics_Result", "RTE_Result"):
+    for title in ("Rules_Result", "Metrics_Result", "Checks_Result"):
         book.create_sheet(title).append(["File", "Function", "line", "Check"])
-    misra = book.create_sheet("MISRA_C_2012_Rule")
+    misra = book.create_sheet("MISRA Rule List")
     misra.append(["MISRA C:2012 Rules"])  # 제목 행
     misra.append([])
     misra.append(["Rule", "Category", "Applied", "Description"])
@@ -41,12 +41,12 @@ def _workbook(path: Path, misra_rules: int = 5) -> Path:
         misra.append(
             [f"{i}.1", CATEGORIES[i % 3], "Yes" if i % 4 else "No", f"규칙 본문 {i} " * 20]
         )
-    metrics = book.create_sheet("Code Metrics")
+    metrics = book.create_sheet("Metric Limits")
     metrics.append(["Metric", "Threshold", "Direction"])
     metrics.append(["Cyclomatic Complexity", 10, "max"])
     metrics.append(["Comment Density", "<= 20", "min"])
-    book.create_sheet("RTE").append(["Check", "Target"])
-    book["RTE"].append(["Overflow", "Red, Orange"])
+    book.create_sheet("RTE Check List").append(["Check", "Target"])
+    book["RTE Check List"].append(["Overflow", "Red, Orange"])
     book.save(path)
     return path
 
@@ -63,15 +63,15 @@ def test_finds_condition_sheets_only(tmp_path: Path) -> None:
     text = "\n".join(screen)
 
     assert screen[0] == "조건 시트 3개 / 그 밖의 시트 4개 (이름은 찍지 않음)"
-    # 이 Code Metrics 시트에는 판정 열이 없어 조건으로 읽지 않는다
+    # 이 지표 조건 시트에는 판정 열이 없어 조건으로 읽지 않는다
     assert screen[1] == "Code Metrics 조건 읽기: 조건 시트 없음: 결과 시트 Threshold만 씀"
-    assert all(f"[{t}]" in text for t in ("MISRA_C_2012_Rule", "Code Metrics", "RTE"))
+    assert all(f"[{t}]" in text for t in ("MISRA Rule List", "Metric Limits", "RTE Check List"))
     assert "Cover" not in text and "_Result" not in text and "p.xlsx" not in text
 
 
 def test_small_sheet_shows_every_row_with_row_numbers(tmp_path: Path) -> None:
     screen = peek.summarize(_workbook(tmp_path / "p.xlsx"))
-    block = _block(screen, "Code Metrics")
+    block = _block(screen, "Metric Limits")
 
     assert "3행 중 앞 3행" in block[0] and "헤더 추정 1행 / 열 3개" in block[0]
     # 표준 용어가 아닌 머리(Direction)는 길이만
@@ -82,7 +82,7 @@ def test_small_sheet_shows_every_row_with_row_numbers(tmp_path: Path) -> None:
 
 def test_kinds_come_from_rows_under_the_guessed_header(tmp_path: Path) -> None:
     screen = peek.summarize(_workbook(tmp_path / "p.xlsx", misra_rules=60))
-    block = _block(screen, "MISRA_C_2012_Rule")
+    block = _block(screen, "MISRA Rule List")
 
     # 제목 1 + 헤더 1 + 규칙 60. 빈 행은 세지 않는다. 다 안 들어가니 값 종류 줄이 붙는다
     assert "62행 중" in block[0] and "헤더 추정 3행 / 열 4개" in block[0]
@@ -99,8 +99,8 @@ def test_big_sheet_fits_one_screen(tmp_path: Path) -> None:
     assert len(screen) <= peek.SCREEN_LINES - 1  # 마지막 한 줄은 프롬프트 몫
     assert all(peek.width(line) <= peek.WIDTH for line in screen)
     # 작은 시트는 다 나오고 남은 줄은 큰 시트가 쓴다
-    assert len(_block(screen, "Code Metrics")) == 1 + 3
-    assert "302행 중 앞" in _block(screen, "MISRA_C_2012_Rule")[0]
+    assert len(_block(screen, "Metric Limits")) == 1 + 3
+    assert "302행 중 앞" in _block(screen, "MISRA Rule List")[0]
 
 
 def test_many_condition_sheets_still_fit(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_missing_sheets_lists_only_safe_titles(tmp_path: Path) -> None:
     book = Workbook()
     book.active.title = "Cover"
     book.active.append(["Polyspace", "보고서", "표지"])
-    book.create_sheet("RTE_Result").append(["ID", "TYPE", "File"])
+    book.create_sheet("Checks_Result").append(["ID", "TYPE", "File"])
     book.create_sheet("secret_plan")
     path = tmp_path / "none.xlsx"
     book.save(path)
@@ -132,7 +132,7 @@ def test_missing_sheets_lists_only_safe_titles(tmp_path: Path) -> None:
     text = "\n".join(peek.summarize(path))
 
     assert "조건 시트를 찾지 못했습니다" in text
-    assert "[Cover] 1행" in text and "[RTE_Result] 1행" in text and "[<글 11자>] 0행" in text
+    assert "[Cover] 1행" in text and "[Checks_Result] 1행" in text and "[<글 11자>] 0행" in text
     assert "secret" not in text and "보고서" not in text
 
 
@@ -142,7 +142,7 @@ def _secret_workbook(tmp_path: Path) -> Path:
     book = Workbook()
     book.active.title = "secret_Cover"
     book.active.append(["secret 표지"])
-    book.create_sheet("MISRA_Rule_Result").append(["secret_func", r"C:\Users\secret\a.c"])
+    book.create_sheet("Rules_Result").append(["secret_func", r"C:\Users\secret\a.c"])
     sheet = book.create_sheet("MISRA_secret_Rule")
     sheet.append(["Rule", "Category", "secret 열", "Owner", "Description"])
     for i in range(50):
@@ -211,17 +211,17 @@ def _merged_workbook(path: Path) -> Path:
     """병합 셀처럼 빈 열이 끼고, 지표 하나가 여러 행(단계)을 차지하는 조건 시트."""
     book = Workbook()
     book.active.title = "Cover"
-    metrics = book.create_sheet("Code Metrics")
+    metrics = book.create_sheet("Metric Limits")
     metrics.append([])
     metrics.append([None, "No", "Metric", None, "설명", None, "기준", None, "Pass / Fail"])
     metrics.append(
-        [None, 1, "Cyclomatic Complexity", None, "secret 설명", None, "1 ~ 15", None, "Pass"]
+        [None, 1, "Cyclomatic Complexity", None, "secret 설명", None, "1 ~ 12", None, "Pass"]
     )
-    metrics.append([None, None, None, None, None, None, ">= 16", None, "Fail (수정 필요)"])
-    rte = book.create_sheet("RTE")
+    metrics.append([None, None, None, None, None, None, ">= 13", None, "Fail"])
+    rte = book.create_sheet("RTE Check List")
     rte.append(["No", "종류", None, "약어"])
     rte.append([1, "Overflow", None, "OVFL"])
-    misra = book.create_sheet("MISRA_C_2012_Rule")
+    misra = book.create_sheet("MISRA Rule List")
     misra.append(["Guideline", "Mode"])
     for i in range(80):
         misra.append([f"{i}.1", CATEGORIES[i % 3]])
@@ -231,12 +231,12 @@ def _merged_workbook(path: Path) -> Path:
 
 def test_empty_columns_are_dropped_and_blanks_shown_as_dash(tmp_path: Path) -> None:
     screen = peek.summarize(_merged_workbook(tmp_path / "m.xlsx"))
-    block = _block(screen, "Code Metrics")
+    block = _block(screen, "Metric Limits")
 
     assert "3행 중 앞 3행 / 헤더 추정 2행 / 열 5개 (빈 열 4개 뺌)" in block[0]
     assert block[1].strip() == "2: No | Metric | 설명 | 기준 | Pass / Fail"
-    assert block[2].strip() == "3: 1 | Cyclomatic Complexity | <글 9자> | 1 ~ 15 | Pass"
-    assert block[3].strip() == "4: - | - | - | >= 16 | Fail (수정 필요)"
+    assert block[2].strip() == "3: 1 | Cyclomatic Complexity | <글 9자> | 1 ~ 12 | Pass"
+    assert block[3].strip() == "4: - | - | - | >= 13 | Fail"
     # llm-fix-server의 조건 읽기 결과는 개수로만
     assert screen[1] == (
         "Code Metrics 조건 읽기: 지표 1개, 단계 2개 (pass 1 / middle 0 / fail 1), 범위 글 못 읽음 0"
@@ -251,7 +251,7 @@ def test_words_after_the_path_pick_sheets(tmp_path: Path) -> None:
     text = "\n".join(screen)
 
     assert screen[0].startswith("조건 시트 3개 중 2개 (metric, rte)")
-    assert "[Code Metrics]" in text and "[RTE]" in text and "MISRA" not in text
+    assert "[Metric Limits]" in text and "[RTE Check List]" in text and "MISRA" not in text
     # 둘 다 화면에 다 들어가므로 값 종류 줄이 없다
     assert not any(line.startswith("  종류 ") for line in screen)
 
