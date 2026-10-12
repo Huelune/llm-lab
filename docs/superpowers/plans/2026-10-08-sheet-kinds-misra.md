@@ -16,6 +16,7 @@
 **실행 중 바뀐 것 (2026-10-12):** 이 계획을 실행하며 검토에서 나온 두 가지를 고쳤다. 아래 Task 4·5의 diff는 고치기 전 코드이므로 그대로 다시 적용하지 않는다.
 - Task 4: 결과 행의 Group에서 디렉티브를 가릴 때 낱말 `directive`(단수, 대소문자 무시)만 본다(`kinds/misra.py`의 `DIRECTIVE`, 커밋 "fix: treat only the word directive in Group as a directive"). 규칙 묶음 20 "Preprocessing directives"가 디렉티브로 잘못 잡히던 것을 고쳤다.
 - Task 5: 같은 묶음의 공유 수정 안내("같은 묶음의 수정입니다")는 `fix` 행에만 보인다(`pages._detail_card`, 커밋 "fix: show the shared-fix note only on fix rows of a group").
+- 최종 검토 뒤: 조건 시트를 읽었는데 맞지 않은 MISRA 행에 메모를 남기고, 쓸 규칙이 없는 조건 시트를 따로 알리고, Mode는 세 분류 이름과 정확히 맞추고, 종류의 to_results가 돌려준 결과 수를 확인하고, 사용자가 멈춘 작업은 남은 행이 없으면 done으로 닫는다. 아래 diff에는 이것이 없다.
 
 ## Global Constraints
 
