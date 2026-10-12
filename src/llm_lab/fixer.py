@@ -429,17 +429,21 @@ def make_request(
     line_count = len(split_lines(source.text))
     for finding in findings:
         line = finding.line
-        if line is None or not 1 <= line <= line_count:
-            problem = (
-                "line 칸이 정수가 아님"
-                if line is None
-                else f"{line}번 줄이 없음 (파일은 {line_count}줄)"
+        if line is None:
+            raise FixError(
+                user_error(
+                    "엑셀 line 칸에서 줄 번호를 읽지 못했습니다.",
+                    "엑셀에서 이 행의 line 칸을 확인하세요. "
+                    "줄 번호가 없는 지적은 직접 확인해야 합니다.",
+                    f"엑셀 {finding.row}행: line 칸이 비었거나 숫자가 아님",
+                )
             )
+        if not 1 <= line <= line_count:
             raise FixError(
                 user_error(
                     "엑셀의 줄 번호가 소스와 맞지 않습니다.",
                     "엑셀을 만든 것과 같은 버전의 소스 폴더를 골라 다시 분석하세요.",
-                    f"엑셀 {finding.row}행: {problem}",
+                    f"엑셀 {finding.row}행: {line}번 줄이 없음 (파일은 {line_count}줄)",
                 )
             )
     first, last = kind.region(source.text, findings)

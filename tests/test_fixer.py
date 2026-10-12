@@ -234,15 +234,22 @@ def test_other_api_error_fails_only_this_group():
     assert "기능 미지원" in message
 
 
-@pytest.mark.parametrize(
-    ("line", "message"), [(None, "line 칸이 정수가 아님"), (9, "9번 줄이 없음")]
-)
-def test_bad_line_is_found_before_calling_llm(line, message):
+def test_line_past_the_file_end_points_at_the_source_version():
     with pytest.raises(FixError) as caught:
-        make_request(RTE, [finding(), finding(row=4, line=line)], SOURCE)
+        make_request(RTE, [finding(), finding(row=4, line=9)], SOURCE)
 
     assert str(caught.value).startswith("엑셀의 줄 번호가 소스와 맞지 않습니다.\n할 일: ")
-    assert f"엑셀 4행: {message}" in str(caught.value)
+    assert "엑셀 4행: 9번 줄이 없음" in str(caught.value)
+
+
+def test_unreadable_line_cell_points_at_the_excel_not_the_source():
+    with pytest.raises(FixError) as caught:
+        make_request(RTE, [finding(), finding(row=4, line=None)], SOURCE)
+
+    message = str(caught.value)
+    assert message.startswith("엑셀 line 칸에서 줄 번호를 읽지 못했습니다.\n할 일: 엑셀에서 ")
+    assert "소스 폴더" not in message  # 소스를 바꿔도 해결되지 않는다
+    assert "엑셀 4행: line 칸이 비었거나 숫자가 아님" in message
 
 
 def test_cache_key_depends_on_the_messages_file_and_kind():
