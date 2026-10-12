@@ -22,10 +22,13 @@ class FunctionRange:
     end: int  # 닫는 '}' 줄
 
 
-def _scan(text: str) -> Iterator[tuple[int, int, str, bool]]:
+def _scan(
+    text: str, open_comment_lines: set[int] | None = None
+) -> Iterator[tuple[int, int, str, bool]]:
     """주석 밖의 글자를 (위치, 줄 번호, 글자, 문자열·문자 상수 안인지)로 내놓는다.
 
     주석은 빈칸 하나로 내놓는다(앞뒤 낱말이 붙지 않게). 줄바꿈은 주석 안이어도 내놓는다.
+    open_comment_lines를 주면 블록 주석이 열린 채로 시작하는 줄 번호를 거기에 모은다.
     """
     line = 1
     state = "code"
@@ -38,6 +41,8 @@ def _scan(text: str) -> Iterator[tuple[int, int, str, bool]]:
                 state = "code"
             yield i, line, ch, state in ("string", "char")
             line += 1
+            if state == "block_comment" and open_comment_lines is not None:
+                open_comment_lines.add(line)
         elif state == "code":
             if ch == "/" and nxt in ("/", "*"):
                 state = "line_comment" if nxt == "/" else "block_comment"
@@ -65,9 +70,24 @@ def _scan(text: str) -> Iterator[tuple[int, int, str, bool]]:
         i += 1
 
 
-def _code_lines(text: str) -> set[int]:
-    """주석 말고 다른 글자가 있는 줄 번호."""
-    return {line for _, line, ch, _ in _scan(text) if not ch.isspace()}
+def _line_kinds(text: str) -> tuple[set[int], set[int]]:
+    """(주석 말고 다른 글자가 있는 줄, 블록 주석이 열린 채로 시작하는 줄) 번호."""
+    open_lines: set[int] = set()
+    code = {line for _, line, ch, _ in _scan(text, open_lines) if not ch.isspace()}
+    return code, open_lines
+
+
+def _directive_lines(lines: list[str]) -> set[int]:
+    """전처리 줄 번호. '\\'로 이어지는 다음 줄들(매크로 몸통)도 넣는다."""
+    found: set[int] = set()
+    going = False
+    for number, line in enumerate(lines, start=1):
+        if going or line.lstrip().startswith("#"):
+            found.add(number)
+            going = line.rstrip().endswith("\\")
+        else:
+            going = False
+    return found
 
 
 def braces_balanced(code: str) -> bool:
@@ -106,20 +126,27 @@ def function_range(text: str, line: int, name: str) -> FunctionRange | None:
         return None
     open_line, end = block
     lines = split_lines(text)
-    code = _code_lines(text)
+    code, open_lines = _line_kinds(text)
+    directives = _directive_lines(lines)
     signature = open_line
     while signature > 1 and open_line - signature < SIGNATURE_LINES:
         above = lines[signature - 2].strip()
         if (
             not above
             or above.endswith((";", "}"))
-            or above.startswith("#")
+            or signature - 1 in directives
             or signature - 1 not in code
         ):
             break
         signature -= 1
+    # 바로 위의 주석 줄들. 블록 주석 안의 빈 줄도 주석이다 (거기서 멈추면 범위가 주석 한가운데서
+    # 시작해 도우미가 주석 안에 들어간다)
     start = signature
-    while start > 1 and lines[start - 2].strip() and start - 1 not in code:
+    while (
+        start > 1
+        and start - 1 not in code
+        and (lines[start - 2].strip() or start - 1 in open_lines)
+    ):
         start -= 1
     header = "\n".join(lines[signature - 1 : open_line])
     if line < start or not re.search(rf"(?<!\w){re.escape(name)}\s*\(", header):

@@ -84,3 +84,23 @@ def test_limits_come_from_the_job_not_from_code():
     request = make_request(CODEMETRICS, sheet.findings, SOURCE, sheet.prepared.data)
 
     assert "- Cyclomatic Complexity: Threshold 99" in request.messages[1]["content"]
+
+
+def test_rows_of_one_group_on_different_definitions_are_an_error():
+    # #if 갈래마다 같은 이름의 정의가 있으면 묶음 키(파일:이름)가 같아도 다른 함수다
+    source = decode_source(
+        "src/g.c",
+        b"#if A\nstatic int g(void)\n{\n    return 1;\n}\n"
+        b"#else\nstatic int g(void)\n{\n    return 2;\n}\n#endif\n",
+    )
+    findings, context = job(
+        metric_row(function="g()", line=2),
+        metric_row("Number of Calling Functions", threshold=4, actual=6, function="g()", line=7),
+    )
+
+    with pytest.raises(FixError) as caught:
+        make_request(CODEMETRICS, findings, source, context)
+
+    message = str(caught.value)
+    assert message.startswith("같은 함수의 행이 서로 다른 줄을 가리킵니다.")
+    assert "엑셀 3행: 7번 줄 (함수 범위 2~5줄)" in message

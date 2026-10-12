@@ -87,3 +87,17 @@ def test_braces_balanced_skips_comments_strings_and_characters():
     assert braces_balanced("int f(void)\n{\n    /* } */ return '{' + \"}\"[0];\n}\n")
     assert not braces_balanced("int f(void)\n{\n    if (x) {\n}\n")
     assert not braces_balanced("}{")
+
+
+def test_blank_line_inside_the_leading_block_comment_keeps_the_whole_comment():
+    # 블록 주석 안의 빈 줄에서 멈추면 범위가 주석 한가운데서 시작해, 도우미가 주석 안에 들어간다
+    text = "/* Title\n\n   Details */\nint f(void)\n{\n    return 0;\n}\n"
+
+    assert function_range(text, 4, "f") == FunctionRange(start=1, signature=4, open_line=5, end=7)
+
+
+def test_macro_continuation_above_the_function_is_not_part_of_the_signature():
+    # '\'로 이어지는 매크로 줄을 시그니처로 보면 도우미가 매크로 몸통에 들어간다
+    text = "#define X(a) \\\n    ((a) + 1)\nint f(void)\n{\n    return 0;\n}\n"
+
+    assert function_range(text, 3, "f") == FunctionRange(start=3, signature=3, open_line=4, end=6)

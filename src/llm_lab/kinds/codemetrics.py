@@ -21,14 +21,15 @@ from llm_lab.cfunction import (
 from llm_lab.conditions import Metric, read_metrics
 from llm_lab.fixer import (
     FIX_SCHEMA,
-    NUMBER_PREFIX,
     WHOLE_FILE_MAX_LINES,
     Edit,
     EditMismatch,
     FixError,
     FixResult,
     Request,
+    _has_numbers,
     _minimize,
+    _strip_numbers,
     apply_edits,
     display_diff,
     read_decisions,
@@ -334,6 +335,19 @@ def _function(text: str, findings: list[Finding]) -> FunctionRange:
                 f"{name}, {first.line}번 줄",
             )
         )
+    # 묶음 키는 파일:이름이라, 같은 이름의 정의가 둘이면(#if 갈래) 다른 함수의 행이 섞인다
+    for other in findings[1:]:
+        assert other.line is not None
+        if not found.start <= other.line <= found.end:
+            raise FixError(
+                user_error(
+                    "같은 함수의 행이 서로 다른 줄을 가리킵니다.",
+                    "엑셀을 만든 것과 같은 버전의 소스 폴더인지, 같은 이름의 함수가 둘인지 "
+                    "확인하세요.",
+                    f"엑셀 {other.row}행: {other.line}번 줄 "
+                    f"(함수 범위 {found.start}~{found.end}줄)",
+                )
+            )
     size = found.end - found.start + 1
     if size > FUNCTION_MAX_LINES:
         raise FixError(
@@ -402,10 +416,10 @@ def _code_edits(code: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
     if not isinstance(code, str) or not code.strip():
         raise EditMismatch("fix인데 code가 비었음", "format")
     code = code.replace("\r\n", "\n")
-    filled = [line for line in code.split("\n") if line.strip()]
-    if all(NUMBER_PREFIX.match(line) for line in filled):
-        # 보인 코드의 줄 번호 표시('   57| ')까지 베꼈으면 뗀다
-        code = "\n".join(NUMBER_PREFIX.sub("", line, count=1) for line in code.split("\n"))
+    if _has_numbers(code):
+        # 보인 코드의 줄 번호 표시('   57| ')까지 베꼈으면 뗀다. 새로 쓴 도우미 줄에는 번호가
+        # 없을 수 있어 줄마다 본다 (fixer.locate_edits와 같은 규칙)
+        code = _strip_numbers(code)
     try:
         code.encode(source.encoding)
     except UnicodeEncodeError as exc:
@@ -419,7 +433,10 @@ def _code_edits(code: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
         raise EditMismatch("code의 중괄호 짝이 맞지 않음", "format", BRACES)
     text = source.text
     found = _function(text, request.findings)
-    if signature_text(text, found) not in squash_code(code):
+    squashed = squash_code(code)
+    index = squashed.find(signature_text(text, found))
+    # 시그니처 앞에 낱말(static, inline, 다른 반환형 등)이 붙었어도 시그니처가 바뀐 것이다
+    if index < 0 or re.search(r"\w$", squashed[:index].rstrip()):
         raise EditMismatch(
             "함수 시그니처(이름, 인자, 반환형)가 바뀜 - 그대로 두세요", "format", SIGNATURE_CHANGED
         )

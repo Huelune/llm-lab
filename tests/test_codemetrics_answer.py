@@ -80,6 +80,10 @@ def test_fixing_the_calling_functions_row_is_refused_and_asked_again():
             GRADE_REFACTORED.replace("int grade(int score)", "int grade(long score)"),
             SIGNATURE_CHANGED,
         ),
+        (
+            GRADE_REFACTORED.replace("\nint grade(int score)", "\nstatic int grade(int score)"),
+            SIGNATURE_CHANGED,
+        ),
         (GRADE_REFACTORED.replace("/* 점수를 등급으로 바꾼다. */\n", ""), COMMENT_DROPPED),
         (GRADE_REFACTORED + "}\n", BRACES),
     ],
@@ -150,3 +154,15 @@ def test_missing_numbers_unchanged_code_and_cut_answers_are_asked_again():
 
 def test_kind_waits_longer_than_rte():
     assert CODEMETRICS.timeout == 300.0
+
+
+def test_prefixes_copied_on_some_lines_only_are_removed_too():
+    # 원래 줄은 보인 그대로(번호 포함) 베끼고, 새 도우미 줄은 번호 없이 쓰는 답
+    lines = GRADE_REFACTORED.splitlines()
+    helper_end = lines.index("") + 1  # 도우미와 빈 줄까지는 번호 없음
+    original = [f"{number:>5}| {line}" for number, line in enumerate(lines[helper_end:], 3)]
+    mixed = "\n".join([*lines[:helper_end], *original])
+
+    results, _ = ask(request_for(metric_row()), code_answer(("fix", "x"), code=mixed))
+
+    assert apply_edits(SOURCE.text, results[0].edits) == FIXED
