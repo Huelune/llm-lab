@@ -71,6 +71,7 @@ class Kind:
     prompt_version: int  # 답 처리 방식을 바꾸면 올린다 (캐시 키)
     prepare: Callable[[Any], Prepared] = nothing_to_prepare  # 엑셀 전체에서 작업 정보 읽기
     # 함께 보낼 행의 기준 (행, 짝지은 소스 이름) → 묶음 키. ''이면 혼자 보낸다
+    # 한 묶음은 한 소스 파일이어야 한다(작업자는 첫 행의 소스만 읽는다). 키에 소스 이름을 넣는다
     group_key: Callable[[Finding, str], str] = alone
     facts: Callable[[Finding], list[tuple[str, str]]] = default_facts
     # 사용자 메시지에서 Finding 목록 뒤, 코드 앞에 붙일 글 (작업 정보, 묶음의 행, 소스로)

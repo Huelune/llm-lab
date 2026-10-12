@@ -95,7 +95,7 @@ src/llm_lab/
 | `heading` | 사용자 메시지 첫 줄 | |
 | `prompt_version` | 답 처리 방식을 바꾸면 올린다(캐시 키, 6.6). | |
 | `prepare(workbook)` | 엑셀 전체에서 작업 정보를 읽어 `Prepared(data, note)`를 돌려준다(4절). | 정보 없음 |
-| `group_key(finding, file_name)` | 함께 보낼 행의 기준. `''`이면 혼자 보낸다. | `''` |
+| `group_key(finding, file_name)` | 함께 보낼 행의 기준. `''`이면 혼자 보낸다. 한 묶음은 한 소스 파일이어야 하므로 키에 소스 이름을 넣는다(5절). | `''` |
 | `facts(finding)` | 사용자 메시지에 넣을 (이름, 값) 목록. File과 line은 공통 코드가 붙인다. | RTE 순서(6.2) |
 | `prompt_tail(context, findings, source)` | 사용자 메시지에서 Finding 목록 뒤, 코드 앞에 붙일 글 | `''` |
 | `region(text, findings)` | LLM에 보낼 줄 범위 | 첫 행의 줄로 `select_region`(RTE 설계 6.1) |
@@ -223,6 +223,7 @@ class Sheet:  # 지금의 RteSheet
 ## 5. 묶음과 처리 순서
 
 - 작업을 만들 때 소스를 찾은 행마다 `kind.group_key(finding, file_name)`을 구해 `rows.grp`에 저장한다. 소스가 없는 행은 `''`이다.
+- 한 묶음은 한 소스 파일이어야 한다. 작업자가 묶음 첫 행의 소스 하나만 읽어 LLM에 보내기 때문이다. 그래서 종류는 키에 `file_name`(짝지은 소스 이름)을 넣어야 한다. MISRA의 키는 `파일:줄`이다.
 - 같은 작업에서 `grp`가 같은 `pending` 행들이 묶음 하나다. `grp`가 `''`인 행은 혼자 묶음이다.
 - 묶음 안의 행 순서는 (줄, check, detail, 엑셀 행)으로 정한다. 줄 번호가 없으면 0으로 본다. 이 순서가 LLM 메시지의 번호(Finding 1, 2…)이고 캐시 결과의 순서다. 엑셀 행은 마지막 기준이라, 엑셀을 다시 뽑아 행 번호가 바뀌어도 순서가 거의 그대로다.
 - 묶음을 작업자에 넣는 순서: (묶음 안에서 가장 중요한 대상의 순위, 가장 작은 엑셀 행). 그래서 MISRA는 Mandatory, Required, Advisory 순으로, RTE는 Red, Orange 순으로 처리된다. 멈췄을 때 중요한 것부터 결과가 남는다.
@@ -294,7 +295,7 @@ Code (lines {first}-{last} of {source.name}; each line starts with its number an
 | 소스 인코딩으로 쓸 수 없는 문자 | LLM이 이 파일의 인코딩으로 쓸 수 없는 문자를 썼습니다. |
 | `original`을 찾지 못함, 여러 번 나옴, edit끼리 겹침, 적용해도 같음 | LLM이 고칠 위치를 정확히 짚지 못했습니다. |
 
-- 공통 코드(`_to_results`)는 잘림, JSON, JSON 객체까지 확인하고 나머지는 `kind.to_results(data, request)`에 맡긴다. 기본은 `edits_results`다.
+- 공통 코드(`_to_results`)는 잘림, JSON, JSON 객체까지 확인하고 나머지는 `kind.to_results(data, request)`에 맡긴다. 기본은 `edits_results`다. 종류가 돌려준 결과 수가 행 수와 다르면 `format` 문제(`판단 수가 행 수와 다름`)로 보고 다시 묻는다. 이 검사가 없으면 작업자에서 예상하지 못한 오류가 나므로, 다른 답 오류와 같게 다시 묻고 두 번째도 같으면 묶음 오류로 만든다.
   - `read_decisions(data, count)`: 번호 검사 후 번호 순서대로 (판단, 이유). 종류별 답 처리도 이 함수를 쓴다.
   - 모두 `no_fix`면 `edits`는 버린다(지금 RTE와 같음).
   - `share(decisions, edits, diff)`: `fix` 행은 `FixResult("fix", 이유, 묶음 edits, 묶음 diff)`, `no_fix` 행은 `FixResult("no_fix", 이유, (), "")`
@@ -378,6 +379,7 @@ Answer with JSON only. "findings" has one entry for each numbered finding. "edit
 ### 7.3 멈춤과 이어서 처리
 
 - `POST /results/{id}/stop`: `store.stop`. 이미 줄 서 있던 묶음은 작업이 `running`이 아니어서 건너뛴다. LLM을 기다리던 묶음은 답이 오면 결과를 저장한다.
+- LLM을 기다리던 묶음이 끝났을 때 `pending`·`running` 행이 하나도 남지 않았으면(마지막 묶음이 처리 중일 때 멈춘 경우), 사용자가 멈춘 작업(`stopped`, 메시지 `USER_STOP`)은 `done`으로 바뀌고 메시지가 지워진다(`finish_if_done`). 처리할 행이 없는데 "이어서 처리" 안내가 남지 않게 하기 위해서다. 치명 오류로 멈춘 작업(다른 메시지)은 이 규칙으로 닫지 않는다. 그 묶음은 `pending`으로 돌아가 있다.
 - 멈춘 작업은 "끝난" 작업으로 본다. 그래서 그때까지 처리된 행으로 패치를 받을 수 있다.
 - 이어서 처리는 지금의 `POST /results/{id}/retry`를 그대로 쓴다. 오류 행을 `pending`으로 되돌리고, 작업을 `running`으로 바꾸고, `pending` 묶음을 다시 넣는다.
 
@@ -505,7 +507,7 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
   - 멈춤과 이어서 처리, 멈춘 작업에서도 끝난 행으로 패치 받기
   - `auto_select`가 고르지 않는 수정 행
 - `test_transcript.py`: 묶음 기록의 머리, 행 줄, 행별 결과 줄, 파일 이름
-- 최종 검토 뒤 더한 테스트: 조건 시트를 읽었는데 맞지 않은 MISRA 행의 메모, 쓸 규칙이 없는 조건 시트의 작업 메모, Mode를 세 분류 이름과 정확히 맞추기(`test_kinds.py`)
+- 최종 검토 뒤 더한 테스트: 조건 시트를 읽었는데 맞지 않은 MISRA 행의 메모, 쓸 규칙이 없는 조건 시트의 작업 메모, Mode를 세 분류 이름과 정확히 맞추기(`test_kinds.py`), 종류가 돌려준 결과 수 확인(`test_fixer.py`), 사용자가 멈춘 작업을 남은 행이 없을 때 `done`으로 닫기(`test_store.py`)
 
 ## 12. 회사 PC 확인
 

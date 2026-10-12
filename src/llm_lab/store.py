@@ -294,12 +294,20 @@ class Store:
             )
 
     def finish_if_done(self, job_id: int) -> None:
-        """남은 pending·running 행이 없으면 running 작업을 done으로 바꾼다."""
+        """남은 pending·running 행이 없으면 작업을 done으로 바꾼다.
+
+        running 작업과, 사용자가 멈춘 작업(stopped, 메시지 USER_STOP)이 대상이다. 마지막 묶음이
+        LLM 답을 기다리는 중에 멈추면 그 묶음이 끝난 뒤 남은 행이 없다. 그때 "이어서 처리"를
+        남겨 두면 처리할 것이 없으므로 done으로 닫고 메시지를 지운다. 치명 오류로 멈춘 작업(다른
+        메시지)은 그 묶음이 pending으로 돌아가 있으므로 이 규칙이 닫지 않는다.
+        """
         with self._write() as db:
             db.execute(
-                "UPDATE jobs SET state = 'done' WHERE id = ? AND state = 'running' AND NOT EXISTS "
+                "UPDATE jobs SET state = 'done', message = '' WHERE id = ? "
+                "AND (state = 'running' OR (state = 'stopped' AND message = ?)) "
+                "AND NOT EXISTS "
                 "(SELECT 1 FROM rows WHERE job_id = ? AND state IN ('pending', 'running'))",
-                (job_id, job_id),
+                (job_id, USER_STOP, job_id),
             )
 
     def retry(self, job_id: int) -> None:

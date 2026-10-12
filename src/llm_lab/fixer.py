@@ -33,7 +33,10 @@ FIX_TIMEOUT = 120.0
 
 
 class FixError(Exception):
-    """행 하나를 처리하지 못함. 그 행만 오류로 표시한다. 메시지는 user_error() 형식."""
+    """묶음 하나를 처리하지 못함. 그 묶음의 행을 모두 오류로 표시한다.
+
+    메시지는 user_error() 형식.
+    """
 
 
 class FatalLLMError(Exception):
@@ -617,7 +620,10 @@ def _to_results(content: str, finish_reason: str | None, request: Request) -> li
         raise EditMismatch("응답이 JSON이 아님", "format") from None
     if not isinstance(data, dict):
         raise EditMismatch("응답이 JSON 객체가 아님", "format")
-    return request.kind.to_results(data, request)
+    results = request.kind.to_results(data, request)
+    if len(results) != len(request.findings):
+        raise EditMismatch("판단 수가 행 수와 다름", "format")
+    return results
 
 
 def propose_fixes(

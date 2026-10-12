@@ -162,6 +162,42 @@ def test_stop_only_stops_running_jobs(tmp_path):
     assert store.job(done).state == "done"
 
 
+def test_user_stopped_job_with_nothing_left_becomes_done(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    job_id = make_job(store, "pending", "no_source")
+    store.stop(job_id)  # 마지막 묶음이 LLM 답을 기다리는 중에 멈췄다
+    store.set_row(store.rows(job_id)[0].id, "done", result=RESULT)  # 그 묶음이 끝났다
+
+    store.finish_if_done(job_id)
+
+    job = store.job(job_id)
+    assert (job.state, job.message) == ("done", "")
+
+
+def test_user_stopped_job_with_a_pending_row_stays_stopped(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    job_id = make_job(store, "pending", "pending")
+    store.stop(job_id)
+    store.set_row(store.rows(job_id)[0].id, "done", result=RESULT)
+
+    store.finish_if_done(job_id)
+
+    job = store.job(job_id)
+    assert (job.state, job.message) == ("stopped", USER_STOP)
+
+
+def test_job_stopped_by_another_reason_is_not_closed_even_with_nothing_left(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    job_id = make_job(store, "pending")
+    store.set_row(store.rows(job_id)[0].id, "done", result=RESULT)
+    store.set_job(job_id, "stopped", "네트워크 오류")
+
+    store.finish_if_done(job_id)
+
+    job = store.job(job_id)
+    assert (job.state, job.message) == ("stopped", "네트워크 오류")
+
+
 def user_version(path):
     with closing(sqlite3.connect(path)) as db:
         return db.execute("PRAGMA user_version").fetchone()[0]

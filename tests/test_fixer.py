@@ -7,6 +7,7 @@ from misra_fixtures import misra_finding
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
 from llm_lab.fixer import (
+    MISMATCH_SUMMARIES,
     EditMismatch,
     FatalLLMError,
     FixError,
@@ -303,3 +304,22 @@ def test_kind_answer_check_can_name_its_own_problem():
     assert first == "LLM이 함수 이름이나 인자를 바꿨습니다."
     assert more == "자세히: 함수 시그니처가 바뀜 (2번 시도)"
     assert "함수 시그니처가 바뀜" in sent[1]["messages"][3]["content"]
+
+
+def test_kind_answer_with_the_wrong_result_count_is_asked_again_then_fails():
+    def to_results(data, request):
+        return [FixResult("no_fix", "그대로 둠", (), "")]  # 행은 둘인데 결과가 하나
+
+    def valid():  # 행 둘에 대한 올바른 답
+        return answer(("fix", REASON), ("fix", REASON), edits=[DIVIDE_FIX])
+
+    handler, sent = scripted(valid(), valid())
+
+    with pytest.raises(FixError) as caught:
+        ask(handler, [finding(), finding(row=3)], kind=replace(RTE, to_results=to_results))
+
+    first, _, more = str(caught.value).split("\n")
+    assert first == MISMATCH_SUMMARIES["format"]
+    assert more == "자세히: 판단 수가 행 수와 다름 (2번 시도)"
+    assert len(sent) == 2
+    assert "판단 수가 행 수와 다름" in sent[1]["messages"][3]["content"]
