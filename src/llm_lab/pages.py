@@ -659,7 +659,7 @@ def _detail_card(
         first_fix = next(
             (m for m in members if m.result is not None and m.result.decision == "fix"), None
         )
-        if first_fix is not None and first_fix.id != row.id:
+        if row.result.decision == "fix" and first_fix is not None and first_fix.id != row.id:
             body.append(
                 f'<p class="excluded">같은 묶음의 수정입니다 '
                 f"(엑셀 {first_fix.finding.row}행과 같음).</p>"

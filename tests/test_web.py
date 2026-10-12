@@ -308,6 +308,20 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert patch.content.count(b"+    return (b != 0) ? a / b : 0;\n") == 1
 
 
+def test_no_fix_row_in_a_mixed_group_does_not_claim_the_shared_fix(tmp_path):
+    reply = answer(("fix", REASON), ("no_fix", "직접 고쳐야 합니다."), edits=[DIVIDE_FIX])
+    client, _, _ = make_service(tmp_path, reply)
+    upload(
+        client, MISRA_EXCEL, source_folder(tmp_path), "misra", ["misra:Required", "misra:Mandatory"]
+    )
+
+    page = client.get("/results/1").text
+
+    assert page.count('<pre class="diff">') == 1  # 엑셀 2행(fix)의 diff
+    assert "같은 묶음의 수정입니다" not in page  # 엑셀 3행은 no_fix라 공유 수정 안내가 없다
+    assert "함께 보낸 행: 엑셀 2행" in page and "함께 보낸 행: 엑셀 3행" in page
+
+
 def test_running_job_can_be_stopped_and_continued(tmp_path):
     queued = []
     client, store, _ = make_service(tmp_path, fix_answer(), submit=queued.append)
