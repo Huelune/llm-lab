@@ -28,8 +28,8 @@ def _merged_sheet(book: Workbook, title: str = "Fake Metrics") -> None:
     sheet.append(["지표 기준표"])
     sheet.append(_row({1: "No", 2: "Metric Name", 5: "설명", 12: "기준 :", 14: "PASS/FAIL"}))
     sheet.append(_row({1: 1, 2: "Fake Depth", 5: "가짜 설명", 12: "2 ~ 9", 14: "Pass"}))
-    sheet.append(_row({12: "10~19", 14: "검토 필요"}))
-    sheet.append(_row({12: ">=20", 14: "Fail (수정 필요)"}))
+    sheet.append(_row({12: "10~19", 14: "Pass (검토 후 사유 기록)"}))
+    sheet.append(_row({12: ">=20", 14: "Fail (고칠 것)"}))
     sheet.append(_row({1: 2, 2: "Fake Ratio", 12: "≥ 40%", 14: "pass"}))
     sheet.append(_row({12: "< 40", 14: "FAIL"}))
     sheet.append([])
@@ -49,7 +49,7 @@ def _book() -> Workbook:
     misra = book.create_sheet("Fake Rules")  # MISRA 조건 시트처럼 범위·판정 열이 없다
     misra.append(["Guideline", "Mode", "Enabled"])
     misra.append(["1.1", "required", "yes"])
-    result = book.create_sheet("CodeMetrics_Result")  # 결과 시트는 보지 않는다
+    result = book.create_sheet("Metrics_Result")  # 결과 시트는 보지 않는다
     result.append(["File", "Function", "Check", "Threshold", "Pass / Fail"])
     return book
 
@@ -67,7 +67,11 @@ def test_reads_bands_through_merged_cells(tmp_path: Path) -> None:
         (10, 19, "middle"),
         (20, None, "fail"),
     ]
-    assert [b.verdict for b in depth.bands] == ["Pass", "검토 필요", "Fail (수정 필요)"]
+    assert [b.verdict for b in depth.bands] == [
+        "Pass",
+        "Pass (검토 후 사유 기록)",
+        "Fail (고칠 것)",
+    ]
     assert depth.pass_band is not None and depth.pass_band.text == "2 ~ 9"
     assert note == "조건 시트: 지표 3개 (범위 글을 읽지 못한 단계 1개)"
 
@@ -161,11 +165,11 @@ def test_round_trips_through_json(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("text", "parsed"),
     [
-        ("1 ~ 15", (1, 15, False, False)),
-        ("16~30", (16, 30, False, False)),
+        ("2 ~ 14", (2, 14, False, False)),
+        ("17~29", (17, 29, False, False)),
         ("3-8", (3, 8, False, False)),
-        (">= 31", (31, None, False, False)),
-        (">=11", (11, None, False, False)),
+        (">= 33", (33, None, False, False)),
+        (">=12", (12, None, False, False)),
         ("=> 4", (4, None, False, False)),
         ("> 5", (5, None, True, False)),
         ("<= 2.5", (None, 2.5, False, False)),
@@ -187,7 +191,11 @@ def test_parse_range(text: str, parsed: tuple[Any, ...] | None) -> None:
     ("verdict", "kind"),
     [
         ("Pass", "pass"),
-        ("Fail (수정 필요)", "fail"),
+        (" PASS. ", "pass"),
+        ("Fail (고칠 것)", "fail"),
+        # 단서가 붙은 Pass는 조건부 통과로 보고 가운데 단계로 둔다
+        ("Pass (검토 후 사유 기록)", "middle"),
+        ("조건부 Pass", "middle"),
         ("통과", "pass"),
         ("불합격", "fail"),
         ("검토 필요", "middle"),

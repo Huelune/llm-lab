@@ -123,14 +123,21 @@ def parse_range(text: str) -> tuple[float | None, float | None, bool, bool] | No
 
 
 def verdict_kind(verdict: str) -> str:
-    """판정 글 → pass | fail | middle. 둘 다 들었거나 둘 다 없으면 middle."""
+    """판정 글 → pass | fail | middle.
+
+    pass 낱말 하나뿐인 글만 pass다. 단서가 붙은 Pass(현장 엑셀의 가운데 단계 글)는
+    조건부 통과로 보고 middle로 둔다. pass로 잘못 보면 그 행이 대상에서 빠지기 때문이다.
+    pass 낱말 없이 fail 낱말이 든 글은 fail, 나머지는 middle이다.
+    """
     text = verdict.casefold()
     has_fail = any(word in text for word in FAIL_WORDS)
     for word in FAIL_WORDS:  # '불합격' 안의 '합격'을 pass로 보지 않도록
         text = text.replace(word, " ")
     has_pass = any(word in text for word in PASS_WORDS)
-    if has_pass != has_fail:
-        return "pass" if has_pass else "fail"
+    if has_fail and not has_pass:
+        return "fail"
+    if not has_fail and re.sub(r"[\W_]+", "", text) in PASS_WORDS:
+        return "pass"
     return "middle"
 
 
