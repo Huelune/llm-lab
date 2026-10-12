@@ -153,6 +153,21 @@ def test_directive_rows_use_directive_conditions():
     assert directive == "적용 안 함 (조건 시트)"
 
 
+def test_preprocessing_directive_rules_are_still_rules():
+    # 규칙 묶음 20의 이름 "Preprocessing directives"에는 directive가 들어 있지만 디렉티브가 아니다
+    context = {"20.7": ["Mandatory", False], "20.5": ["Mandatory", True]}
+    group = "20 Preprocessing directives"
+
+    disabled = misra(misra_row("20.7 Macro parameters", group=group), context)
+    found = misra(misra_row("20.5 Undefining macros", group=group, category="Advisory"), context)
+
+    assert disabled == "적용 안 함 (조건 시트)"
+    assert (found.category, found.note) == (
+        "Mandatory",
+        "분류: 조건 시트 Mandatory (결과 시트 Advisory)",
+    )
+
+
 def test_misra_groups_rows_on_the_same_line_of_the_same_file():
     first = misra_finding()
     same_line = misra_finding(row=3, check="12.1 Precedence")

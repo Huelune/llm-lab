@@ -28,6 +28,8 @@ NO_CONDITIONS = "조건 시트 없음: 결과 시트 분류를 씀"
 OFF_WORDS = {"no", "n", "off", "false", "0", "disabled"}
 # 글 맨 앞의 규칙 번호: "10.3 …", "Rule 10.3", "Dir 4.1", "D4.1", "Directive 4.1"
 RULE = re.compile(r"\s*(?:rule\s*)?(dir(?:ective)?\s*|d\s*)?(\d+(?:\.\d+)+)", re.IGNORECASE)
+# Group의 낱말 directive(단수). 규칙 묶음 20의 이름 "Preprocessing directives"는 디렉티브가 아니다
+DIRECTIVE = re.compile(r"\bdirective\b", re.IGNORECASE)
 
 SYSTEM_PROMPT = """\
 You review Polyspace results for MISRA C:2012 in C code. \
@@ -128,7 +130,7 @@ def read_row(cell: Cell, row: int, context: Any) -> Finding | str:
     check = cell_text(cell("check"))
     group = cell_text(cell("group"))
     information = cell_text(cell("information"))
-    key = rule_key(check, "directive" in group.casefold())
+    key = rule_key(check, DIRECTIVE.search(group) is not None)
     rule = (context or {}).get(key) if key else None
     if rule is not None and not rule[1]:
         return DISABLED
