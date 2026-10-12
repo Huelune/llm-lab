@@ -459,7 +459,7 @@ RTE 설계 10절에 다음을 더하거나 바꾼다.
 
 - `test_kinds.py` (새 파일)
   - RTE `read_row`: Red/Orange는 `Finding`, Gray와 빈 TYPE은 이유. 우선순위와 색.
-  - `rule_key`: `10.3 …` → `10.3`, `Rule 10.3`, `Dir 4.1`·`D4.1`·`Directive 4.1` → `D4.1`, Group에 directive → `D` 접두, 맨 앞에 번호가 없거나 점이 없는 숫자면 없음
+  - `rule_key`: `10.3 …` → `10.3`, `Rule 10.3`, `Dir 4.1`·`D4.1`·`Directive 4.1` → `D4.1`, Group에 낱말 Directive(단수) → `D` 접두(복수형 `Preprocessing directives`는 아님), 맨 앞에 번호가 없거나 점이 없는 숫자면 없음
   - MISRA 분류 읽기: `Category: Required` → Required, 대소문자 차이, 낱말 없음 → 없음
   - 조건 시트 찾기: 이름이 아니라 열로, 제목 행·끝 콜론·빈 첫 열, 여럿이면 이름에 misra가 든 시트, `_Result` 시트는 보지 않음, 조건 시트 없음
   - 조건 값: Mode 대소문자, 빈 Mode는 없는 규칙, 표준 밖 분류, Enabled 꺼짐, 숫자 칸 때문에 겹친 번호는 쓰지 않음
