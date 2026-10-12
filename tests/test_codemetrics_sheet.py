@@ -35,7 +35,7 @@ ROWS = [
 def test_targets_get_their_stage_from_the_condition_sheet():
     sheet = read(metrics_excel(*ROWS))
 
-    assert sheet.sheet == "CodeMetrics_Result"
+    assert sheet.sheet == "Metrics_Result"
     assert [(f.row, f.category, f.stage) for f in sheet.findings] == [
         (2, FAIL, "Fail (고칠 것)"),
         (3, MIDDLE, "검토 후 결정"),

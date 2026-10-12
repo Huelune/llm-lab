@@ -529,10 +529,10 @@ index 0000000..056f82b
 +    """표지, CodeMetrics 결과 시트, (있으면) 조건 시트가 든 엑셀."""
 +    sheets: dict[str, list[list]] = {
 +        "Cover": [["Polyspace report"]],
-+        "CodeMetrics_Result": [METRICS_HEADER, *rows],
++        "Metrics_Result": [METRICS_HEADER, *rows],
 +    }
 +    if conditions is not None:
-+        sheets["Code Metrics"] = conditions
++        sheets["Metric Bands"] = conditions
 +    return workbook_bytes(sheets)
 +
 +
@@ -591,7 +591,7 @@ index 0000000..901d1cc
 +def test_targets_get_their_stage_from_the_condition_sheet():
 +    sheet = read(metrics_excel(*ROWS))
 +
-+    assert sheet.sheet == "CodeMetrics_Result"
++    assert sheet.sheet == "Metrics_Result"
 +    assert [(f.row, f.category, f.stage) for f in sheet.findings] == [
 +        (2, FAIL, "Fail (고칠 것)"),
 +        (3, MIDDLE, "검토 후 결정"),
@@ -1802,7 +1802,7 @@ index 0000000..a8e32fd
 +    assert upload(client, EXCEL, source_folder(tmp_path)).status_code == 303
 +
 +    job = store.job(1)
-+    assert (job.kind, job.sheet, job.state) == ("codemetrics", "CodeMetrics_Result", "done")
++    assert (job.kind, job.sheet, job.state) == ("codemetrics", "Metrics_Result", "done")
 +    assert len(sent) == 2  # 함수마다 한 번, Fail이 든 grade부터
 +    first = sent[0]["messages"][1]["content"]
 +    assert "Replace lines 3-15 of src/grade.c" in first

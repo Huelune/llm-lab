@@ -95,10 +95,10 @@ def metrics_excel(*rows: list, conditions: list[list] | None = CONDITION_ROWS) -
     """표지, CodeMetrics 결과 시트, (있으면) 조건 시트가 든 엑셀."""
     sheets: dict[str, list[list]] = {
         "Cover": [["Polyspace report"]],
-        "CodeMetrics_Result": [METRICS_HEADER, *rows],
+        "Metrics_Result": [METRICS_HEADER, *rows],
     }
     if conditions is not None:
-        sheets["Code Metrics"] = conditions
+        sheets["Metric Bands"] = conditions
     return workbook_bytes(sheets)
 
 

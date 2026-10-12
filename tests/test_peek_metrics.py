@@ -26,7 +26,7 @@ def _load() -> ModuleType:
 peek = _load()
 
 
-def _workbook(path: Path, rows: list[list[object]], title: str = "CodeMetrics_Result") -> Path:
+def _workbook(path: Path, rows: list[list[object]], title: str = "Metrics_Result") -> Path:
     book = Workbook()
     book.active.title = "Summary"
     rte = book.create_sheet("RTE_Result")
@@ -60,7 +60,7 @@ ROWS: list[list[object]] = [
 def test_counts_per_check(tmp_path: Path) -> None:
     screen = peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS))
 
-    assert any("CodeMetrics_Result" in line and "데이터 5행" in line for line in screen)
+    assert any("Metrics_Result" in line and "데이터 5행" in line for line in screen)
     assert _check_line(screen, "Cyclomatic Complexity") == (["2", "0"], ["2", "0", "0", "0"])
     # 숫자가 아닌 Threshold("<= 80")는 비교하지 않고 따로 센다
     assert _check_line(screen, "Number of Paths") == (["2", "0"], ["1", "0", "0", "1"])
@@ -131,7 +131,7 @@ def test_missing_sheet_names_only_columns(tmp_path: Path) -> None:
 def test_screen_never_shows_company_values(tmp_path: Path) -> None:
     book = Workbook()
     sheet = book.active
-    sheet.title = "CodeMetrics_Result"
+    sheet.title = "Metrics_Result"
     sheet.append([*HEADER, "secret column"])
     sheet.append(
         [

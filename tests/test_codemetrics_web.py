@@ -98,7 +98,7 @@ def test_one_request_per_function_and_middle_fixes_are_left_to_people(tmp_path):
     assert upload(client, EXCEL, source_folder(tmp_path)).status_code == 303
 
     job = store.job(1)
-    assert (job.kind, job.sheet, job.state) == ("codemetrics", "CodeMetrics_Result", "done")
+    assert (job.kind, job.sheet, job.state) == ("codemetrics", "Metrics_Result", "done")
     assert len(sent) == 2  # 함수마다 한 번, Fail이 든 grade부터
     first = sent[0]["messages"][1]["content"]
     assert "Replace lines 3-15 of src/grade.c" in first
