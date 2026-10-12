@@ -2,9 +2,10 @@ import io
 from dataclasses import replace
 
 import pytest
+from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_row
 from rte_fixtures import RTE_HEADER, rte_excel, rte_row, workbook_bytes
 
-from llm_lab.kinds import RTE
+from llm_lab.kinds import MISRA, RTE
 from llm_lab.polyspace import Finding, Prepared, SheetError, read_sheet
 
 
@@ -83,6 +84,46 @@ def test_sheet_is_chosen_by_name_because_kinds_share_columns():
     message = str(caught.value)
     assert message.startswith("RTE 시트를 찾지 못했습니다.")
     assert "MISRA_Result (이름에 rte가 없음)" in message
+
+
+def test_misra_sheet_uses_the_condition_sheet():
+    data = workbook_bytes(
+        {
+            "RTE_Result": [RTE_HEADER, rte_row()],
+            "MISRA_Result": [
+                MISRA_HEADER,
+                misra_row("10.4 Operands", category="Advisory"),  # 조건 시트에서는 Required
+                misra_row("2.2 Dead code"),  # 조건 시트에서 꺼짐
+                misra_row("12.1 Precedence", category="Required"),  # 조건 시트에서는 Advisory
+                misra_row("21.3 Memory", category="Mandatory"),  # 조건 시트에 없음
+                misra_row("9.1 Init", category="Required"),  # 조건 시트 분류가 표준 밖이라 늘 남음
+            ],
+            "Rules": CONDITION_ROWS,
+        }
+    )
+
+    sheet = read_sheet(io.BytesIO(data), MISRA, MISRA.defaults)
+
+    assert sheet.sheet == "MISRA_Result"
+    assert [(f.row, f.category) for f in sheet.findings] == [
+        (2, "Required"),
+        (5, "Mandatory"),
+        (6, "Disapplied"),
+    ]
+    assert sheet.findings[0].note == "분류: 조건 시트 Required (결과 시트 Advisory)"
+    assert sheet.skipped == {"적용 안 함 (조건 시트)": 1, "Advisory (고르지 않음)": 1}
+    assert sheet.prepared.note == "조건 시트: 규칙 5개"
+
+
+def test_misra_sheet_without_condition_sheet_uses_its_own_categories():
+    data = workbook_bytes(
+        {"MISRA_Result": [MISRA_HEADER, misra_row(category="Advisory"), misra_row()]}
+    )
+
+    sheet = read_sheet(io.BytesIO(data), MISRA, ["Required", "Advisory"])
+
+    assert [f.category for f in sheet.findings] == ["Advisory", "Required"]
+    assert sheet.prepared.note == "조건 시트 없음: 결과 시트 분류를 씀"
 
 
 def test_non_integer_line_becomes_none():

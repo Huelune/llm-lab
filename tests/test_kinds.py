@@ -1,7 +1,10 @@
-from rte_fixtures import RTE_HEADER, finding, rte_row
+import pytest
+from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_finding, misra_row, open_workbook
+from rte_fixtures import RTE_HEADER, finding, rte_row, workbook_bytes
 
-from llm_lab.kinds import KINDS, RTE
-from llm_lab.polyspace import Finding, column_name
+from llm_lab.kinds import KINDS, MISRA, RTE
+from llm_lab.kinds.misra import NO_CATEGORY, category_word, rule_key
+from llm_lab.polyspace import Finding, Prepared, column_name
 
 
 def cells(header: list, values: list):
@@ -23,6 +26,158 @@ def test_rte_priority_and_colors():
     assert RTE.priority(finding(color="Red")) < RTE.priority(finding(color="Orange"))
     assert RTE.rank("기타") == len(RTE.choices)  # choices에 없는 글자는 맨 뒤
     assert (RTE.color("Red"), RTE.color("Orange"), RTE.color("기타")) == ("red", "orange", "gray")
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        ("10.3 The value of an expression", "10.3"),
+        ("Rule 10.3", "10.3"),
+        ("rule10.3", "10.3"),
+        (" 1.1 ", "1.1"),
+        ("Dir 4.1 Run-time failures", "D4.1"),
+        ("D4.1", "D4.1"),
+        ("Directive 4.1", "D4.1"),
+        ("See rule 10.3", None),  # 맨 앞에 번호가 없다
+        ("8 bits", None),  # 점으로 이은 숫자가 아니다
+        ("", None),
+    ],
+)
+def test_rule_key_takes_the_leading_rule_number(text, key):
+    assert rule_key(text) == key
+
+
+def test_rule_key_marks_directives_named_by_group():
+    assert rule_key("4.1 Run-time failures shall be minimized", directive=True) == "D4.1"
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("Category: Required", "Required"),
+        ("category:MANDATORY", "Mandatory"),
+        ("advisory", "Advisory"),
+        ("Category: -", ""),
+        ("", ""),
+    ],
+)
+def test_category_word(text, category):
+    assert category_word(text) == category
+
+
+def test_condition_sheet_is_found_by_its_columns_and_read_loosely():
+    data = workbook_bytes(
+        {
+            "MISRA_Result": [MISRA_HEADER],
+            "Notes": [["Guideline", "Remarks"]],  # mode 열이 없으면 조건 시트가 아니다
+            "Rules": CONDITION_ROWS,
+        }
+    )
+
+    prepared = MISRA.prepare(open_workbook(data))
+
+    assert prepared.data == {
+        "10.4": ["Required", True],
+        "12.1": ["Advisory", True],
+        "2.2": ["Advisory", False],
+        "D4.6": ["Mandatory", True],
+        "9.1": ["Disapplied", True],
+    }
+    assert prepared.note == "조건 시트: 규칙 5개"
+
+
+def test_condition_sheet_named_misra_wins_and_result_sheets_are_never_conditions():
+    data = workbook_bytes(
+        {
+            "Other_Result": [["Guideline", "Mode"], ["10.4", "required"]],
+            "Rules": [["Guideline", "Mode"], ["10.4", "advisory"]],
+            "MISRA rules": [["Guideline", "Mode"], ["10.4", "mandatory"]],
+        }
+    )
+
+    assert MISRA.prepare(open_workbook(data)).data == {"10.4": ["Mandatory", True]}
+
+
+def test_rule_numbers_that_collide_are_not_used():
+    # 숫자 칸으로 저장된 8.10은 8.1로 읽혀 진짜 8.1과 겹친다
+    rows = [["Guideline", "Mode"], [8.1, "required"], [8.10, "advisory"], [10.4, "mandatory"]]
+
+    prepared = MISRA.prepare(open_workbook(workbook_bytes({"Rules": rows})))
+
+    assert prepared.data == {"10.4": ["Mandatory", True]}
+    assert prepared.note == "조건 시트: 규칙 1개 · 번호가 겹친 1개는 결과 시트 분류를 씀"
+
+
+def test_without_condition_sheet_the_result_sheet_categories_are_used():
+    data = workbook_bytes({"MISRA_Result": [MISRA_HEADER], "Empty": [["Guideline", "Mode"]]})
+
+    assert MISRA.prepare(open_workbook(data)) == Prepared({}, "조건 시트 없음: 결과 시트 분류를 씀")
+
+
+CONDITIONS = {"10.4": ["Advisory", True], "2.2": ["Required", False]}
+
+
+def misra(values: list, context=CONDITIONS):
+    return MISRA.read_row(cells(MISRA_HEADER, values), 9, context)
+
+
+def test_misra_row_takes_the_condition_category_and_notes_a_difference():
+    found = misra(misra_row(category="Required"))
+
+    assert isinstance(found, Finding)
+    assert (found.row, found.color, found.line) == (9, "", 3)
+    assert found.information == "Category: Required"
+    assert (found.category, MISRA.label(found)) == ("Advisory", "Advisory")
+    assert found.note == "분류: 조건 시트 Advisory (결과 시트 Required)"
+
+
+def test_misra_row_of_a_disabled_rule_is_skipped():
+    assert misra(misra_row("2.2 There shall be no dead code")) == "적용 안 함 (조건 시트)"
+
+
+def test_misra_row_without_a_condition_uses_the_result_category():
+    found = misra(misra_row("12.1 Precedence", category="Mandatory"))
+    unknown = misra(misra_row("12.1 Precedence", category=""), context={})
+
+    assert (found.category, found.note) == ("Mandatory", "")
+    assert MISRA.label(unknown) == NO_CATEGORY
+
+
+def test_directive_rows_use_directive_conditions():
+    context = {"4.1": ["Advisory", True], "D4.1": ["Required", False]}
+
+    rule = misra(misra_row("4.1 Escape sequences", group="4 Character sets"), context)
+    directive = misra(misra_row("4.1 Run-time failures", group="Directive 4 Code design"), context)
+
+    assert rule.category == "Advisory"
+    assert directive == "적용 안 함 (조건 시트)"
+
+
+def test_misra_groups_rows_on_the_same_line_of_the_same_file():
+    first = misra_finding()
+    same_line = misra_finding(row=3, check="12.1 Precedence")
+
+    assert MISRA.group_key(first, "src/calc.c") == "src/calc.c:3"
+    assert MISRA.group_key(same_line, "src/calc.c") == "src/calc.c:3"
+    assert MISRA.group_key(misra_finding(line=4), "src/calc.c") == "src/calc.c:4"
+    assert MISRA.group_key(first, "src/other.c") == "src/other.c:3"
+    assert MISRA.group_key(misra_finding(line=None), "src/calc.c") == ""  # 혼자 보낸다
+    assert RTE.group_key(finding(), "src/calc.c") == ""
+
+
+def test_misra_order_colors_and_defaults():
+    assert MISRA.defaults == ("Mandatory", "Required")
+    ranks = [MISRA.rank(label) for label in ("Mandatory", "Required", "Advisory", NO_CATEGORY)]
+    assert ranks == [0, 1, 2, 3]
+    assert (MISRA.color("Mandatory"), MISRA.color("Disapplied")) == ("red", "gray")
+
+
+def test_misra_facts_send_the_category_instead_of_information():
+    facts = dict(MISRA.facts(misra_finding(category="Advisory")))
+
+    assert facts["category"] == "Advisory"
+    assert "information" not in facts
+    assert dict(MISRA.facts(misra_finding(category=NO_CATEGORY)))["category"] == ""
 
 
 def test_kinds_have_unique_names_and_defaults_among_choices():

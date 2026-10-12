@@ -24,6 +24,10 @@ def nothing_to_prepare(workbook: Any) -> Prepared:
     return Prepared()
 
 
+def alone(finding: Finding, file_name: str) -> str:
+    return ""
+
+
 def default_facts(finding: Finding) -> list[tuple[str, str]]:
     """사용자 메시지에 넣을 지적 정보. File과 line은 fixer가 붙인다."""
     return [
@@ -62,6 +66,8 @@ class Kind:
     heading: str  # 사용자 메시지 첫 줄
     prompt_version: int  # 답 처리 방식을 바꾸면 올린다 (캐시 키)
     prepare: Callable[[Any], Prepared] = nothing_to_prepare  # 엑셀 전체에서 작업 정보 읽기
+    # 함께 보낼 행의 기준 (행, 짝지은 소스 이름) → 묶음 키. ''이면 혼자 보낸다
+    group_key: Callable[[Finding, str], str] = alone
     facts: Callable[[Finding], list[tuple[str, str]]] = default_facts
     # 사용자 메시지에서 Finding 목록 뒤, 코드 앞에 붙일 글 (작업 정보, 묶음의 행, 소스로)
     prompt_tail: Callable[[Any, list[Finding], SourceFile], str] = no_tail

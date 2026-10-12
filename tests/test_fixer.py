@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import pytest
 from fake_llm import MODEL, completion, error, make_client, scripted
+from misra_fixtures import misra_finding
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
 from llm_lab.fixer import (
@@ -15,7 +16,7 @@ from llm_lab.fixer import (
     make_request,
     propose_fixes,
 )
-from llm_lab.kinds import RTE
+from llm_lab.kinds import MISRA, RTE
 from llm_lab.sources import decode_source
 
 SOURCE = decode_source("calc.c", CALC_C)
@@ -193,6 +194,24 @@ def test_repeated_code_is_resolved_with_the_reported_line():
 def test_rte_prompt_asks_for_small_edits_and_the_common_answer():
     assert "only the lines you change" in RTE.system_prompt
     assert '"findings" has one entry for each numbered finding' in RTE.system_prompt
+
+
+def test_misra_request_sends_the_category_and_the_same_line_rules():
+    findings = [misra_finding(category="Mandatory"), misra_finding(row=4, check="12.1 Precedence")]
+
+    request = make_request(MISRA, findings, SOURCE)
+
+    prompt = request.messages[1]["content"]
+    assert prompt.startswith(
+        "Polyspace MISRA C:2012 results:\n\nFinding 1:\n- TYPE: MISRA C:2012\n"
+    )
+    assert "- category: Mandatory\n" in prompt
+    assert "Finding 2:\n- TYPE: MISRA C:2012\n- check: 12.1 Precedence\n" in prompt
+    assert "information" not in prompt
+    system = request.messages[0]["content"]
+    assert "All findings in one request are on the same line." in system
+    assert "Mandatory: no deviation is allowed" in system
+    assert "do not cast a composite expression (Rule 10.8)" in system
 
 
 def test_auth_error_is_fatal_and_not_retried():
