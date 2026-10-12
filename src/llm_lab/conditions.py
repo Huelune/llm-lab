@@ -11,8 +11,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
-# 헤더 위에 제목 행이 있어도 찾도록 위에서부터 이만큼 훑는다
-HEADER_SCAN_ROWS = 30
+from llm_lab.polyspace import HEADER_SCAN_ROWS, cell_text, column_name, data_rows
+
 RANGE_HEADERS = {"기준", "기준치", "기준값", "기준 범위", "범위", "threshold", "range"}
 VERDICT_HEADERS = {"판정", "결과", "verdict", "result"}  # 그 밖에 pass나 fail이 든 머리
 NAME_HEADERS = {
@@ -75,22 +75,8 @@ class Metric:
         return cls(data["name"], tuple(Band(**band) for band in data["bands"]))
 
 
-def _text(value: Any) -> str:
-    return " ".join(str(value).split()) if value is not None else ""
-
-
-def _cell(cells: tuple[Any, ...], index: int) -> str:
-    return _text(cells[index]) if index < len(cells) else ""
-
-
 def _squash(title: str) -> str:
     return "".join(ch for ch in title.casefold() if ch.isalnum())
-
-
-def _header(value: Any) -> str:
-    """머리 글 비교용: 대소문자·공백·끝 콜론을 무시하고 '/' 앞뒤 공백을 없앤다."""
-    text = _text(value).casefold().rstrip(": ").strip()
-    return re.sub(r"\s*/\s*", "/", text)
 
 
 def parse_range(text: str) -> tuple[float | None, float | None, bool, bool] | None:
@@ -141,16 +127,9 @@ def verdict_kind(verdict: str) -> str:
     return "middle"
 
 
-@dataclass(frozen=True)
-class _Layout:
-    header: int  # 헤더 행 번호 (1부터)
-    name: int
-    range: int
-    verdict: int
-
-
-def _layout(cells: tuple[Any, ...], number: int) -> _Layout | None:
-    heads = [_header(cell) for cell in cells]
+def _columns(cells: tuple[Any, ...]) -> dict[str, int] | None:
+    """헤더 행이면 name·range·verdict 열 위치, 아니면 None."""
+    heads = [column_name(cell) for cell in cells]
     range_col = next((i for i, h in enumerate(heads) if h in RANGE_HEADERS), None)
     verdict_col = next(
         (i for i, h in enumerate(heads) if h in VERDICT_HEADERS or "pass" in h or "fail" in h),
@@ -165,18 +144,19 @@ def _layout(cells: tuple[Any, ...], number: int) -> _Layout | None:
     name_col = (named or after_no or others or [None])[0]
     if name_col is None:
         return None
-    return _Layout(number, name_col, range_col, verdict_col)
+    return {"name": name_col, "range": range_col, "verdict": verdict_col}
 
 
-def _find(workbook: Any) -> tuple[Any, _Layout] | None:
-    found: list[tuple[Any, _Layout]] = []
+def _find(workbook: Any) -> tuple[Any, int, dict[str, int]] | None:
+    """(시트, 헤더 행 번호, 열 위치)."""
+    found: list[tuple[Any, int, dict[str, int]]] = []
     for sheet in workbook.worksheets:
         if sheet.title.casefold().endswith("_result"):
             continue
         rows = sheet.iter_rows(max_row=HEADER_SCAN_ROWS, values_only=True)
         for number, cells in enumerate(rows, start=1):
-            if layout := _layout(cells, number):
-                found.append((sheet, layout))
+            if columns := _columns(cells):
+                found.append((sheet, number, columns))
                 break
     if not found:
         return None
@@ -188,11 +168,10 @@ def read_metrics(workbook: Any) -> tuple[list[Metric], str]:
     found = _find(workbook)
     if found is None:
         return [], "조건 시트 없음: 결과 시트 Threshold만 씀"
-    sheet, layout = found
     metrics: list[tuple[str, list[Band]]] = []
-    for cells in sheet.iter_rows(min_row=layout.header + 1, values_only=True):
-        name = _cell(cells, layout.name)
-        text, verdict = _cell(cells, layout.range), _cell(cells, layout.verdict)
+    for _, cell in data_rows(*found):
+        name = cell_text(cell("name"))
+        text, verdict = cell_text(cell("range")), cell_text(cell("verdict"))
         if name:
             metrics.append((name, []))
         if not (text or verdict) or not metrics:
