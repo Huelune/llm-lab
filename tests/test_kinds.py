@@ -6,6 +6,11 @@ from llm_lab.kinds import KINDS, MISRA, RTE
 from llm_lab.kinds.misra import NO_CATEGORY, category_word, rule_key
 from llm_lab.polyspace import Finding, Prepared, column_name
 
+# 화면에 나가는 글. 코드의 상수와 따로 적어 두어, 글이 바뀌면 알아챈다
+NO_RULE_NUMBER_NOTE = "규칙 번호를 못 읽음: 결과 시트 분류를 씀"
+NOT_ON_SHEET_NOTE = "조건 시트에서 못 찾은 규칙: 결과 시트 분류를 씀"
+NO_USABLE_RULES_NOTE = "조건 시트에서 쓸 규칙이 없음: 결과 시트 분류를 씀"
+
 
 def cells(header: list, values: list):
     """read_row에 넘기는 칸 읽기 함수: 열 이름 → 그 행의 값 (없는 열이면 None)."""
@@ -108,10 +113,44 @@ def test_rule_numbers_that_collide_are_not_used():
     assert prepared.note == "조건 시트: 규칙 1개 · 번호가 겹친 1개는 결과 시트 분류를 씀"
 
 
+@pytest.mark.parametrize(
+    ("mode", "category"),
+    [
+        ("REQUIRED", "Required"),
+        ("  mandatory ", "Mandatory"),
+        ("Not   required", "Not required"),  # 낱말이 들어 있어도 세 분류 이름과 같지 않다
+        ("advisory only", "Advisory only"),
+        ("disapplied", "Disapplied"),
+    ],
+)
+def test_condition_mode_is_one_of_the_three_words_exactly_or_kept_as_written(mode, category):
+    rows = [["Guideline", "Mode"], ["10.4", mode]]
+
+    prepared = MISRA.prepare(open_workbook(workbook_bytes({"Rules": rows})))
+
+    assert prepared.data == {"10.4": [category, True]}
+
+
 def test_without_condition_sheet_the_result_sheet_categories_are_used():
-    data = workbook_bytes({"MISRA_Result": [MISRA_HEADER], "Empty": [["Guideline", "Mode"]]})
+    data = workbook_bytes({"MISRA_Result": [MISRA_HEADER], "Notes": [["Guideline", "Remarks"]]})
 
     assert MISRA.prepare(open_workbook(data)) == Prepared({}, "조건 시트 없음: 결과 시트 분류를 씀")
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [["Guideline", "Mode"]],
+        [["Guideline", "Mode"], ["see manual", "required"], [None, "advisory"]],
+        [["Guideline", "Mode"], ["10.4", None], ["12.1", "  "]],
+        [["Guideline", "Mode"], [8.1, "required"], [8.10, "advisory"]],
+    ],
+    ids=["header only", "no rule number", "blank mode", "every number repeated"],
+)
+def test_condition_sheet_without_a_usable_rule_is_not_reported_as_missing(rows):
+    prepared = MISRA.prepare(open_workbook(workbook_bytes({"Rules": rows})))
+
+    assert prepared == Prepared({}, NO_USABLE_RULES_NOTE)
 
 
 CONDITIONS = {"10.4": ["Advisory", True], "2.2": ["Required", False]}
@@ -139,8 +178,33 @@ def test_misra_row_without_a_condition_uses_the_result_category():
     found = misra(misra_row("12.1 Precedence", category="Mandatory"))
     unknown = misra(misra_row("12.1 Precedence", category=""), context={})
 
-    assert (found.category, found.note) == ("Mandatory", "")
+    assert (found.category, found.note) == ("Mandatory", NOT_ON_SHEET_NOTE)
     assert MISRA.label(unknown) == NO_CATEGORY
+
+
+def test_misra_row_without_a_rule_number_says_so_and_uses_the_result_category():
+    found = misra(misra_row("See rule 10.3 for details", category="Advisory"))
+
+    assert (found.category, found.note) == ("Advisory", NO_RULE_NUMBER_NOTE)
+
+
+def test_misra_row_of_a_rule_number_dropped_as_repeated_is_not_on_the_sheet():
+    rows = [["Guideline", "Mode"], [8.1, "required"], [8.10, "advisory"], [10.4, "mandatory"]]
+    prepared = MISRA.prepare(open_workbook(workbook_bytes({"Rules": rows})))
+
+    found = misra(misra_row("8.1 Declarations", category="Advisory"), prepared.data)
+
+    assert (found.category, found.note) == ("Advisory", NOT_ON_SHEET_NOTE)
+
+
+@pytest.mark.parametrize("context", [{}, None], ids=["no rules", "no context"])
+@pytest.mark.parametrize("check", ["12.1 Precedence", "See rule 10.3 for details"])
+def test_misra_row_keeps_an_empty_note_when_there_is_no_condition_sheet(check, context):
+    found = misra(misra_row(check, category="Mandatory"), context=context)
+    unknown = misra(misra_row(check, category=""), context=context)
+
+    assert (found.category, found.note) == ("Mandatory", "")
+    assert (MISRA.label(unknown), unknown.note) == (NO_CATEGORY, "")
 
 
 def test_directive_rows_use_directive_conditions():

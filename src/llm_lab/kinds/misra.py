@@ -24,6 +24,9 @@ CATEGORIES = ("Mandatory", "Required", "Advisory")  # MISRA 표준 분류, 중�
 NO_CATEGORY = "분류 없음"
 DISABLED = "적용 안 함 (조건 시트)"
 NO_CONDITIONS = "조건 시트 없음: 결과 시트 분류를 씀"
+NO_RULE_NUMBER = "규칙 번호를 못 읽음: 결과 시트 분류를 씀"
+NOT_ON_SHEET = "조건 시트에서 못 찾은 규칙: 결과 시트 분류를 씀"
+NO_USABLE_RULES = "조건 시트에서 쓸 규칙이 없음: 결과 시트 분류를 씀"
 # 조건 시트 Enabled 칸에서 꺼짐으로 보는 값 (공백 정리, 대소문자 무시). 그 밖은 켜짐이다
 OFF_WORDS = {"no", "n", "off", "false", "0", "disabled"}
 # 글 맨 앞의 규칙 번호: "10.3 …", "Rule 10.3", "Dir 4.1", "D4.1", "Directive 4.1"
@@ -76,16 +79,31 @@ def rule_key(text: str, directive: bool = False) -> str | None:
 
 
 def category_word(text: str) -> str:
-    """'Category: Required', 'required' → 'Required'. 분류 낱말이 없으면 ''."""
+    """결과 시트 information 칸의 분류 낱말: 'Category: Required' → 'Required'. 없으면 ''.
+
+    칸 안에서 낱말을 찾는다. 조건 시트의 Mode는 칸 전체가 분류이므로 mode_category를 쓴다.
+    """
     words = re.findall(r"[a-z]+", text.casefold())
     return next((name for name in CATEGORIES if name.casefold() in words), "")
+
+
+def mode_category(mode: str) -> str:
+    """조건 시트 Mode → 분류.
+
+    세 분류 이름과 같으면(대소문자 무시) 그 이름, 아니면 첫 글자만 대문자로 바꿔 그대로 쓴다.
+    """
+    return next(
+        (name for name in CATEGORIES if name.casefold() == mode.casefold()),
+        mode[:1].upper() + mode[1:],
+    )
 
 
 def read_conditions(workbook: Any) -> Prepared:
     """조건 시트에서 규칙 번호 → [분류, 켜짐]을 읽는다.
 
     조건 시트는 이름이 _Result로 끝나지 않고 guideline·mode 열이 있는 시트다. 이름은 고정하지
-    않고, 여럿이면 이름에 misra가 든 시트를 쓴다.
+    않고, 여럿이면 이름에 misra가 든 시트를 쓴다. 시트가 없으면 NO_CONDITIONS, 시트는 있는데
+    쓸 규칙이 하나도 없으면 NO_USABLE_RULES를 작업 메모로 돌려준다.
     """
     found = []
     for sheet in workbook.worksheets:
@@ -110,12 +128,11 @@ def read_conditions(workbook: Any) -> Prepared:
             # 숫자 칸으로 저장된 "8.10"은 8.1로 읽혀 진짜 8.1과 겹친다.
             # 어느 쪽인지 알 수 없으므로 그 번호는 쓰지 않는다
             repeated.add(key)
-        category = category_word(mode) or mode[:1].upper() + mode[1:]
-        rules[key] = [category, norm(cell("enabled")) not in OFF_WORDS]
+        rules[key] = [mode_category(mode), norm(cell("enabled")) not in OFF_WORDS]
     for key in repeated:
         del rules[key]
     if not rules:
-        return Prepared({}, NO_CONDITIONS)
+        return Prepared({}, NO_USABLE_RULES)
     note = f"조건 시트: 규칙 {len(rules)}개"
     if repeated:
         note += f" · 번호가 겹친 {len(repeated)}개는 결과 시트 분류를 씀"
@@ -126,18 +143,23 @@ def read_row(cell: Cell, row: int, context: Any) -> Finding | str:
     """모든 행이 대상이다. 다만 조건 시트에서 꺼진 규칙의 행은 뺀다.
 
     분류는 조건 시트의 Mode가 먼저고, 없으면 결과 시트 information의 분류 낱말이다.
+    조건 시트에서 규칙을 읽었는데 이 행은 거기서 못 찾았으면, 조건 시트를 못 쓴 이유를 note에
+    남긴다. 조건 시트가 없을 때(규칙이 비었을 때)는 note가 비어 있다.
     """
     check = cell_text(cell("check"))
     group = cell_text(cell("group"))
     information = cell_text(cell("information"))
     key = rule_key(check, DIRECTIVE.search(group) is not None)
-    rule = (context or {}).get(key) if key else None
+    rules = context or {}
+    rule = rules.get(key) if key else None
     if rule is not None and not rule[1]:
         return DISABLED
     reported = category_word(information)
     category = rule[0] if rule is not None else reported or NO_CATEGORY
     note = ""
-    if rule is not None and reported and reported != category:
+    if rule is None and rules:
+        note = NO_RULE_NUMBER if key is None else NOT_ON_SHEET
+    elif rule is not None and reported and reported != category:
         note = f"분류: 조건 시트 {category} (결과 시트 {reported})"
     return Finding(
         row=row,
