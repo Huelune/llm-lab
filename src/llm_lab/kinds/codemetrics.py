@@ -10,9 +10,32 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from llm_lab.cfunction import FunctionRange, function_name, function_range
+from llm_lab.cfunction import (
+    FunctionRange,
+    braces_balanced,
+    function_name,
+    function_range,
+    signature_text,
+    squash_code,
+)
 from llm_lab.conditions import Metric, read_metrics
-from llm_lab.fixer import WHOLE_FILE_MAX_LINES, FixError, split_lines, user_error
+from llm_lab.fixer import (
+    FIX_SCHEMA,
+    NUMBER_PREFIX,
+    WHOLE_FILE_MAX_LINES,
+    Edit,
+    EditMismatch,
+    FixError,
+    FixResult,
+    Request,
+    _minimize,
+    apply_edits,
+    display_diff,
+    read_decisions,
+    share,
+    split_lines,
+    user_error,
+)
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import (
     Finding,
@@ -35,6 +58,23 @@ STOP_WORDS = frozenset({"number", "of", "max", "maximum", "the"})
 
 # 함수를 통째로 다시 써야 하므로 이보다 긴 함수는 LLM에 보내지 않는다 (답이 잘린다)
 FUNCTION_MAX_LINES = 1000
+TIMEOUT = 300.0  # 함수를 통째로 쓰는 답이라 RTE(120초)보다 오래 기다린다
+# 두 번 물어도 쓸 수 없는 답이었을 때 화면 첫 줄에 보일 설명
+CALLING_FIX = "LLM이 부르는 곳 수 지표를 고치려 했습니다."
+SIGNATURE_CHANGED = "LLM이 함수 이름이나 인자를 바꿨습니다."
+COMMENT_DROPPED = "LLM이 함수 위 주석을 지웠습니다."
+BRACES = "LLM 코드의 중괄호 짝이 맞지 않습니다."
+
+# 답 형식: 판단과 이유는 행마다(공통 형식과 같음), 수정은 바꿀 범위를 통째로 대신할 code
+CODE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "findings": FIX_SCHEMA["properties"]["findings"],
+        "code": {"type": "string"},
+    },
+    "required": ["findings", "code"],
+    "additionalProperties": False,
+}
 
 SYSTEM_PROMPT = """\
 You refactor one C function so that its Polyspace code metrics fall within the project's \
@@ -336,6 +376,69 @@ def prompt_tail(context: Any, findings: list[Finding], source: SourceFile) -> st
     return "\n\n".join(parts)
 
 
+def to_results(data: dict[str, Any], request: Request) -> list[FixResult]:
+    """행별 판단과, fix가 하나라도 있으면 code로 만든 묶음 공통 수정.
+
+    모두 no_fix면 code는 버린다.
+    """
+    decisions = read_decisions(data, len(request.findings))
+    pairs = zip(decisions, request.findings, strict=True)
+    for index, ((decision, _), finding) in enumerate(pairs, start=1):
+        if decision == "fix" and metric_words(finding.check) == CALLING:
+            raise EditMismatch(
+                f"Finding {index}은 Number of Calling Functions라 no_fix여야 함",
+                "format",
+                CALLING_FIX,
+            )
+    if all(decision == "no_fix" for decision, _ in decisions):
+        return share(decisions, (), "")
+    edits, diff = _code_edits(data.get("code"), request)
+    return share(decisions, edits, diff)
+
+
+def _code_edits(code: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
+    """바꿀 범위를 code로 바꾼 뒤, 실제로 바뀐 줄만 남긴 수정과 화면용 diff."""
+    source = request.source
+    if not isinstance(code, str) or not code.strip():
+        raise EditMismatch("fix인데 code가 비었음", "format")
+    code = code.replace("\r\n", "\n")
+    filled = [line for line in code.split("\n") if line.strip()]
+    if all(NUMBER_PREFIX.match(line) for line in filled):
+        # 보인 코드의 줄 번호 표시('   57| ')까지 베꼈으면 뗀다
+        code = "\n".join(NUMBER_PREFIX.sub("", line, count=1) for line in code.split("\n"))
+    try:
+        code.encode(source.encoding)
+    except UnicodeEncodeError as exc:
+        char = ord(code[exc.start])
+        raise EditMismatch(
+            f"code에 {source.encoding}로 쓸 수 없는 문자 U+{char:04X}가 있음 - "
+            "ASCII나 한글만 쓰세요",
+            "encoding",
+        ) from None
+    if not braces_balanced(code):
+        raise EditMismatch("code의 중괄호 짝이 맞지 않음", "format", BRACES)
+    text = source.text
+    found = _function(text, request.findings)
+    if signature_text(text, found) not in squash_code(code):
+        raise EditMismatch(
+            "함수 시그니처(이름, 인자, 반환형)가 바뀜 - 그대로 두세요", "format", SIGNATURE_CHANGED
+        )
+    lines = split_lines(text)
+    comment = " ".join("\n".join(lines[found.start - 1 : found.signature - 1]).split())
+    if comment not in " ".join(code.split()):
+        raise EditMismatch(
+            "함수 바로 위 주석이 빠지거나 바뀜 - 그대로 두세요", "format", COMMENT_DROPPED
+        )
+    begin = sum(len(line) + 1 for line in lines[: found.start - 1])
+    end = min(len(text), sum(len(line) + 1 for line in lines[: found.end]))
+    # 범위 끝 줄바꿈과 code 끝 줄바꿈을 맞춘다 (안 맞추면 다음 줄이 붙거나 빈 줄이 생긴다)
+    code = code.rstrip("\n") + ("\n" if text[end - 1 : end] == "\n" else "")
+    edits = tuple(sorted(_minimize(text, Edit(begin, end, code)), key=lambda edit: edit.start))
+    if not edits:
+        raise EditMismatch("수정해도 원본과 같음")
+    return edits, display_diff(source.name, text, apply_edits(text, edits))
+
+
 def stage_of(finding: Finding) -> str:
     return finding.category or UNKNOWN
 
@@ -368,5 +471,8 @@ CODEMETRICS = Kind(
     facts=facts,
     prompt_tail=prompt_tail,
     region=region,
+    answer_schema=CODE_SCHEMA,
+    to_results=to_results,
+    timeout=TIMEOUT,
     auto_select=not_middle,
 )
