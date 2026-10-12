@@ -8,11 +8,12 @@ from __future__ import annotations
 from collections import Counter
 from html import escape
 
+from llm_lab.kinds import KINDS, Kind
 from llm_lab.patch import APPLY_COMMAND, find_conflicts, pick_without_conflicts
 from llm_lab.sources import base_name
-from llm_lab.store import Job, Row
+from llm_lab.store import USER_STOP, Job, Row
 
-APP_NAME = "Polyspace RTE 수정 제안"
+APP_NAME = "Polyspace 수정 제안"
 JOB_STATES = {"running": "처리 중", "done": "완료", "stopped": "멈춤"}
 JOB_BADGES = {"running": "blue", "done": "green", "stopped": "red"}
 ROW_STATES = {
@@ -103,6 +104,10 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .progress div { height: 100%; background: var(--brand); }
 .notice { background: var(--red-bg); color: var(--red); border-radius: 6px; padding: 6px 10px;
   margin: 6px 0; }
+.notice.paused { background: var(--gray-bg); color: var(--text); }
+.kind { margin: 2px 0; }
+.choices { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 6px 22px;
+  font-size: 13px; }
 .retry { margin: 6px 0 10px; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 8px; }
 .tabs button { font: inherit; font-weight: 700; color: var(--muted); background: none;
@@ -120,10 +125,14 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .list td.summary { color: var(--muted); max-width: 520px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .list tr.problem td.summary { color: var(--amber); }
+.list td.check { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .later { color: #cfd8e8; font-size: 12px; }
 .item { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--line);
   border-radius: 8px; margin-bottom: 8px; }
-.item.Red { border-left-color: var(--red); } .item.Orange { border-left-color: #f59e0b; }
+.item.band-red { border-left-color: var(--red); }
+.item.band-orange { border-left-color: #f59e0b; }
+.item.band-gray { border-left-color: #b9c3d3; }
 .item .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; }
 .item .check { font-weight: 700; }
 .item .where { color: var(--muted); }
@@ -134,6 +143,7 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .reason { background: #f3f7fe; border-left: 3px solid var(--brand); padding: 5px 9px;
   border-radius: 4px; margin: 0 0 6px; }
 .excluded { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.note { color: var(--amber); font-size: 12px; margin: 0 0 6px; }
 .problem-box { background: var(--amber-bg); border-left: 3px solid #e0a400; padding: 6px 10px;
   border-radius: 4px; }
 .problem-box .what { font-weight: 700; color: var(--amber); }
@@ -227,6 +237,14 @@ document.querySelectorAll('[data-copy]').forEach(button => button.addEventListen
     setTimeout(() => { button.textContent = '복사'; }, 1500);
   });
 }));
+// 새 분석: 고른 종류의 대상 체크 상자만 보인다
+const choiceBoxes = [...document.querySelectorAll('[data-choices]')];
+function showChoices(name) {
+  choiceBoxes.forEach(box => { box.hidden = box.dataset.choices !== name; });
+}
+document.querySelectorAll('input[name=kind]').forEach(radio => {
+  radio.addEventListener('change', () => showChoices(radio.value));
+});
 // 폴더 찾기: 서버가 같은 PC에서 윈도우 폴더 선택 창을 띄우고 고른 경로를 돌려준다
 const pick = document.getElementById('pick-folder');
 if (pick) pick.addEventListener('click', async () => {
@@ -278,8 +296,15 @@ def error_page(title: str, message: str) -> str:
     return page(title, body)
 
 
-def _badge(color: str, text: str) -> str:
-    return f'<span class="badge {color}">{escape(text)}</span>'
+def _badge(color: str, text: str, title: str = "") -> str:
+    tip = f' title="{escape(title)}"' if title else ""
+    return f'<span class="badge {color}"{tip}>{escape(text)}</span>'
+
+
+def _label_counts(kind: Kind, rows: list[Row]) -> list[tuple[str, int]]:
+    """배지 글자(대상)별 행 수. 중요한 대상부터."""
+    counts = Counter(kind.label(row.finding) for row in rows)
+    return sorted(counts.items(), key=lambda item: (kind.rank(item[0]), item[0]))
 
 
 def _progress(rows: list[Row]) -> tuple[int, int]:
@@ -301,17 +326,46 @@ def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
         return '<div class="card table"><p class="empty">아직 작업이 없습니다.</p></div>'
     lines = []
     for job, rows in items:
-        colors = Counter(row.finding.color for row in rows)
+        kind = KINDS[job.kind]
+        labels = " ".join(
+            _badge(kind.color(label), f"{label} {count}")
+            for label, count in _label_counts(kind, rows)
+        )
         when = job.created_at[5:16].replace("T", " ")
         lines.append(
             f"<tr><td>{job.id}</td><td>{escape(when)}</td><td>{escape(job.excel_name)}</td>"
-            f"<td>{_badge('red', str(colors['Red']))} {_badge('orange', str(colors['Orange']))}"
-            f"</td><td>{_job_badge(job, rows)}</td>"
+            f"<td>{escape(kind.title)} {labels}</td><td>{_job_badge(job, rows)}</td>"
             f'<td><a href="/results/{job.id}">결과 보기 →</a></td></tr>'
         )
     return (
         '<div class="card table"><table><tr><th>번호</th><th>시각</th><th>엑셀</th>'
-        "<th>Red / Orange</th><th>상태</th><th></th></tr>" + "".join(lines) + "</table></div>"
+        "<th>종류 · 대상</th><th>상태</th><th></th></tr>" + "".join(lines) + "</table></div>"
+    )
+
+
+def _kind_step() -> str:
+    """분석할 시트(종류) 라디오와 종류별 대상 체크 상자. 처음에는 첫 종류(RTE)를 고른다."""
+    blocks = []
+    for number, kind in enumerate(KINDS.values()):
+        first = number == 0
+        boxes = "".join(
+            f'<label><input type="checkbox" name="choice" '
+            f'value="{escape(kind.name)}:{escape(label)}"'
+            f"{' checked' if label in kind.defaults else ''}> {escape(label)}</label>"
+            for label in kind.choices
+        )
+        blocks.append(
+            f'<div class="kind"><label><input type="radio" name="kind" '
+            f'value="{escape(kind.name)}"{" checked" if first else ""}> '
+            f"<b>{escape(kind.title)}</b></label>"
+            f'<div class="choices" data-choices="{escape(kind.name)}"{"" if first else " hidden"}>'
+            f"{boxes}</div></div>"
+        )
+    return (
+        '<div class="step"><div class="num">3</div><div><h3>분석할 시트</h3>'
+        '<p class="hint">고른 종류의 결과 시트를 읽고, 체크한 대상만 LLM에 보냅니다.</p>'
+        + "".join(blocks)
+        + "</div></div>"
     )
 
 
@@ -320,7 +374,7 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
     form = (
         '<form class="card" method="post" action="/results" enctype="multipart/form-data">'
         '<div class="step"><div class="num">1</div><div><h3>Polyspace 결과 엑셀</h3>'
-        '<p class="hint">이름이 _Result로 끝나는 RTE 시트가 있는 .xlsx 파일 하나</p>'
+        '<p class="hint">이름이 _Result로 끝나는 결과 시트가 있는 .xlsx 파일 하나</p>'
         '<input type="file" name="excel" accept=".xlsx" required></div></div>'
         '<div class="step"><div class="num">2</div><div><h3>소스 폴더</h3>'
         '<p class="hint">소스 코드가 들어 있는 최상위 폴더. "폴더 찾기…"로 고르거나 경로를 '
@@ -331,13 +385,14 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
         '<p class="hint" id="pick-note"></p>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
-        '<div class="step"><div class="num">3</div><div><h3>분석 시작</h3>'
+        + _kind_step()
+        + '<div class="step"><div class="num">4</div><div><h3>분석 시작</h3>'
         '<p class="hint">결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 있습니다</p>'
         '<button class="btn primary" type="submit">분석 시작</button></div></div></form>'
     )
     body = (
         "<h1>새 분석</h1>"
-        '<p class="sub">Polyspace 결과 엑셀과 소스 폴더를 주면 Red·Orange 행마다 '
+        '<p class="sub">Polyspace 결과 엑셀과 소스 폴더를 주면 고른 시트의 행마다 '
         "LLM이 수정안을 만듭니다.</p>"
         + form
         + '<h2>최근 작업 <a href="/results" style="font-size:12px;font-weight:400">'
@@ -404,8 +459,11 @@ def _file_label(job: Job, row: Row) -> str:
     return base_name(row.finding.file)
 
 
-def _selection(rows: list[Row]) -> tuple[dict[int, set[int]], set[int]]:
-    """수정 행끼리의 충돌과, "수정 모두 선택" 때 고를 행 (Red 먼저, 그다음 엑셀 행 순)."""
+def _selection(kind: Kind, rows: list[Row]) -> tuple[dict[int, set[int]], set[int], set[int]]:
+    """수정 행끼리의 충돌, "수정 모두 선택" 때 고를 행, 종류가 자동으로 고르지 않는 수정 행.
+
+    고르는 순서는 중요한 대상 먼저, 그다음 엑셀 행 순서다.
+    """
     by_id = {row.id: row for row in rows}
     fixable = {
         row.id: (row.file_name or "", list(row.result.edits))
@@ -413,11 +471,12 @@ def _selection(rows: list[Row]) -> tuple[dict[int, set[int]], set[int]]:
         if row.file_name and row.result is not None and row.result.decision == "fix"
     }
     conflicts = find_conflicts(fixable)
+    manual = {row_id for row_id in fixable if not kind.auto_select(by_id[row_id].finding)}
     order = sorted(
-        fixable,
-        key=lambda row_id: (by_id[row_id].finding.color != "Red", by_id[row_id].finding.row),
+        (row_id for row_id in fixable if row_id not in manual),
+        key=lambda row_id: (kind.priority(by_id[row_id].finding), by_id[row_id].finding.row),
     )
-    return conflicts, pick_without_conflicts(order, conflicts)
+    return conflicts, pick_without_conflicts(order, conflicts), manual
 
 
 def _partner(row: Row, conflicts: dict[int, set[int]], picked: set[int], by_id: dict[int, Row]):
@@ -426,15 +485,13 @@ def _partner(row: Row, conflicts: dict[int, set[int]], picked: set[int], by_id: 
     return by_id[chosen[0]] if chosen else None
 
 
-def _chips(job: Job, rows: list[Row]) -> str:
-    colors = Counter(row.finding.color for row in rows)
+def _chips(kind: Kind, job: Job, rows: list[Row]) -> str:
     kinds = Counter(_kind(row) for row in rows)
     parts = [
-        f"<span>{_badge('red', 'Red')} <b>{colors['Red']}</b></span>",
-        f"<span>{_badge('orange', 'Orange')} <b>{colors['Orange']}</b></span>",
-        _badge("gray", f"제외 {job.skipped}"),
-        '<span class="sep">|</span>',
+        f"<span>{_badge(kind.color(label), label)} <b>{count}</b></span>"
+        for label, count in _label_counts(kind, rows)
     ]
+    parts += [_badge("gray", f"제외 {job.skipped}"), '<span class="sep">|</span>']
     for kind in ("fix", "nofix", "problem", "waiting"):
         if kind != "waiting" or kinds[kind]:
             label = _badge(KIND_BADGES[kind], KIND_LABELS[kind])
@@ -497,6 +554,7 @@ def _status_badge(row: Row) -> str:
 
 
 def _overview_row(
+    sheet_kind: Kind,
     job: Job,
     row: Row,
     finished: bool,
@@ -531,11 +589,12 @@ def _overview_row(
         title = ROW_STATES.get(row.state, row.state)
         summary_html = escape(title)
     line = finding.line if finding.line is not None else "?"
-    color = _badge("red" if finding.color == "Red" else "orange", finding.color)
+    label = sheet_kind.label(finding)
+    badge = _badge(sheet_kind.color(label), label, finding.note)
     css = ' class="problem"' if kind == "problem" else ""
     return (
-        f'<tr data-kind="{kind}"{css}><td>{box}</td><td>{finding.row}</td><td>{color}</td>'
-        f"<td>{escape(finding.check)}</td>"
+        f'<tr data-kind="{kind}"{css}><td>{box}</td><td>{finding.row}</td><td>{badge}</td>'
+        f'<td class="check" title="{escape(finding.check)}">{escape(finding.check)}</td>'
         f'<td class="mono">{escape(_file_label(job, row))}:{line}</td>'
         f"<td>{_status_badge(row)}</td>"
         f'<td class="summary" title="{escape(title)}">{summary_html}</td>'
@@ -543,9 +602,11 @@ def _overview_row(
     )
 
 
-def _overview(job: Job, rows: list[Row], finished: bool, conflicts, picked) -> str:
+def _overview(kind: Kind, job: Job, rows: list[Row], finished: bool, conflicts, picked) -> str:
     by_id = {row.id: row for row in rows}
-    lines = "".join(_overview_row(job, row, finished, conflicts, picked, by_id) for row in rows)
+    lines = "".join(
+        _overview_row(kind, job, row, finished, conflicts, picked, by_id) for row in rows
+    )
     return (
         _groups(job, rows) + '<div class="card table list"><table><tr><th style="width:26px"></th>'
         '<th style="width:44px">행</th><th style="width:64px">종류</th><th>검사</th>'
@@ -555,27 +616,36 @@ def _overview(job: Job, rows: list[Row], finished: bool, conflicts, picked) -> s
 
 
 def _detail_card(
+    kind: Kind,
     job: Job,
     row: Row,
     finished: bool,
     conflicts: dict[int, set[int]],
     picked: set[int],
     by_id: dict[int, Row],
+    groups: dict[str, list[Row]],
 ) -> str:
     finding = row.finding
+    label = kind.label(finding)
+    members = groups.get(row.grp, []) if row.grp else []
     where = f"{_file_label(job, row)}:{finding.line if finding.line is not None else '?'}"
     if finding.function:
         where += f" · {finding.function}()"
     mirror = ""
     if finished and row.id in conflicts:
         mirror = f'<label class="pick"><input type="checkbox" data-mirror="{row.id}"> 적용</label>'
-    color = _badge("red" if finding.color == "Red" else "orange", finding.color)
+    badge = _badge(kind.color(label), label)
     head = (
-        f'<div class="head">{color}<span class="check">{escape(finding.check)}</span>'
+        f'<div class="head">{badge}<span class="check">{escape(finding.check)}</span>'
         f'<span class="where mono">{escape(where)}</span>'
         f'<div class="right">{_status_badge(row)}{mirror}</div></div>'
     )
     body = [f'<p class="detail">엑셀 {finding.row}행 · {escape(finding.detail)}</p>']
+    if finding.note:
+        body.append(f'<p class="note">{escape(finding.note)}</p>')
+    others = [str(member.finding.row) for member in members if member.id != row.id]
+    if others:
+        body.append(f'<p class="excluded">함께 보낸 행: 엑셀 {", ".join(others)}행</p>')
     if row.result is not None:
         partner = _partner(row, conflicts, picked, by_id) if row.id not in picked else None
         if row.result.decision == "fix" and partner is not None:
@@ -585,13 +655,23 @@ def _detail_card(
                 "다시 분석하면 남은 문제만 다시 고칩니다.</p>"
             )
         body.append(f'<div class="reason">{escape(row.result.reason)}</div>')
-        if row.result.diff:
+        # 같은 묶음의 수정 행은 수정이 똑같으므로 diff는 묶음의 첫 수정 행에만 보인다
+        first_fix = next(
+            (m for m in members if m.result is not None and m.result.decision == "fix"), None
+        )
+        if first_fix is not None and first_fix.id != row.id:
+            body.append(
+                f'<p class="excluded">같은 묶음의 수정입니다 '
+                f"(엑셀 {first_fix.finding.row}행과 같음).</p>"
+            )
+        elif row.result.diff:
             body.append(_diff(row.result.diff))
     elif _kind(row) == "problem":
         summary, action, detail = _explain(row)
         more = ""
         if row.state == "error":
-            log = f"대화 기록: private/llm-logs/ 안의 …_job{job.id}_row{finding.row}.md"
+            log_row = min((m.finding.row for m in members), default=finding.row)
+            log = f"대화 기록: private/llm-logs/ 안의 …_job{job.id}_row{log_row}.md"
             text = "\n".join(part for part in (detail, log) if part)
             more = f"<details><summary>자세히 (개발자용)</summary>{escape(text)}</details>"
         todo = f'<div class="todo">할 일: {escape(action)}</div>' if action else ""
@@ -599,7 +679,7 @@ def _detail_card(
             f'<div class="problem-box"><div class="what">{escape(summary)}</div>{todo}{more}</div>'
         )
     return (
-        f'<div class="item {finding.color}" id="row-{row.id}" data-kind="{_kind(row)}">'
+        f'<div class="item band-{kind.color(label)}" id="row-{row.id}" data-kind="{_kind(row)}">'
         f'{head}<div class="body">{"".join(body)}</div></div>'
     )
 
@@ -624,48 +704,69 @@ def _howto(base: str | None) -> str:
 
 
 def job_page(job: Job, rows: list[Row], base: str | None) -> str:
+    kind = KINDS[job.kind]
     finished = job.state != "running"
     when = job.created_at[5:16].replace("T", " ")
     body = (
         f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
-        f'<p class="sub">시트 {escape(job.sheet)} · {escape(when)} 시작'
+        f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
         + "</p>"
     )
+    if job.note:
+        body += f'<p class="sub">{escape(job.note)}</p>'
     if job.state == "running":
         done, total = _progress(rows)
         percent = round(done * 100 / total) if total else 100
         body += (
             f'<div class="progress"><div style="width:{percent}%"></div></div>'
             f'<p class="sub">{done}/{total} 처리 · 5초마다 새로 고칩니다</p>'
+            f'<form class="retry" method="post" action="/results/{job.id}/stop">'
+            '<button class="btn plain" type="submit">멈춤</button></form>'
         )
-    if job.state == "stopped":
+    if job.state == "stopped" and job.message == USER_STOP:
+        body += (
+            '<div class="notice paused">멈춘 작업입니다. '
+            "'이어서 처리'를 누르면 남은 행을 처리합니다.</div>"
+        )
+    elif job.state == "stopped":
         body += f'<div class="notice">작업이 멈췄습니다: {escape(job.message)}</div>'
     if finished and (job.state == "stopped" or any(row.state == "error" for row in rows)):
+        label = "이어서 처리" if job.state == "stopped" else "오류 행 다시 시도"
         body += (
             f'<form class="retry" method="post" action="/results/{job.id}/retry">'
-            '<button class="btn plain" type="submit">오류 행 다시 시도</button></form>'
+            f'<button class="btn plain" type="submit">{label}</button></form>'
         )
-    body += _chips(job, rows)
+    body += _chips(kind, job, rows)
     title = f"작업 {job.id} 결과 · {job.excel_name}"
     if not rows:
-        body += (
-            '<div class="card"><p class="empty">고칠 행 없음 (Red/Orange 행이 없습니다)</p></div>'
-        )
+        body += '<div class="card"><p class="empty">분석할 행이 없습니다.</p></div>'
         return page(title, body, refresh=not finished)
-    conflicts, picked = _selection(rows) if finished else ({}, set())
+    conflicts, picked, manual = _selection(kind, rows) if finished else ({}, set(), set())
     by_id = {row.id: row for row in rows}
-    cards = "".join(_detail_card(job, row, finished, conflicts, picked, by_id) for row in rows)
+    groups: dict[str, list[Row]] = {}
+    for row in rows:
+        if row.grp:
+            groups.setdefault(row.grp, []).append(row)
+    for members in groups.values():
+        members.sort(key=lambda member: member.finding.row)
+    cards = "".join(
+        _detail_card(kind, job, row, finished, conflicts, picked, by_id, groups) for row in rows
+    )
+    overview = _overview(kind, job, rows, finished, conflicts, picked)
     panels = (
         '<div class="tabs"><button type="button" data-tab="overview" class="on">한눈에 보기'
         '</button><button type="button" data-tab="detail">자세히 보기 (diff)</button></div>'
         + _filters(rows)
-        + f'<div data-panel="overview">{_overview(job, rows, finished, conflicts, picked)}</div>'
+        + f'<div data-panel="overview">{overview}</div>'
         + f'<div data-panel="detail" hidden>{cards}</div>'
     )
     if finished and conflicts:
-        later = len(conflicts) - len(picked)
+        later = len(conflicts) - len(picked) - len(manual)
         note = f'<span class="later">같은 줄 겹침으로 {later}개는 다음 차례</span>' if later else ""
+        if manual:
+            hint = f"자동으로 고르지 않은 수정 {len(manual)}개는 직접 고르세요"
+            note += f'<span class="later">{hint}</span>'
         body += (
             f'<form method="post" action="/results/{job.id}/fixes.patch">{panels}'
             f"{_howto(base)}"

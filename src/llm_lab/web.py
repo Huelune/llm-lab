@@ -1,9 +1,10 @@
-"""Polyspace RTE 수정 제안 웹 서비스 (llm-fix-server)."""
+"""Polyspace 수정 제안 웹 서비스 (llm-fix-server)."""
 
 from __future__ import annotations
 
 import argparse
 import io
+import json
 import socket
 import sys
 import threading
@@ -21,10 +22,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
 from llm_lab.folder_picker import PickerError, pick_folder
-from llm_lab.kinds import RTE
+from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
-from llm_lab.polyspace import Finding, SheetError, read_sheet
+from llm_lab.polyspace import Finding, Sheet, SheetError, read_sheet
 from llm_lab.sources import Match, load_from_folder
 from llm_lab.store import Job, NewRow, Row, Store, StoreError
 from llm_lab.worker import Worker, daemon_pool
@@ -38,10 +39,20 @@ RECENT_JOBS = 10  # 첫 화면에 보여줄 최근 작업 수
 LISTED_JOBS = 100  # 작업 목록 화면에 보여줄 작업 수
 
 
-def _new_row(finding: Finding, match: Match) -> NewRow:
+def _new_row(kind: Kind, finding: Finding, match: Match) -> NewRow:
     if match.source is None:
         return NewRow(finding, None, "no_source", match.reason)
-    return NewRow(finding, match.source.name, "pending")
+    name = match.source.name
+    return NewRow(finding, name, "pending", grp=kind.group_key(finding, name))
+
+
+def _job_note(sheet: Sheet) -> str:
+    """작업 메모 한 줄: 종류가 엑셀 전체에서 읽은 메모와, 뺀 행의 이유별 개수."""
+    parts = [sheet.prepared.note] if sheet.prepared.note else []
+    if sheet.skipped:
+        skipped = ", ".join(f"{reason} {count}" for reason, count in sheet.skipped.items())
+        parts.append(f"제외: {skipped}")
+    return " · ".join(parts)
 
 
 def _base(job: Job, rows: list[Row]) -> str | None:
@@ -61,6 +72,7 @@ def _row_json(row: Row) -> dict[str, Any]:
         "id": row.id,
         "state": row.state,
         "error": row.error,
+        "group": row.grp,
         "finding": asdict(row.finding),
         "decision": row.result.decision if row.result else None,
         "reason": row.result.reason if row.result else None,
@@ -112,8 +124,22 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
 
     @app.post("/results")
     def create_job(
-        excel: Annotated[UploadFile, File()], source_dir: Annotated[str, Form()] = ""
+        excel: Annotated[UploadFile, File()],
+        source_dir: Annotated[str, Form()] = "",
+        kind: Annotated[str, Form()] = "rte",
+        choice: Annotated[list[str] | None, Form()] = None,
     ) -> Response:
+        sheet_kind = KINDS.get(kind)
+        if sheet_kind is None:
+            message = f"분석할 시트 종류를 다시 고르세요: {kind}"
+            return HTMLResponse(error_page("알 수 없는 종류", message), status_code=400)
+        # 체크 상자 값은 "종류:대상"이다. 고른 종류의 것만, 그 종류의 대상인 것만 쓴다
+        prefix = f"{sheet_kind.name}:"
+        picked = {value.removeprefix(prefix) for value in choice or [] if value.startswith(prefix)}
+        selected = picked & set(sheet_kind.choices)
+        if sheet_kind.choices and not selected:
+            message = "분석할 대상을 하나 이상 고르세요."
+            return HTMLResponse(error_page("분석할 대상이 없음", message), status_code=400)
         root = _source_root(source_dir)
         if root is None or not root.is_dir():
             message = (
@@ -121,18 +147,26 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             ) + " 탐색기 주소창의 경로를 그대로 붙여넣으면 됩니다."
             return HTMLResponse(error_page("소스 폴더를 찾을 수 없음", message), status_code=400)
         try:
-            sheet = read_sheet(io.BytesIO(excel.file.read()), RTE, RTE.defaults)
+            sheet = read_sheet(io.BytesIO(excel.file.read()), sheet_kind, selected)
         except SheetError as exc:
             return HTMLResponse(error_page("엑셀을 읽을 수 없음", str(exc)), status_code=400)
         # 엑셀에 나온 파일만 폴더에서 찾아 읽는다. 읽은 내용은 작업에 함께 저장해
         # 나중에 소스가 바뀌어도 결과와 패치는 분석 당시 기준으로 남는다.
         matches, files = load_from_folder(root, [f.file for f in sheet.findings])
-        rows = [_new_row(finding, matches[finding.file]) for finding in sheet.findings]
+        rows = [_new_row(sheet_kind, finding, matches[finding.file]) for finding in sheet.findings]
         used = {row.file_name for row in rows if row.file_name}
         files = [source for source in files if source.name in used]
-        skipped = sum(sheet.skipped.values())
+        data = sheet.prepared.data
         job_id = store.create_job(
-            excel.filename or "", sheet.sheet, skipped, files, rows, source_root=str(root)
+            excel.filename or "",
+            sheet.sheet,
+            sum(sheet.skipped.values()),
+            files,
+            rows,
+            source_root=str(root),
+            kind=sheet_kind.name,
+            note=_job_note(sheet),
+            context="" if data is None else json.dumps(data, ensure_ascii=False),
         )
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
@@ -176,6 +210,12 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             headers={"Content-Disposition": 'attachment; filename="fixes.patch"'},
         )
 
+    @app.post("/results/{job_id}/stop")
+    def stop(job_id: int) -> Response:
+        job_or_404(job_id)
+        store.stop(job_id)
+        return RedirectResponse(f"/results/{job_id}", status_code=303)
+
     @app.post("/results/{job_id}/retry")
     def retry(job_id: int) -> Response:
         job_or_404(job_id)
@@ -209,7 +249,7 @@ def open_when_ready(url: str, port: int, timeout: float = 15.0) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="llm-fix-server", description="Polyspace RTE 수정 제안 서비스"
+        prog="llm-fix-server", description="Polyspace 수정 제안 서비스"
     )
     parser.add_argument("--port", type=int, default=8000, help="접속 포트 (기본 8000)")
     parser.add_argument(

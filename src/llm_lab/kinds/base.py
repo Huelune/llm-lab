@@ -28,6 +28,10 @@ def alone(finding: Finding, file_name: str) -> str:
     return ""
 
 
+def always(finding: Finding) -> bool:
+    return True
+
+
 def default_facts(finding: Finding) -> list[tuple[str, str]]:
     """사용자 메시지에 넣을 지적 정보. File과 line은 fixer가 붙인다."""
     return [
@@ -75,6 +79,7 @@ class Kind:
     answer_schema: Mapping[str, Any] = field(default_factory=lambda: FIX_SCHEMA)
     to_results: Callable[[dict[str, Any], Request], list[FixResult]] = edits_results
     timeout: float = FIX_TIMEOUT  # LLM 대기 시간(초)
+    auto_select: Callable[[Finding], bool] = always  # "수정 모두 선택"이 고를 행인지
 
     def rank(self, label: str) -> int:
         """중요한 대상일수록 작은 값. choices에 없는 배지 글자는 맨 뒤다."""

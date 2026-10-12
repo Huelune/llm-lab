@@ -1,16 +1,31 @@
+import json
 import socket
 import sqlite3
 import time
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 from fake_llm import MODEL, error, make_client, scripted
 from fastapi.testclient import TestClient
-from rte_fixtures import CALC_C, finding, fix_answer, rte_excel, rte_row
+from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_row
+from rte_fixtures import (
+    CALC_C,
+    DIVIDE_FIX,
+    REASON,
+    RTE_HEADER,
+    answer,
+    finding,
+    fix_answer,
+    rte_excel,
+    rte_row,
+    workbook_bytes,
+)
 
 from llm_lab import web
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.folder_picker import PickerError
+from llm_lab.kinds import KINDS, RTE
 from llm_lab.sources import decode_source
 from llm_lab.store import NewRow, Store
 from llm_lab.worker import Worker
@@ -37,9 +52,9 @@ def source_folder(tmp_path) -> Path:
     return root
 
 
-def upload(client, excel: bytes, folder):
+def upload(client, excel: bytes, folder, kind="rte", choices=("rte:Red", "rte:Orange")):
     files = [("excel", ("rte.xlsx", excel))]
-    data = {"source_dir": str(folder)}
+    data = {"source_dir": str(folder), "kind": kind, "choice": list(choices)}
     return client.post("/results", files=files, data=data, follow_redirects=False)
 
 
@@ -55,7 +70,7 @@ def test_home_shows_upload_steps_and_menu(tmp_path):
 
     page = client.get("/").text
 
-    assert "<title>새 분석 · Polyspace RTE 수정 제안</title>" in page
+    assert "<title>새 분석 · Polyspace 수정 제안</title>" in page
     assert 'href="/results">작업 목록</a>' in page
     assert 'name="excel"' in page
     assert 'name="source_dir"' in page
@@ -81,7 +96,9 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert response.status_code == 303
     assert response.headers["location"] == "/results/1"
     page = client.get("/results/1").text
-    assert "<title>작업 1 결과 · rte.xlsx · Polyspace RTE 수정 제안</title>" in page
+    assert "<title>작업 1 결과 · rte.xlsx · Polyspace 수정 제안</title>" in page
+    assert "RTE · 시트 RTE_Result" in page
+    assert "제외: Gray Check 1" in page  # 작업 메모
     assert '<span class="badge green">완료</span>' in page
     for color, label in [("red", "Red"), ("orange", "Orange"), ("blue", "수정")]:
         assert f'<span class="badge {color}">{label}</span> <b>1</b>' in page
@@ -105,7 +122,8 @@ def test_result_json(tmp_path):
 
     data = client.get("/api/results/1").json()
 
-    assert data["state"] == "done"
+    assert (data["state"], data["kind"], data["note"]) == ("done", "rte", "제외: Gray Check 1")
+    assert [row["group"] for row in data["rows"]] == ["", ""]
     assert data["base_folder"] == str(folder)
     assert [(r["state"], r["decision"]) for r in data["rows"]] == [
         ("done", "fix"),
@@ -119,10 +137,13 @@ def test_results_list_page(tmp_path):
 
     page = client.get("/results").text
 
-    assert "<title>작업 목록 · Polyspace RTE 수정 제안</title>" in page
+    assert "<title>작업 목록 · Polyspace 수정 제안</title>" in page
     assert 'href="/results/1">결과 보기' in page
     assert "rte.xlsx" in page
-    assert '<span class="badge red">1</span> <span class="badge orange">1</span>' in page
+    assert (
+        'RTE <span class="badge red">Red 1</span> <span class="badge orange">Orange 1</span>'
+        in (page)
+    )
     assert '<span class="badge green">완료</span>' in page
 
 
@@ -191,6 +212,7 @@ def test_stopped_job_can_be_retried(tmp_path):
     assert '<span class="badge red">멈춤</span>' in page
     assert "[인증]" in page
     assert 'action="/results/1/retry"' in page
+    assert ">이어서 처리</button>" in page
 
     response = client.post("/results/1/retry", follow_redirects=False)
 
@@ -211,8 +233,134 @@ def test_excel_without_red_or_orange_rows(tmp_path):
 
     upload(client, rte_excel(rte_row("Gray Check")), source_folder(tmp_path))
 
-    assert "고칠 행 없음" in client.get("/results/1").text
+    assert "분석할 행이 없습니다" in client.get("/results/1").text
     assert sent == []
+
+
+def test_home_offers_each_kind_with_its_targets(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+
+    assert 'name="kind" value="rte" checked' in page
+    assert 'name="kind" value="misra">' in page
+    assert 'name="choice" value="rte:Red" checked' in page
+    assert 'name="choice" value="misra:Mandatory" checked' in page
+    assert 'name="choice" value="misra:Advisory">' in page  # Advisory는 처음에 꺼져 있다
+    assert '<div class="choices" data-choices="misra" hidden>' in page
+
+
+def test_unknown_kind_or_no_target_is_rejected(tmp_path):
+    client, _, sent = make_service(tmp_path)
+    folder = source_folder(tmp_path)
+
+    assert upload(client, EXCEL, folder, kind="cobol").status_code == 400
+    response = upload(client, EXCEL, folder, choices=["misra:Required"])  # RTE 대상이 없다
+
+    assert response.status_code == 400
+    assert "분석할 대상을 하나 이상 고르세요." in response.text
+    assert sent == []
+
+
+MISRA_EXCEL = workbook_bytes(
+    {
+        "RTE_Result": [RTE_HEADER, rte_row()],
+        "MISRA_Result": [
+            MISRA_HEADER,
+            misra_row("10.4 Operands", category="Advisory"),  # 조건 시트로 Required
+            misra_row("21.3 Memory", category="Mandatory"),  # 같은 줄 → 함께 보낸다
+            misra_row("2.2 Dead code"),  # 조건 시트에서 꺼짐
+            misra_row("12.1 Precedence", category="Required"),  # 조건 시트로 Advisory → 안 고름
+        ],
+        "Rules": CONDITION_ROWS,
+    }
+)
+
+
+def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
+    reply = answer(("fix", REASON), ("fix", "같은 수정으로 함께 고침"), edits=[DIVIDE_FIX])
+    client, store, sent = make_service(tmp_path, reply)
+    choices = ["misra:Mandatory", "misra:Required", "rte:Red"]
+
+    response = upload(client, MISRA_EXCEL, source_folder(tmp_path), "misra", choices)
+
+    assert response.status_code == 303
+    assert len(sent) == 1  # 같은 줄의 두 행을 한 번에 보냈다
+    job = store.job(1)
+    assert (job.kind, job.sheet) == ("misra", "MISRA_Result")
+    assert (
+        job.note == "조건 시트: 규칙 5개 · 제외: 적용 안 함 (조건 시트) 1, Advisory (고르지 않음) 1"
+    )
+    assert json.loads(job.context)["10.4"] == ["Required", True]
+    page = client.get("/results/1").text
+    assert "MISRA C:2012 · 시트 MISRA_Result" in page
+    assert '<span class="badge red">Mandatory</span> <b>1</b>' in page
+    assert '<span class="badge orange">Required</span> <b>1</b>' in page
+    assert "분류: 조건 시트 Required (결과 시트 Advisory)" in page
+    assert "함께 보낸 행: 엑셀 3행" in page and "함께 보낸 행: 엑셀 2행" in page
+    assert page.count('<pre class="diff">') == 1  # 같은 묶음의 diff는 첫 행에만
+    assert "같은 묶음의 수정입니다 (엑셀 2행과 같음)." in page
+    assert "MISRA C:2012 <span" in client.get("/results").text
+
+    patch = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
+
+    assert patch.status_code == 200  # 같은 수정은 하나로 합쳐 겹침이 아니다
+    assert patch.content.count(b"+    return (b != 0) ? a / b : 0;\n") == 1
+
+
+def test_running_job_can_be_stopped_and_continued(tmp_path):
+    queued = []
+    client, store, _ = make_service(tmp_path, fix_answer(), submit=queued.append)
+    upload(client, EXCEL, source_folder(tmp_path))
+    assert 'action="/results/1/stop"' in client.get("/results/1").text
+
+    response = client.post("/results/1/stop", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert store.job(1).state == "stopped"
+    page = client.get("/results/1").text
+    assert "멈춘 작업입니다." in page
+    assert ">이어서 처리</button>" in page
+    assert 'http-equiv="refresh"' not in page
+
+    client.post("/results/1/retry")
+    for task in list(queued):
+        task()
+
+    assert store.job(1).state == "done"
+
+
+def test_stopped_job_still_gives_a_patch_for_finished_rows(tmp_path):
+    queued = []
+    client, _, _ = make_service(tmp_path, fix_answer(), submit=queued.append)
+    excel = rte_excel(rte_row("Orange Check"), rte_row("Orange Check", line=1, check="Overflow"))
+    upload(client, excel, source_folder(tmp_path))
+
+    queued[0]()  # 첫 묶음(엑셀 2행)만 처리하고
+    client.post("/results/1/stop")  # 멈춘다
+
+    assert 'action="/results/1/fixes.patch"' in client.get("/results/1").text
+    response = client.post("/results/1/fixes.patch", data={"row": ["1"]})
+    assert response.status_code == 200
+    assert b"+    return (b != 0) ? a / b : 0;\n" in response.content
+
+
+def test_kind_decides_which_fixes_are_picked_automatically(tmp_path, monkeypatch):
+    monkeypatch.setitem(KINDS, "rte", replace(RTE, auto_select=lambda f: f.color == "Red"))
+    header = {
+        "original": "int divide(int a, int b)",
+        "replacement": "int divide(int a, int b) /* 검토 */",
+    }
+    # Red(엑셀 3행)를 먼저 보내므로 첫 답이 Red 몫이다
+    client, _, _ = make_service(tmp_path, fix_answer(edits=[header]), fix_answer())
+    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", line=1, check="Overflow"))
+    upload(client, excel, source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+
+    assert 'name="row" value="2" data-auto="1"' in page
+    assert 'name="row" value="1" data-auto="0"' in page
+    assert "자동으로 고르지 않은 수정 1개는 직접 고르세요" in page
 
 
 def test_main_reports_config_error(tmp_path, monkeypatch, capsys):
