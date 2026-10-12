@@ -126,6 +126,24 @@ def test_misra_sheet_without_condition_sheet_uses_its_own_categories():
     assert sheet.prepared.note == "조건 시트 없음: 결과 시트 분류를 씀"
 
 
+def test_columns_are_found_by_name_wherever_they_are():
+    # 같은 머리 이름이 다른 자리에 있고, 사이에 모르는 열이 끼어 있어도 이름으로 찾는다
+    header = ["line", "Extra", "detail", "check", "Function", "File", "Note", "TYPE"]
+    row = [42, "x", "detail text", "Overflow", "divide", "a.c", "y", "Red Check"]
+    data = workbook_bytes({"RTE_Result": [header, row]})
+
+    found = read(data).findings[0]
+
+    assert (found.color, found.line, found.check, found.file, found.function) == (
+        "Red",
+        42,
+        "Overflow",
+        "a.c",
+        "divide",
+    )
+    assert found.detail == "detail text"
+
+
 def test_non_integer_line_becomes_none():
     data = rte_excel(rte_row(line="12"), rte_row(line=12.0), rte_row(line="n/a"))
 
