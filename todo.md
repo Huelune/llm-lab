@@ -67,7 +67,6 @@ uv run python scripts/peek_conditions.py "엑셀 경로.xlsx" metric
   맞습니다. 숫자만 적어 주셔도 됩니다.
 - 아는 것이 있으면 말로 알려 주세요(칸 글은 옮기지 않습니다). 몰라도 진행에는 지장이 없습니다.
   - Code Metrics 가운데 단계 판정 글의 뜻. 예: "통과지만 사유를 적어야 함", "검토 후 판단".
-  - RTE의 가려진 열 머리 셋(No 옆, 약어 열, 분석 방식 열)과 `비고` 열에 적힌 것의 종류.
   - MISRA의 `Review Scope:`와 `Comment` 열이 무엇에 쓰이는지.
   - 조건 시트를 누가 채우는지: Polyspace 설정에서 저절로 나오는지, 회사 기준을 사람이 적는지.
 
