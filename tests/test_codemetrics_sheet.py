@@ -171,3 +171,18 @@ def test_calling_and_called_metrics_pair_with_their_own_check():
         ("Number of Calling Functions", FAIL)
     ]
     assert sheet.skipped == {PASSED: 1}
+
+
+def test_a_pass_with_conditions_is_a_middle_band_not_a_pass():
+    # 가운데 단계 판정 글에 pass 낱말이 섞여 있어도 Pass로 보고 빼면 그 단계가 통째로 빠진다
+    conditions = [
+        ["No", "지표", "기준", "판정"],
+        [1, "Cyclomatic Complexity", "1 ~ 10", "Pass"],
+        [None, None, "11 ~ 20", "Pass (검토 뒤 사유 기록)"],
+        [None, None, ">= 21", "Fail"],
+    ]
+
+    sheet = read(metrics_excel(metric_row(actual=15), metric_row(actual=5), conditions=conditions))
+
+    assert [(f.actual, f.category) for f in sheet.findings] == [("15", MIDDLE)]
+    assert sheet.skipped == {PASSED: 1}
