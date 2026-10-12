@@ -115,6 +115,17 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert len(sent) == 1  # 소스가 없는 행은 LLM에 보내지 않는다
 
 
+def test_top_counts_keep_every_target_even_at_zero(tmp_path):
+    # 패치 뒤 다시 분석하면 Red가 0개일 때가 많다. 0개여도 개수 줄에서 빠지지 않는다
+    client, _, _ = make_service(tmp_path, fix_answer())
+
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+    assert '<span class="badge red">Red</span> <b>0</b>' in page
+    assert '<span class="badge orange">Orange</span> <b>1</b>' in page
+
+
 def test_result_json(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     folder = source_folder(tmp_path)

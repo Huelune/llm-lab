@@ -487,9 +487,12 @@ def _partner(row: Row, conflicts: dict[int, set[int]], picked: set[int], by_id: 
 
 def _chips(kind: Kind, job: Job, rows: list[Row]) -> str:
     kinds = Counter(_kind(row) for row in rows)
+    # 고를 수 있는 대상은 0개여도 보인다 (패치 뒤 다시 분석하면 Red가 0개일 때가 많다)
+    counts = dict(_label_counts(kind, rows))
+    labels = [*kind.choices, *(label for label in counts if label not in kind.choices)]
     parts = [
-        f"<span>{_badge(kind.color(label), label)} <b>{count}</b></span>"
-        for label, count in _label_counts(kind, rows)
+        f"<span>{_badge(kind.color(label), label)} <b>{counts.get(label, 0)}</b></span>"
+        for label in labels
     ]
     parts += [_badge("gray", f"제외 {job.skipped}"), '<span class="sep">|</span>']
     for kind in ("fix", "nofix", "problem", "waiting"):
