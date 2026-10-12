@@ -145,3 +145,29 @@ def test_condition_rows_fixture_is_read_as_three_metrics():
         "Deepest Nesting",
         "Max. Number of Calling Functions",
     ]
+
+
+def test_calling_and_called_metrics_pair_with_their_own_check():
+    # 부르는 곳 수와 부르는 함수 수가 둘 다 있을 때 서로 바뀌어 이어지면 단계가 뒤집힌다
+    conditions = [
+        ["No", "지표", "기준", "판정"],
+        [1, "Max. Number of Called Functions", "0 ~ 6", "Pass"],
+        [None, None, "> 6", "Fail"],
+        [2, "Max. Number of Calling Functions", "0 ~ 4", "Pass"],
+        [None, None, "> 4", "Fail"],
+    ]
+    rows = [
+        metric_row("Number of Calling Functions", threshold=4, actual=5),
+        metric_row("Number of Called Functions", threshold=6, actual=5),
+    ]
+
+    sheet = read(metrics_excel(*rows, conditions=conditions))
+
+    assert sheet.prepared.data["pairs"] == {
+        "number of calling functions": 1,
+        "number of called functions": 0,
+    }
+    assert [(f.check, f.category) for f in sheet.findings] == [
+        ("Number of Calling Functions", FAIL)
+    ]
+    assert sheet.skipped == {PASSED: 1}

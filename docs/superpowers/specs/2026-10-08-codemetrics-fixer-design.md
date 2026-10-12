@@ -313,7 +313,7 @@ Polyspace 옵션 `-consider-switch-as-single-decision`을 쓰면 `switch` 전체
 조건 통합 작업(조건 시트 읽기)에 바라는 것:
 - 작업마다 엑셀에서 CodeMetrics 조건 시트를 읽어 지표마다 (지표 이름, 단계 목록, Pass 상한)을 준다.
   - 단계 하나는 (하한, 상한, 판정 글, 종류)다.
-  - 종류는 판정 글로 정한다. "Pass"가 들어 있으면 pass, "Fail"이 들어 있으면 fail, 그 밖은 middle이다.
+  - 종류는 판정 글로 정한다. pass 낱말(Pass, 통과, 합격) 하나뿐인 글만 pass다. pass 낱말 없이 fail 낱말(Fail, 실패, 불합격)이 든 글은 fail이다. 나머지는 middle이다. 단서가 붙은 Pass는 조건부 통과로 보고 middle로 둔다. pass로 잘못 보면 그 단계의 행이 대상에서 빠지기 때문이다(`conditions.verdict_kind`, 3c534e2).
 - 헤더 행은 훑어서 찾고, 열은 헤더 글로 찾는다. 병합 셀이 남긴 빈 열과, 이름이 첫 단계 행에만 있는 모양을 견딘다.
 - 범위 글은 느슨하게 읽는다(`1 ~ 10`, `>= 21`, `>=21`처럼 공백이 다른 표기).
 - 조건 시트가 없거나 읽지 못하면 빈 결과와 이유를 준다. 이때 CodeMetrics는 결과 시트의 `Threshold`만으로 동작한다.
