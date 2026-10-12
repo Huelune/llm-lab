@@ -3,7 +3,7 @@ import sys
 import threading
 
 from fake_llm import API_KEY, MODEL, error, make_client, scripted
-from rte_fixtures import CALC_C, finding, fix_answer
+from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
 from llm_lab.sources import decode_source
 from llm_lab.store import NewRow, Store
@@ -120,7 +120,7 @@ def test_writes_conversation_log_for_each_row(tmp_path):
     worker.start(job_id)
 
     (text,) = logs(tmp_path)
-    assert f"# 작업 {job_id} · 엑셀 2행 · Orange Check" in text
+    assert f"# 작업 {job_id} · RTE · 엑셀 2행" in text
     assert "- 보낸 주소: https://llm.test/v1/chat/completions" in text
     assert "You review one Polyspace Code Prover" in text  # 시스템 메시지 그대로
     assert "    3|     return a / b;" in text  # 보낸 코드 그대로
@@ -157,6 +157,140 @@ def test_log_records_row_error_and_fatal_stop(tmp_path):
     assert "[기능 미지원]" in error_log
     assert "### 오류" in error_log
     assert "- 결과: 작업 중단: [인증]" in stop_log
+
+
+def test_group_goes_out_in_one_request_and_each_row_gets_its_decision(tmp_path):
+    # 묶음 안의 순서는 (줄, check, detail, 엑셀 행)이므로 Division by zero(엑셀 5행)가 1번이다
+    handler, sent = scripted(
+        answer(("fix", REASON), ("no_fix", "범위가 보장됨"), edits=[DIVIDE_FIX])
+    )
+    rows = (
+        NewRow(finding(row=2, check="Overflow"), "calc.c", "pending", grp="calc.c:3"),
+        NewRow(finding(row=5), "calc.c", "pending", grp="calc.c:3"),
+    )
+    store, worker, job_id = setup(tmp_path, handler, *rows)
+
+    worker.start(job_id)
+
+    assert len(sent) == 1
+    prompt = sent[0]["messages"][1]["content"]
+    assert "Finding 1:\n- TYPE: Orange Check\n- check: Division by zero" in prompt
+    overflow, division = store.rows(job_id)
+    assert (overflow.result.decision, overflow.result.reason) == ("no_fix", "범위가 보장됨")
+    assert (division.result.decision, division.result.reason) == ("fix", REASON)
+    assert store.job(job_id).state == "done"
+    (path,) = (tmp_path / "logs").glob("*.md")
+    assert path.name.endswith(f"_job{job_id}_row2.md")  # 묶음의 가장 작은 엑셀 행
+    text = path.read_text(encoding="utf-8")
+    assert f"# 작업 {job_id} · RTE · 엑셀 5·2행" in text
+    assert "- 결과: 엑셀 5행 수정 - b가 0일 때를 검사합니다.\n" in text
+    assert "- 결과: 엑셀 2행 수정 불필요 - 범위가 보장됨\n" in text
+
+
+def test_group_result_is_reused_when_only_excel_rows_change(tmp_path):
+    handler, sent = scripted(
+        answer(("fix", REASON), ("no_fix", "범위가 보장됨"), edits=[DIVIDE_FIX])
+    )
+    first_rows = (
+        NewRow(finding(row=2), "calc.c", "pending", grp="calc.c:3"),
+        NewRow(finding(row=5, check="Overflow"), "calc.c", "pending", grp="calc.c:3"),
+    )
+    store, worker, first = setup(tmp_path, handler, *first_rows)
+    worker.start(first)
+    # 엑셀을 다시 뽑아 행 번호와 행 순서만 바뀌었다
+    rows = [
+        NewRow(finding(row=12, check="Overflow"), "calc.c", "pending", grp="calc.c:3"),
+        NewRow(finding(row=8), "calc.c", "pending", grp="calc.c:3"),
+    ]
+    second = store.create_job("rte.xlsx", "RTE_Result", 0, [SOURCE], rows)
+
+    worker.start(second)
+
+    assert len(sent) == 1
+    overflow, division = store.rows(second)
+    assert (overflow.result.decision, division.result.decision) == ("no_fix", "fix")
+
+
+def test_same_rule_twice_on_one_line_gets_an_answer_each(tmp_path):
+    handler, sent = scripted(answer(("fix", REASON), ("fix", REASON), edits=[DIVIDE_FIX]))
+    rows = (
+        NewRow(finding(row=4), "calc.c", "pending", grp="calc.c:3"),
+        NewRow(finding(row=2), "calc.c", "pending", grp="calc.c:3"),
+    )
+    store, worker, job_id = setup(tmp_path, handler, *rows)
+
+    worker.start(job_id)
+
+    assert len(sent) == 1
+    assert "Finding 2:" in sent[0]["messages"][1]["content"]
+    assert [row.result.decision for row in store.rows(job_id)] == ["fix", "fix"]
+
+
+def test_groups_are_queued_most_important_first(tmp_path):
+    queued = []
+    handler, sent = scripted(fix_answer(), fix_answer())
+    store = Store(tmp_path / "fixer.db")
+    worker = Worker(store, make_client(handler), MODEL, queued.append)
+    red = finding(row=3, color="Red", type="Red Check", check="Overflow")
+    rows = [NewRow(finding(row=2), "calc.c", "pending"), NewRow(red, "calc.c", "pending")]
+    job_id = store.create_job("rte.xlsx", "RTE_Result", 0, [SOURCE], rows)
+
+    worker.start(job_id)
+    for task in queued:
+        task()
+
+    # 엑셀에서는 Orange가 먼저지만 Red를 먼저 보낸다
+    assert ["- TYPE: Red Check" in s["messages"][1]["content"] for s in sent] == [True, False]
+
+
+def test_stopped_job_leaves_queued_groups_until_it_continues(tmp_path):
+    queued = []
+    handler, sent = scripted(fix_answer(), fix_answer())
+    store = Store(tmp_path / "fixer.db")
+    worker = Worker(store, make_client(handler), MODEL, queued.append)
+    rows = [NewRow(finding(), "calc.c", "pending"), NewRow(finding(line=2), "calc.c", "pending")]
+    job_id = store.create_job("rte.xlsx", "RTE_Result", 0, [SOURCE], rows)
+    worker.start(job_id)
+
+    store.stop(job_id)
+    for task in queued:
+        task()
+
+    assert sent == []
+    assert [r.state for r in store.rows(job_id)] == ["pending", "pending"]
+    assert store.job(job_id).state == "stopped"
+
+    queued.clear()
+    store.retry(job_id)  # "이어서 처리"
+    worker.start(job_id)
+    for task in queued:
+        task()
+
+    assert [r.state for r in store.rows(job_id)] == ["done", "done"]
+    assert store.job(job_id).state == "done"
+
+
+def test_group_error_marks_every_row_and_fatal_error_puts_them_back(tmp_path):
+    rows = (
+        NewRow(finding(row=2), "calc.c", "pending", grp="calc.c:3"),
+        NewRow(finding(row=3, check="Overflow"), "calc.c", "pending", grp="calc.c:3"),
+    )
+    handler, _ = scripted(error(400, "bad request"))
+    store, worker, job_id = setup(tmp_path / "a", handler, *rows)
+
+    worker.start(job_id)
+
+    states = [(r.state, r.error) for r in store.rows(job_id)]
+    assert [state for state, _ in states] == ["error", "error"]
+    assert states[0][1] == states[1][1] != ""
+
+    handler, _ = scripted(error(401, "invalid key"))
+    store, worker, job_id = setup(tmp_path / "b", handler, *rows)
+
+    worker.start(job_id)
+
+    assert [r.state for r in store.rows(job_id)] == ["pending", "pending"]
+    assert store.job(job_id).state == "stopped"
 
 
 def test_daemon_pool_runs_tasks():

@@ -6,7 +6,7 @@ import pytest
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import decode_source
-from llm_lab.store import SCHEMA_VERSION, NewRow, Store, StoreError
+from llm_lab.store import SCHEMA_VERSION, USER_STOP, NewRow, Store, StoreError
 
 SOURCE = decode_source("calc.c", "/* 합계 */\r\nint x;\r\n".encode("cp949"))
 FINDING = Finding(
@@ -119,13 +119,47 @@ def test_jobs_lists_newest_first(tmp_path):
     assert [job.id for job in store.jobs(limit=2)] == [ids[2], ids[1]]
 
 
-def test_claim_row_succeeds_only_once(tmp_path):
+def test_claim_rows_takes_the_whole_group_or_nothing(tmp_path):
     store = Store(tmp_path / "fixer.db")
-    row_id = store.rows(make_job(store, "pending"))[0].id
+    first, second = (row.id for row in store.rows(make_job(store, "pending", "pending")))
 
-    assert store.claim_row(row_id) is True
-    assert store.claim_row(row_id) is False
-    assert store.row(row_id).state == "running"
+    assert store.claim_rows([first, second]) is True
+    assert store.claim_rows([first, second]) is False
+    assert [store.row(i).state for i in (first, second)] == ["running", "running"]
+
+    store.set_row(second, "pending")
+    assert store.claim_rows([first, second]) is False  # 하나라도 pending이 아니면 그대로 둔다
+    assert store.row(second).state == "pending"
+
+
+def test_job_keeps_kind_note_and_context_and_rows_keep_their_group(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    rows = [
+        NewRow(FINDING, "calc.c", "pending", grp="calc.c:2"),
+        NewRow(FINDING, "calc.c", "pending"),
+    ]
+
+    job_id = store.create_job(
+        "m.xlsx", "MISRA_Result", 0, [SOURCE], rows, kind="misra", note="메모", context='{"a": 1}'
+    )
+
+    job = store.job(job_id)
+    assert (job.kind, job.note, job.context) == ("misra", "메모", '{"a": 1}')
+    assert [row.grp for row in store.rows(job_id)] == ["calc.c:2", ""]
+    old_style = store.job(make_job(store, "pending"))
+    assert (old_style.kind, old_style.note, old_style.context) == ("rte", "", "")
+
+
+def test_stop_only_stops_running_jobs(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    running = make_job(store, "pending")
+    done = make_job(store, "no_source")
+
+    store.stop(running)
+    store.stop(done)
+
+    assert (store.job(running).state, store.job(running).message) == ("stopped", USER_STOP)
+    assert store.job(done).state == "done"
 
 
 def user_version(path):
@@ -185,5 +219,23 @@ def test_database_from_schema_1_gets_source_folder_column(tmp_path):
 
     store = Store(path)
 
-    assert user_version(path) == SCHEMA_VERSION == 2
+    assert user_version(path) == SCHEMA_VERSION == 3
     assert store.job(job_id).source_root == ""
+
+
+def test_database_from_schema_2_gets_kind_note_context_and_group_columns(tmp_path):
+    path = tmp_path / "fixer.db"
+    job_id = make_job(Store(path), "pending")
+    with closing(sqlite3.connect(path)) as db:  # 스키마 2에는 이 칸들이 없었다
+        for table, column in [("jobs", "kind"), ("jobs", "note"), ("jobs", "context")]:
+            db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        db.execute("ALTER TABLE rows DROP COLUMN grp")
+        db.execute("PRAGMA user_version = 2")
+        db.commit()
+
+    store = Store(path)
+
+    assert user_version(path) == SCHEMA_VERSION
+    job = store.job(job_id)
+    assert (job.kind, job.note, job.context) == ("rte", "", "")
+    assert store.rows(job_id)[0].grp == ""

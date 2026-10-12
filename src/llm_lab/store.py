@@ -17,7 +17,8 @@ from llm_lab.sources import SourceFile
 
 # 표 구조를 바꾸면 올리고 옛 DB를 옮기는 코드를 넣는다. PRAGMA user_version에 적는다.
 # 2: jobs.source_root (소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 '')
-SCHEMA_VERSION = 2
+# 3: jobs.kind·note·context (시트 종류, 작업 메모, 작업 정보 JSON), rows.grp (묶음)
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -28,7 +29,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     skipped INTEGER NOT NULL,
     state TEXT NOT NULL,
     message TEXT NOT NULL DEFAULT '',
-    source_root TEXT NOT NULL DEFAULT ''
+    source_root TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'rte',
+    note TEXT NOT NULL DEFAULT '',
+    context TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS files (
     job_id INTEGER NOT NULL,
@@ -47,7 +51,8 @@ CREATE TABLE IF NOT EXISTS rows (
     file_name TEXT,
     state TEXT NOT NULL,
     result TEXT,
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    grp TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS cache (
     key TEXT PRIMARY KEY,
@@ -55,6 +60,17 @@ CREATE TABLE IF NOT EXISTS cache (
     created_at TEXT NOT NULL
 );
 """
+
+# 예전 DB에 없을 수 있는 칸 (표, 칸, 정의). 켤 때 없으면 기본값으로 더한다.
+ADDED_COLUMNS = [
+    ("jobs", "source_root", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "kind", "TEXT NOT NULL DEFAULT 'rte'"),
+    ("jobs", "note", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "context", "TEXT NOT NULL DEFAULT ''"),
+    ("rows", "grp", "TEXT NOT NULL DEFAULT ''"),
+]
+# 사용자가 "멈춤"을 눌러 멈춘 작업의 메시지. 화면은 치명 오류로 멈춘 작업과 다르게 보인다.
+USER_STOP = "사용자가 멈췄습니다."
 
 
 class StoreError(Exception):
@@ -71,6 +87,9 @@ class Job:
     state: str  # running / done / stopped
     message: str
     source_root: str = ""  # 소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 ''
+    kind: str = "rte"  # 시트 종류 (llm_lab.kinds). 스키마 3 전의 작업은 모두 RTE
+    note: str = ""  # 작업 메모 한 줄 (조건 시트 요약, 뺀 행의 이유별 개수)
+    context: str = ""  # 종류가 엑셀 전체에서 읽은 작업 정보 (JSON, 없으면 '')
 
 
 @dataclass(frozen=True)
@@ -82,6 +101,7 @@ class Row:
     state: str  # pending / running / done / error / no_source
     result: FixResult | None
     error: str
+    grp: str = ""  # 묶음 키. 키가 같은 행은 LLM에 함께 보낸다 ('' = 혼자)
 
 
 @dataclass(frozen=True)
@@ -90,6 +110,7 @@ class NewRow:
     file_name: str | None
     state: str
     error: str = ""
+    grp: str = ""
 
 
 def _now() -> str:
@@ -111,10 +132,11 @@ class Store:
                 )
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            # 버전 0·1: 새 DB이거나 jobs.source_root가 생기기 전에 만든 DB
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
-            if "source_root" not in columns:
-                db.execute("ALTER TABLE jobs ADD COLUMN source_root TEXT NOT NULL DEFAULT ''")
+            # 예전 버전 DB: 그 뒤에 생긴 칸을 더한다
+            for table, column, definition in ADDED_COLUMNS:
+                columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+                if column not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -140,13 +162,16 @@ class Store:
         files: list[SourceFile],
         rows: list[NewRow],
         source_root: str = "",
+        kind: str = "rte",
+        note: str = "",
+        context: str = "",
     ) -> int:
         state = "running" if any(row.state == "pending" for row in rows) else "done"
         with self._write() as db:
             cursor = db.execute(
-                "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state, source_root) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (_now(), excel_name, sheet, skipped, state, source_root),
+                "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state, source_root, "
+                "kind, note, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (_now(), excel_name, sheet, skipped, state, source_root, kind, note, context),
             )
             job_id = cursor.lastrowid
             assert job_id is not None
@@ -158,8 +183,8 @@ class Store:
                 ],
             )
             db.executemany(
-                "INSERT INTO rows (job_id, finding, file_name, state, error) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO rows (job_id, finding, file_name, state, error, grp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     (
                         job_id,
@@ -167,6 +192,7 @@ class Store:
                         r.file_name,
                         r.state,
                         r.error,
+                        r.grp,
                     )
                     for r in rows
                 ],
@@ -212,6 +238,7 @@ class Store:
             state=record["state"],
             result=FixResult.from_json(record["result"]) if record["result"] else None,
             error=record["error"],
+            grp=record["grp"],
         )
 
     def source(self, job_id: int, name: str) -> SourceFile:
@@ -237,18 +264,33 @@ class Store:
                 (state, result.to_json() if result else None, error, row_id),
             )
 
-    def claim_row(self, row_id: int) -> bool:
-        """pending 행을 running으로 바꾼다. 다른 작업자가 먼저 가져갔으면 False."""
+    def claim_rows(self, row_ids: list[int]) -> bool:
+        """묶음의 행이 모두 pending이면 한꺼번에 running으로 바꾼다.
+
+        하나라도 pending이 아니면(다른 작업자가 먼저 가져갔으면) 아무것도 바꾸지 않고 False.
+        """
+        marks = ", ".join("?" * len(row_ids))
         with self._write() as db:
-            cursor = db.execute(
-                "UPDATE rows SET state = 'running' WHERE id = ? AND state = 'pending'", (row_id,)
-            )
-            return cursor.rowcount == 1
+            pending = db.execute(
+                f"SELECT COUNT(*) FROM rows WHERE id IN ({marks}) AND state = 'pending'", row_ids
+            ).fetchone()[0]
+            if pending != len(row_ids):
+                return False
+            db.execute(f"UPDATE rows SET state = 'running' WHERE id IN ({marks})", row_ids)
+            return True
 
     def set_job(self, job_id: int, state: str, message: str = "") -> None:
         with self._write() as db:
             db.execute(
                 "UPDATE jobs SET state = ?, message = ? WHERE id = ?", (state, message, job_id)
+            )
+
+    def stop(self, job_id: int) -> None:
+        """처리 중인 작업을 멈춘다. 줄 서 있던 묶음은 건너뛰고, "이어서 처리"(retry)로 계속한다."""
+        with self._write() as db:
+            db.execute(
+                "UPDATE jobs SET state = 'stopped', message = ? WHERE id = ? AND state = 'running'",
+                (USER_STOP, job_id),
             )
 
     def finish_if_done(self, job_id: int) -> None:

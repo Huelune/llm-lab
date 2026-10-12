@@ -17,24 +17,30 @@ EXCHANGE = Exchange(
 )
 
 
-def render(exchanges, outcome="수정 - b가 0일 때를 검사합니다.", extra_body=None):
+def render(
+    exchanges, outcomes=("수정 - b가 0일 때를 검사합니다.",), extra_body=None, findings=None
+):
     return render_log(
         job_id=3,
-        finding=finding(),
+        kind="RTE",
+        findings=findings or [finding()],
         source_name="calc.c",
         model="m1",
         endpoint="https://llm.test/v1/chat/completions",
         extra_body=extra_body or {},
         exchanges=exchanges,
-        outcome=outcome,
+        outcomes=list(outcomes),
     )
 
 
 def test_log_shows_row_settings_and_outcome():
     text = render([EXCHANGE], extra_body={"chat_template_kwargs": {"enable_thinking": False}})
 
-    assert text.startswith("# 작업 3 · 엑셀 2행 · Orange Check\n")
-    assert "- 위치: calc.c:3 (divide)" in text
+    assert text.startswith("# 작업 3 · RTE · 엑셀 2행\n")
+    assert (
+        "- 엑셀 2행: Division by zero / Warning: scalar division by zero may occur"
+        " / calc.c:3 (divide)"
+    ) in text
     assert "- 모델: m1" in text
     assert "- 보낸 주소: https://llm.test/v1/chat/completions" in text
     assert '- 함께 보낸 값: {"chat_template_kwargs": {"enable_thinking": false}}' in text
@@ -54,17 +60,28 @@ def test_log_shows_sent_messages_and_reply_verbatim():
     assert '"id": "cmpl-1"' in text  # 응답 원문 JSON
 
 
+def test_log_for_a_group_lists_each_row_and_outcome():
+    findings = [finding(), finding(row=4, line=None, function="", check="Overflow")]
+    outcomes = ["엑셀 2행 수정 - 고침", "엑셀 4행 수정 불필요 - 그대로"]
+
+    text = render([EXCHANGE], outcomes=outcomes, findings=findings)
+
+    assert text.startswith("# 작업 3 · RTE · 엑셀 2·4행\n")
+    assert "- 엑셀 4행: Overflow / Warning: scalar division by zero may occur / calc.c:?\n" in text
+    assert "- 결과: 엑셀 2행 수정 - 고침\n- 결과: 엑셀 4행 수정 불필요 - 그대로\n" in text
+
+
 def test_log_records_errors_and_calls_that_never_happened():
     failed = Exchange(messages=EXCHANGE.messages, seconds=0.2, error="[인증] 인증 실패(401)")
 
-    assert "### 오류\n\n[인증] 인증 실패(401)" in render([failed], outcome="작업 중단")
-    reused = render([], outcome="이전 결과 재사용 - LLM을 부르지 않음")
+    assert "### 오류\n\n[인증] 인증 실패(401)" in render([failed], outcomes=["작업 중단"])
+    reused = render([], outcomes=["이전 결과 재사용 - LLM을 부르지 않음"])
     assert "LLM에 보낸 요청이 없습니다." in reused
 
 
 def test_write_log_never_overwrites(tmp_path):
-    first = write_log(tmp_path / "logs", 3, finding(), "a")
-    second = write_log(tmp_path / "logs", 3, finding(), "b")
+    first = write_log(tmp_path / "logs", 3, 2, "a")
+    second = write_log(tmp_path / "logs", 3, 2, "b")
 
     assert first != second
     assert first.read_text(encoding="utf-8") == "a"
