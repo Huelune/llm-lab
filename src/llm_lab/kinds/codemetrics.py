@@ -10,8 +10,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from llm_lab.cfunction import function_name
+from llm_lab.cfunction import FunctionRange, function_name, function_range
 from llm_lab.conditions import Metric, read_metrics
+from llm_lab.fixer import WHOLE_FILE_MAX_LINES, FixError, split_lines, user_error
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import (
     Finding,
@@ -22,6 +23,7 @@ from llm_lab.polyspace import (
     line_number,
     norm,
 )
+from llm_lab.sources import SourceFile
 
 REQUIRED = ("file", "function", "line", "check", "threshold", "actual value")
 # 배지 글자 (이 도구가 정한 이름). 조건 시트의 판정 글은 카드 메모에 그대로 보인다
@@ -31,9 +33,40 @@ PASSED = "조건 시트상 Pass"
 # 지표 이름을 낱말로 비교할 때 빼는 낱말
 STOP_WORDS = frozenset({"number", "of", "max", "maximum", "the"})
 
+# 함수를 통째로 다시 써야 하므로 이보다 긴 함수는 LLM에 보내지 않는다 (답이 잘린다)
+FUNCTION_MAX_LINES = 1000
+
 SYSTEM_PROMPT = """\
 You refactor one C function so that its Polyspace code metrics fall within the project's \
 limits, without changing what the function does.
+Scope:
+- Answer with "code": the complete new text for the line range named in the request \
+(the function and the comment right above it). Lines outside that range stay as they are.
+- Keep the function's name, parameters, return type and specifiers (such as static) \
+exactly as they are, and keep the comment above it.
+- You may add new static helper functions at the top of "code", above that comment. \
+Give each a one-line comment and a name of at most 31 characters \
+that is not used elsewhere in the file.
+- Do not add global variables. Do not change other functions, other files or headers.
+Keep the behavior:
+- Move statements mechanically. Keep the order of evaluation, side effects, calls \
+and accesses to globals and volatile objects. Keep every original comment.
+- Pass the values a helper needs as parameters, and return changed values \
+through pointers or the return value.
+- Do not add early returns, goto, recursion or dynamic memory. New code must follow \
+MISRA C:2012 (for example Rule 15.5 single point of exit and Rule 8.8 static).
+- Every function in "code", including new helpers, must stay within all the limits given.
+Decide for each numbered finding:
+- fix: your code brings that metric within its limit.
+- no_fix: it cannot be done within these rules, or the change would put the behavior \
+at risk. Number of Calling Functions is always no_fix, because only its callers could change it.
+Do not guess definitions (macros, types, other functions) that are not shown. \
+If they matter, say so in reason.
+Write each "reason" in Korean, one to three sentences that a reviewer can paste \
+into the Polyspace comment of that finding. For fix, say what moved where and \
+the rough new value. For no_fix, say why.
+Answer with JSON only. "findings" has one entry for each numbered finding. \
+"code" is "" when no finding is fix.
 """
 
 
@@ -44,6 +77,33 @@ def metric_words(name: str) -> frozenset[str]:
         frozenset(word[:-1] if len(word) > 3 and word.endswith("s") else word for word in words)
         - STOP_WORDS
     )
+
+
+CALLING = metric_words("Number of Calling Functions")
+# Polyspace 지표 뜻(MathWorks 문서)에 따른 줄이는 요령. 회사 조건이 아니라 공개된 지식이다.
+# 이 묶음에 나온 지표의 요령만 메시지에 붙인다.
+TIPS = {
+    metric_words("Cyclomatic Complexity"): (
+        "Cyclomatic Complexity counts decision points plus one: each if, else if, for, while "
+        "and ?:, and each case followed by break. && and || do not count. Move cohesive "
+        "branches or case bodies into static helpers, or merge a nested if without else into "
+        "one condition with &&."
+    ),
+    metric_words("Number of Called Functions"): (
+        "Number of Called Functions counts the distinct functions called in the body, "
+        "standard library functions included. Calls through function pointers and assert do "
+        "not count. Group calls that belong together into a static helper."
+    ),
+    metric_words("Number of Call Levels"): (
+        "Number of Call Levels is the deepest nesting of if, switch, for and while, not the "
+        "call depth. Each else if adds a level. Move inner blocks into static helpers, or turn "
+        "a long else-if chain on one value into a switch."
+    ),
+    CALLING: (
+        "Number of Calling Functions counts the distinct callers. Changing callers is outside "
+        "this task, so answer no_fix and say why many callers are expected for this function."
+    ),
+}
 
 
 def number(text: str) -> float | None:
@@ -209,6 +269,73 @@ def read_row(cell: Cell, row: int, context: Any) -> Finding | str:
     )
 
 
+def facts(finding: Finding) -> list[tuple[str, str]]:
+    """사용자 메시지에 넣을 값. File과 line은 fixer가 붙인다."""
+    return [
+        ("check", finding.check),
+        ("Actual Value", finding.actual),
+        ("Threshold", finding.threshold),
+        ("stage", finding.stage),
+        ("Function", finding.function),
+    ]
+
+
+def _function(text: str, findings: list[Finding]) -> FunctionRange:
+    """묶음 함수의 바꿀 범위. 못 찾거나 너무 길면 FixError다 (그 묶음만 오류)."""
+    first = findings[0]
+    name = function_name(first.function)
+    assert first.line is not None  # make_request가 먼저 확인한다
+    found = function_range(text, first.line, name)
+    if found is None:
+        raise FixError(
+            user_error(
+                "엑셀의 함수를 소스에서 찾지 못했습니다.",
+                "엑셀을 만든 것과 같은 버전의 소스 폴더를 골라 다시 분석하세요.",
+                f"{name}, {first.line}번 줄",
+            )
+        )
+    size = found.end - found.start + 1
+    if size > FUNCTION_MAX_LINES:
+        raise FixError(
+            user_error(
+                "함수가 너무 길어 자동으로 나누지 않았습니다.",
+                "직접 나누거나 Polyspace comment에 사유를 적으세요.",
+                f"{size}줄 (기준 {FUNCTION_MAX_LINES}줄)",
+            )
+        )
+    return found
+
+
+def region(text: str, findings: list[Finding]) -> tuple[int, int]:
+    """파일이 WHOLE_FILE_MAX_LINES줄 이하면 파일 전체를, 넘으면 바꿀 범위만 보인다."""
+    found = _function(text, findings)
+    total = len(split_lines(text))
+    return (1, total) if total <= WHOLE_FILE_MAX_LINES else (found.start, found.end)
+
+
+def prompt_tail(context: Any, findings: list[Finding], source: SourceFile) -> str:
+    """한도 표, 이 묶음 지표의 요령, 바꿀 줄 범위."""
+    parts = []
+    limits = (context or {}).get("limits") or []
+    if limits:
+        listed = "\n".join(f"- {name}: {limit}" for name, limit in limits)
+        parts.append(
+            "Limits every function must meet, including new helpers "
+            f"(read from this project's workbook):\n{listed}"
+        )
+    present = {metric_words(finding.check) for finding in findings}
+    tips = [tip for words, tip in TIPS.items() if words in present]
+    if tips:
+        parts.append("About these metrics:\n" + "\n".join(f"- {tip}" for tip in tips))
+    found = _function(source.text, findings)
+    name = function_name(findings[0].function)
+    parts.append(
+        f"Replace lines {found.start}-{found.end} of {source.name} (function {name} and the "
+        'comment right above it) with "code". Every other line stays as it is.'
+    )
+    return "\n\n".join(parts)
+
+
 def stage_of(finding: Finding) -> str:
     return finding.category or UNKNOWN
 
@@ -238,5 +365,8 @@ CODEMETRICS = Kind(
     prompt_version=1,
     prepare=prepare,
     group_key=same_function,
+    facts=facts,
+    prompt_tail=prompt_tail,
+    region=region,
     auto_select=not_middle,
 )
