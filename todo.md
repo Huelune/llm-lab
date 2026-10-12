@@ -52,22 +52,6 @@ git pull
   (빈칸 / 숫자 여러 개 / 글자 섞임 / 칸을 누르면 수식 입력줄에 `=`로 시작하는 수식)
 - 이상한 판단이나 불편한 점(코드·이름 없이 말로)
 
-## 3. Code Metrics 조건 읽기 확인
-
-Code Metrics 조건 시트를 바르게 읽는지 봅니다. 엑셀은 읽기만 합니다.
-
-```bash
-uv run python scripts/peek_conditions.py "엑셀 경로.xlsx" metric
-```
-
-확인할 것: 둘째 줄이 `Code Metrics 조건 읽기: 지표 6개, 단계 17개 (pass 6 / middle 5 / fail 6), 범위 글 못 읽음 0`인지
-
-알려줄 것:
-
-- 둘째 줄의 숫자
-- 알면(몰라도 됩니다): Code Metrics 가운데 단계 판정 글의 뜻, MISRA `Review Scope:`·`Comment` 열의 쓰임,
-  조건 시트를 누가 채우는지(Polyspace 설정에서 나옴 / 사람이 적음)
-
 ## 4. MISRA 분석해 보기
 
 MISRA 시트 분석이 회사 엑셀에서 도는지 봅니다.
