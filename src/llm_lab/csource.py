@@ -5,6 +5,28 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
+MAX_DEFINITION_LINES = 80  # 정의 하나를 이 줄 수에서 자른다
+HEAD_LINES = 10  # 블록 위로 서명을 찾아 올라가는 최대 줄 수 (fixer.SIGNATURE_LINES와 같다)
+
+C_KEYWORDS = frozenset(
+    "auto break case char const continue default do double else enum extern float for goto "
+    "if inline int long register restrict return short signed sizeof static struct switch "
+    "typedef union unsigned void volatile while _Bool _Complex _Imaginary".split()
+)
+IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+MACRO = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)")
+ATTRIBUTE = re.compile(r"__attribute__\s*\(\(.*?\)\)")
+TAG = re.compile(r"^\s*(?:typedef\s+)?(?:struct|union|enum)\s+([A-Za-z_]\w*)")
+ENUM_HEAD = re.compile(r"^\s*(?:typedef\s+)?enum\b")
+ASSIGNED = re.compile(r"([A-Za-z_]\w*)\s*(?:\[[^=]*\])?\s*=")
+CALLED = re.compile(r"([A-Za-z_]\w*)\s*\(")
+POINTER_NAME = re.compile(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)")
+SUBSCRIPT = re.compile(r"\[[^\]]*\]")
+TYPE_HEADS = ("typedef", "struct", "union", "enum")
+
 
 def split_lines(text: str) -> list[str]:
     """\\n으로만 나눈다 (splitlines는 C 소스의 \\f 같은 문자에서도 나눠 줄 번호가 틀어진다)."""
@@ -94,3 +116,150 @@ def top_level_blocks(text: str) -> list[tuple[int, int]]:
             if depth == 0:
                 blocks.append((start, line))
     return blocks
+
+
+@dataclass(frozen=True)
+class Definition:
+    name: str
+    kind: str  # function / macro / variable / type
+    file: str  # 소스 폴더 기준 상대 경로 (/ 구분)
+    first: int  # 1부터, 양 끝 포함
+    last: int
+    text: str  # 줄 번호 없는 원문. MAX_DEFINITION_LINES를 넘으면 잘림
+
+
+def _clip(lines: list[str]) -> str:
+    if len(lines) <= MAX_DEFINITION_LINES:
+        return "\n".join(lines)
+    rest = len(lines) - MAX_DEFINITION_LINES
+    return "\n".join([*lines[:MAX_DEFINITION_LINES], f"... ({rest} more lines)"])
+
+
+def _head_start(code: list[str], start: int) -> int:
+    """블록 위로 서명(또는 선언)이 시작하는 줄. select_region과 같은 규칙, 주석은 비어 있다."""
+    first = start
+    while first > 1 and start - first < HEAD_LINES:
+        above = code[first - 2].strip()
+        if not above or above.endswith((";", "}")) or above.startswith("#"):
+            break
+        first -= 1
+    return first
+
+
+def _statement_end(code: list[str], end: int) -> int:
+    """블록 끝 줄부터 3줄 안에서 ';'가 있는 줄. 없으면 블록 끝 줄."""
+    for number in range(end, min(end + 2, len(code)) + 1):
+        if ";" in code[number - 1]:
+            return number
+    return end
+
+
+def _names_after_brace(code: list[str], end: int, last: int) -> list[str]:
+    """`} name, *other;`에서 이름들."""
+    tail = " ".join(code[end - 1 : last]).rsplit("}", 1)[-1].split(";", 1)[0]
+    return [name for name in IDENTIFIER.findall(ATTRIBUTE.sub(" ", tail)) if name not in C_KEYWORDS]
+
+
+def _enumerators(code: list[str], start: int, end: int) -> list[str]:
+    """enum 블록의 열거 상수 이름. 쉼표로 나눈 조각마다 첫 식별자다."""
+    body = " ".join(code[start - 1 : end])
+    body = body.split("{", 1)[-1].rsplit("}", 1)[0]
+    found = []
+    for piece in body.split(","):
+        match = IDENTIFIER.search(piece)
+        if match:
+            found.append(match.group(0))
+    return found
+
+
+def find_definitions(file: str, text: str) -> list[Definition]:
+    """파일 하나의 함수·매크로·전역 변수·타입 정의. 같은 이름이 같은 줄에서 시작하면 하나만."""
+    lines = split_lines(text)
+    code = split_lines(blank_comments(text))
+    found: list[Definition] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add(name: str, kind: str, first: int, last: int) -> None:
+        if name in C_KEYWORDS or (name, first) in seen:
+            return
+        seen.add((name, first))
+        found.append(Definition(name, kind, file, first, last, _clip(lines[first - 1 : last])))
+
+    covered: set[int] = set()  # 정의로 읽은 줄. 블록 밖 문장 찾기에서 건너뛴다
+
+    # 매크로: 줄 끝 '\'가 이어지는 동안 다음 줄까지
+    number = 1
+    while number <= len(lines):
+        match = MACRO.match(code[number - 1])
+        if match:
+            last = number
+            while last < len(lines) and lines[last - 1].rstrip().endswith("\\"):
+                last += 1
+            add(match.group(1), "macro", number, last)
+            covered.update(range(number, last + 1))
+            number = last + 1
+        else:
+            number += 1
+
+    # 블록: 함수, 초기화 블록이 있는 전역, struct·union·enum
+    for start, end in top_level_blocks(text):
+        first = _head_start(code, start)
+        head = ATTRIBUTE.sub(" ", " ".join(code[first - 1 : start]).split("{", 1)[0]).strip()
+        last = end
+        if head.startswith(TYPE_HEADS):
+            last = _statement_end(code, end)
+            tag = TAG.match(head)
+            if tag:
+                add(tag.group(1), "type", first, last)
+            if head.startswith("typedef"):
+                for name in _names_after_brace(code, end, last):
+                    add(name, "type", first, last)
+            if ENUM_HEAD.match(head):
+                for name in _enumerators(code, start, end):
+                    add(name, "type", first, last)
+        elif "=" in head:
+            last = _statement_end(code, end)
+            match = ASSIGNED.search(head)
+            if match:
+                add(match.group(1), "variable", first, last)
+        elif "(" in head:
+            match = CALLED.search(head)
+            if match:
+                add(match.group(1), "function", first, end)
+        covered.update(range(first, last + 1))
+
+    # 블록 밖의 문장: 초기화 없는 전역, extern 선언, 한 줄 typedef
+    pending: list[int] = []
+    for number, line in enumerate(code, start=1):
+        if number in covered:
+            pending = []
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        pending.append(number)
+        if ";" in line:
+            _add_statement(add, code, pending)
+            pending = []
+    return found
+
+
+def _add_statement(add, code: list[str], numbers: list[int]) -> None:
+    text = " ".join(code[number - 1] for number in numbers).split(";", 1)[0].strip()
+    text = ATTRIBUTE.sub(" ", text)
+    first, last = numbers[0], numbers[-1]
+    if text.startswith("typedef"):
+        flat = SUBSCRIPT.sub("", text)
+        pointer = POINTER_NAME.search(flat)
+        if pointer:
+            add(pointer.group(1), "type", first, last)
+            return
+        words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
+        if words:
+            add(words[-1], "type", first, last)
+        return
+    if "(" in text or text.startswith(("struct", "union", "enum")):
+        return  # 함수 원형, 전방 선언
+    flat = SUBSCRIPT.sub("", text).split("=", 1)[0]
+    words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
+    if words:
+        add(words[-1], "variable", first, last)
