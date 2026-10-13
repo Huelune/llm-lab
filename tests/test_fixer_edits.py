@@ -1,6 +1,7 @@
 import pytest
 
 from llm_lab import fixer
+from llm_lab.csource import top_level_blocks
 from llm_lab.fixer import (
     Edit,
     EditMismatch,
@@ -65,7 +66,7 @@ def test_long_file_sends_enclosing_function_with_signature_and_comment_above():
 def test_braces_in_comments_and_strings_are_ignored():
     text = 'char *s = "{";\n/* { */\nint f(void)\n{\n    return 1; // }\n}\n'
 
-    assert fixer._top_level_blocks(text) == [(4, 6)]
+    assert top_level_blocks(text) == [(4, 6)]
 
 
 def test_falls_back_to_window_outside_any_function(monkeypatch):

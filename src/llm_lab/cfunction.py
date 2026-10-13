@@ -11,7 +11,8 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from llm_lab.fixer import SIGNATURE_LINES, _top_level_blocks, split_lines
+from llm_lab.csource import split_lines, top_level_blocks
+from llm_lab.fixer import SIGNATURE_LINES
 
 
 @dataclass(frozen=True)
@@ -118,7 +119,7 @@ def function_range(text: str, line: int, name: str) -> FunctionRange | None:
 
     line은 몸통 안이거나, 몸통을 여는 '{'보다 SIGNATURE_LINES줄 안쪽 위여야 한다.
     """
-    blocks = _top_level_blocks(text)
+    blocks = top_level_blocks(text)
     block = next((b for b in blocks if b[0] <= line <= b[1]), None) or next(
         (b for b in blocks if line <= b[0] <= line + SIGNATURE_LINES), None
     )

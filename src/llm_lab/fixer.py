@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import openai
 from openai import OpenAI
 
+from llm_lab.csource import split_lines, top_level_blocks
 from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
@@ -103,66 +104,12 @@ class FixResult:
         return cls(data["decision"], data["reason"], edits, data["diff"])
 
 
-def split_lines(text: str) -> list[str]:
-    """\\n으로만 나눈다 (splitlines는 C 소스의 \\f 같은 문자에서도 나눠 줄 번호가 틀어진다)."""
-    lines = text.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return lines
-
-
-def _top_level_blocks(text: str) -> list[tuple[int, int]]:
-    """최상위 { … } 블록의 (시작 줄, 끝 줄) 목록. 주석·문자열·문자 상수 안의 중괄호는 무시한다."""
-    blocks: list[tuple[int, int]] = []
-    depth = 0
-    line = 1
-    start = 0
-    state = "code"
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        nxt = text[i + 1] if i + 1 < len(text) else ""
-        if ch == "\n":
-            line += 1
-            if state == "line_comment":
-                state = "code"
-        elif state == "code":
-            if ch == "/" and nxt == "/":
-                state, i = "line_comment", i + 1
-            elif ch == "/" and nxt == "*":
-                state, i = "block_comment", i + 1
-            elif ch == '"':
-                state = "string"
-            elif ch == "'":
-                state = "char"
-            elif ch == "{":
-                if depth == 0:
-                    start = line
-                depth += 1
-            elif ch == "}" and depth > 0:
-                depth -= 1
-                if depth == 0:
-                    blocks.append((start, line))
-        elif state == "block_comment":
-            if ch == "*" and nxt == "/":
-                state, i = "code", i + 1
-        elif state in ("string", "char"):
-            if ch == "\\":
-                i += 1
-                if nxt == "\n":
-                    line += 1
-            elif (ch == '"' and state == "string") or (ch == "'" and state == "char"):
-                state = "code"
-        i += 1
-    return blocks
-
-
 def select_region(text: str, line: int) -> tuple[int, int]:
     """LLM에 보낼 줄 범위 (1부터, 양 끝 포함)."""
     lines = split_lines(text)
     if len(lines) <= WHOLE_FILE_MAX_LINES:
         return 1, len(lines)
-    for start, end in _top_level_blocks(text):
+    for start, end in top_level_blocks(text):
         if start <= line <= end and end - start < WHOLE_FILE_MAX_LINES:
             first = start
             while first > 1 and start - first < SIGNATURE_LINES:
