@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
+from llm_lab.csource import scan_folder, used_definitions
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import error_page, index_page, job_page, results_page
@@ -49,12 +50,16 @@ def _new_row(kind: Kind, finding: Finding, match: Match) -> NewRow:
     return NewRow(finding, name, "pending", grp=kind.group_key(finding, name))
 
 
-def _job_note(sheet: Sheet) -> str:
-    """작업 메모 한 줄: 종류가 엑셀 전체에서 읽은 메모와, 뺀 행의 이유별 개수."""
+def _job_note(sheet: Sheet, definitions: int = 0, unreadable: int = 0) -> str:
+    """작업 메모 한 줄: 종류가 엑셀 전체에서 읽은 메모, 뺀 행의 이유별 개수, 참고 정의 수."""
     parts = [sheet.prepared.note] if sheet.prepared.note else []
     if sheet.skipped:
         skipped = ", ".join(f"{reason} {count}" for reason, count in sheet.skipped.items())
         parts.append(f"제외: {skipped}")
+    if definitions:
+        parts.append(f"참고 정의 {definitions}개")
+    if unreadable:
+        parts.append(f"못 읽은 파일 {unreadable}개")
     return " · ".join(parts)
 
 
@@ -159,6 +164,11 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         rows = [_new_row(sheet_kind, finding, matches[finding.file]) for finding in sheet.findings]
         used = {row.file_name for row in rows if row.file_name}
         files = [source for source in files if source.name in used]
+        # 소스 폴더 전체의 정의 가운데 분석 대상 파일이 쓰는 것만 작업에 저장한다
+        definitions, unreadable = [], 0
+        if sheet_kind.uses_definitions:
+            found, unreadable = scan_folder(root)
+            definitions = used_definitions(found, [source.text for source in files])
         data = sheet.prepared.data
         job_id = store.create_job(
             excel.filename or "",
@@ -168,7 +178,8 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             rows,
             source_root=str(root),
             kind=sheet_kind.name,
-            note=_job_note(sheet),
+            note=_job_note(sheet, len(definitions), unreadable),
+            definitions=definitions,
             context="" if data is None else json.dumps(data, ensure_ascii=False),
         )
         worker.start(job_id)

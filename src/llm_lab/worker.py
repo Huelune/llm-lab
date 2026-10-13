@@ -118,7 +118,7 @@ class Worker:
         exchanges: list[Exchange] = []
         reused = False
         try:
-            request = make_request(kind, findings, source, context)
+            request = make_request(kind, findings, source, context, self.store.definitions(job_id))
             key = cache_key(self.model, request)
             results = self.store.cache_get(key)
             reused = results is not None

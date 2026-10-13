@@ -134,7 +134,11 @@ def test_result_json(tmp_path):
 
     data = client.get("/api/results/1").json()
 
-    assert (data["state"], data["kind"], data["note"]) == ("done", "rte", "제외: Gray Check 1")
+    assert (data["state"], data["kind"], data["note"]) == (
+        "done",
+        "rte",
+        "제외: Gray Check 1 · 참고 정의 1개",
+    )
     # 소스를 찾은 행은 파일:함수 묶음에 들어가고, 소스가 없는 행은 묶음이 없다
     assert [row["group"] for row in data["rows"]] == ["src/calc.c:divide", ""]
     assert data["base_folder"] == str(folder)
@@ -313,6 +317,7 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert (job.kind, job.sheet) == ("misra", "MISRA_Result")
     assert (
         job.note == "조건 시트: 규칙 5개 · 제외: 적용 안 함 (조건 시트) 1, Advisory (고르지 않음) 1"
+        " · 참고 정의 1개"
     )
     assert json.loads(job.context)["10.4"] == ["Required", True]
     page = client.get("/results/1").text
@@ -694,3 +699,43 @@ def test_main_names_the_missing_profile_file(tmp_path, monkeypatch, capsys):
 
     assert web.main(["--no-browser", "--profile", "b"]) == 1
     assert ".env.b" in capsys.readouterr().err
+
+
+USE_C = b'#include "limits.h"\nint divide(int a, int b)\n{\n    return a / (b % LIMIT);\n}\n'
+
+
+def folder_with_header(tmp_path) -> Path:
+    """calc.c가 inc/limits.h의 매크로를 쓰는 소스 폴더. 깨진 파일 하나가 함께 있다."""
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "inc").mkdir()
+    (root / "src" / "calc.c").write_bytes(USE_C)
+    (root / "inc" / "limits.h").write_bytes(b"#define LIMIT 4\n#define UNUSED 9\n")
+    (root / "src" / "broken.c").write_bytes(b"int a;\r\nint b;\n")
+    return root
+
+
+def test_job_sends_definitions_from_other_files_and_notes_the_count(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
+    excel = rte_excel(rte_row("Orange Check", line=4))
+
+    response = upload(client, excel, folder_with_header(tmp_path))
+
+    assert response.status_code == 303
+    content = sent[0]["messages"][1]["content"]
+    assert "```c\n// inc/limits.h line 1\n#define LIMIT 4\n```" in content
+    assert "UNUSED" not in content
+    job = store.job(1)
+    # calc.c 자신의 divide 정의도 저장된다(긴 파일에서 함수만 보낼 때 쓴다). 메모는 저장한 수다
+    assert "참고 정의 2개" in job.note and "못 읽은 파일 1개" in job.note
+    assert [d.name for d in store.definitions(1)] == ["LIMIT", "divide"]
+
+
+def test_definitions_inside_the_sent_code_are_stored_but_not_sent(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer())
+
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+
+    assert [d.name for d in store.definitions(1)] == ["divide"]
+    assert "Definitions from other places" not in sent[0]["messages"][1]["content"]
+    assert "참고 정의 1개" in store.job(1).note
