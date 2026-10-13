@@ -12,7 +12,7 @@ from llm_lab.fixer import select_region
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import Finding, cell_text, line_number, norm
 
-SYSTEM_PROMPT = """\
+_HEAD = """\
 You review the Polyspace Code Prover run-time checks found in one C function \
 and decide for each whether the code must change. \
 All findings in one request are in the same function.
@@ -20,6 +20,24 @@ All findings in one request are in the same function.
 - Orange Check: Polyspace could not prove the operation safe. \
 If the code shown guarantees safety, answer no_fix and name the lines that guarantee it. \
 Otherwise the code must change.
+"""
+
+# 가드 허용: 원인을 없애지 못하면 연산 직전의 값 검사로 막는 수정안도 낸다
+GUARD_RULES = """\
+When the code must change, decide between fix and manual:
+- Prefer to remove the cause when the code shown lets you: initialise the variable, \
+use the real array size as the bound, check the value where it enters the function, \
+correct the loop bound, and similar.
+- When the cause cannot be removed here, a guard is acceptable: check the value right \
+before the operation and skip it or use a safe value when the check fails. \
+Keep the behavior for valid inputs, and say in reason that it is a guard and \
+what the real cause probably is. Polyspace may then mark the guarded operation unreachable.
+- Answer manual only when no change in the numbered code can make the operation safe. \
+In reason say what has to be decided and where: which caller, value or definition.
+"""
+
+# 근본 원인만: 원인을 없앨 수 있을 때만 fix, 가리는 수정은 하지 않고 manual
+ROOT_CAUSE_RULES = """\
 When the code must change, decide between fix and manual:
 - Answer fix only when the code shown lets you remove the cause, so that the operation \
 is safe on every execution and static analysis can prove it: initialise the variable, \
@@ -30,6 +48,9 @@ correct the loop bound, and similar.
 would hide the failure (a default or fallback value, skipping the operation, \
 an early return, a condition that is always true). Never make such a change. \
 In reason say what has to be decided and where: which caller, value or definition.
+"""
+
+_FIX_RULES = """\
 When you fix:
 - One set of edits is shared by every finding you answer fix, so fix them together. \
 When several findings come from one cause in the code shown, fix that cause once \
@@ -43,8 +64,19 @@ Add one unchanged neighbouring line only when the changed line appears more than
 Definitions of functions, macros, variables and types that this code uses but that live \
 elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
 return values and the real types behind typedefs. Edits must stay in the numbered code; \
+"""
+
+_DEFINITIONS_GUARD = """\
+if the right change is in one of those definitions or in a caller, \
+guard the operation here and name that file and function in reason.
+"""
+
+_DEFINITIONS_ROOT = """\
 if the right change is in one of those definitions or in a caller, \
 answer manual and name that file and function in reason.
+"""
+
+_TAIL = """\
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write each "reason" in Korean, one to three sentences that a reviewer can paste \
@@ -52,6 +84,32 @@ into the Polyspace comment of that finding.
 Answer with JSON only. "findings" has one entry for each numbered finding. \
 "edits" is [] when no finding is fix.
 """
+
+GUARD_PROMPT = _HEAD + GUARD_RULES + _FIX_RULES + _DEFINITIONS_GUARD + _TAIL
+ROOT_CAUSE_PROMPT = _HEAD + ROOT_CAUSE_RULES + _FIX_RULES + _DEFINITIONS_ROOT + _TAIL
+SYSTEM_PROMPT = GUARD_PROMPT  # 기본값: 가드 허용
+
+# 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값이다
+MODES = (
+    (
+        "guard",
+        "가드 허용",
+        "값 검사·기본값·건너뛰기로 막는 수정안도 냅니다. "
+        "그 자리가 Gray로 바뀌고 동작이 달라질 수 있습니다",
+    ),
+    (
+        "root_cause",
+        "근본 원인만",
+        "원인을 없앨 수 있을 때만 수정안을 내고, 아니면 직접 수정으로 표시합니다",
+    ),
+)
+
+
+def system_prompt_for(context: Any) -> str:
+    """작업 정보의 mode가 root_cause면 근본 원인만, 그 밖(예전 작업 포함)은 가드 허용."""
+    mode = context.get("mode") if isinstance(context, dict) else None
+    return ROOT_CAUSE_PROMPT if mode == "root_cause" else GUARD_PROMPT
+
 
 # TYPE 칸의 글자로 대상을 고른다 (셀 배경색은 보지 않는다)
 TARGET_TYPES = {"red check": "Red", "orange check": "Orange"}
@@ -114,6 +172,8 @@ RTE = Kind(
     defaults=("Red", "Orange"),
     colors={"Red": "red", "Orange": "orange"},
     system_prompt=SYSTEM_PROMPT,
+    system_prompt_for=system_prompt_for,
+    modes=MODES,
     heading="Polyspace Code Prover results in one C function",
     # 4: 공통 답 형식 (findings + edits) / 5: 판단 값 manual (직접 수정) 추가
     prompt_version=5,

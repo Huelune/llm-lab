@@ -288,7 +288,9 @@ def test_cache_key_depends_on_the_messages_file_and_kind():
     assert key() != key([finding(), finding(row=3)])
     assert key() != key(model="other-model")
     assert key() != key(kind=replace(RTE, prompt_version=RTE.prompt_version + 1))
-    assert key() != key(kind=replace(RTE, system_prompt=RTE.system_prompt + "Be brief.\n"))
+    # 지시문을 작업 정보로 고르는 종류는 system_prompt_for를 비워야 system_prompt가 쓰인다
+    reworded = replace(RTE, system_prompt=RTE.system_prompt + "Be brief.\n", system_prompt_for=None)
+    assert key() != key(kind=reworded)
 
 
 def test_kind_can_add_a_message_tail_its_own_answer_format_and_timeout():
@@ -393,3 +395,12 @@ def test_definitions_change_the_cache_key():
 def test_codemetrics_requests_ignore_definitions():
     assert CODEMETRICS.uses_definitions is False
     assert RTE.uses_definitions is True and MISRA.uses_definitions is True
+
+
+def test_rte_mode_in_the_job_context_picks_the_system_prompt():
+    guard = make_request(RTE, [finding()], SOURCE, {"mode": "guard"})
+    root = make_request(RTE, [finding()], SOURCE, {"mode": "root_cause"})
+
+    assert "a guard is acceptable" in guard.messages[0]["content"]
+    assert "Never make such a change" in root.messages[0]["content"]
+    assert cache_key(MODEL, guard) != cache_key(MODEL, root)

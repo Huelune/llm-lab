@@ -51,7 +51,7 @@ uv run llm-probe
    uv run python -c "import sqlite3; db=sqlite3.connect('private/fixer.db'); n=db.execute('DELETE FROM cache').rowcount; db.commit(); print(n, 'cached answers deleted')"
    ```
 
-5. 서버를 켜고 ① 3의 엑셀 ② 2의 소스 폴더 ③ "분석 시작"을 누릅니다. 끝나면 "수정 모두 선택" → "패치 내려받기" →
+5. 서버를 켜고 ① 3의 엑셀 ② 2의 소스 폴더 ③ 처리 방식은 기본값(가드 허용) 그대로 두고 "분석 시작"을 누릅니다. 끝나면 "수정 모두 선택" → "패치 내려받기" →
    화면의 "패치 적용 방법"대로 `--check` 먼저 실행하고 적용합니다.
 
    ```bash

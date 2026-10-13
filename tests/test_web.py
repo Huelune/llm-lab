@@ -53,9 +53,11 @@ def source_folder(tmp_path) -> Path:
     return root
 
 
-def upload(client, excel: bytes, folder, kind="rte", choices=("rte:Red", "rte:Orange")):
+def upload(client, excel: bytes, folder, kind="rte", choices=("rte:Red", "rte:Orange"), mode=None):
     files = [("excel", ("rte.xlsx", excel))]
     data = {"source_dir": str(folder), "kind": kind, "choice": list(choices)}
+    if mode:
+        data["mode"] = [mode]
     return client.post("/results", files=files, data=data, follow_redirects=False)
 
 
@@ -137,7 +139,7 @@ def test_result_json(tmp_path):
     assert (data["state"], data["kind"], data["note"]) == (
         "done",
         "rte",
-        "제외: Gray Check 1 · 참고 정의 1개",
+        "가드 허용 · 제외: Gray Check 1 · 참고 정의 1개",
     )
     # 소스를 찾은 행은 파일:함수 묶음에 들어가고, 소스가 없는 행은 묶음이 없다
     assert [row["group"] for row in data["rows"]] == ["src/calc.c:divide", ""]
@@ -752,3 +754,28 @@ def test_definitions_inside_the_sent_code_are_stored_but_not_sent(tmp_path):
     assert [d.name for d in store.definitions(1)] == ["divide"]
     assert "Definitions from other places" not in sent[0]["messages"][1]["content"]
     assert "참고 정의 1개" in store.job(1).note
+
+
+def test_home_offers_rte_modes_with_guard_checked(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+
+    assert 'name="mode" value="rte:guard" checked' in page
+    assert 'name="mode" value="rte:root_cause"' in page and "근본 원인만" in page
+
+
+def test_job_keeps_the_chosen_mode_and_defaults_to_guard(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer(), fix_answer())
+
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+    upload(
+        client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path), mode="rte:root_cause"
+    )
+
+    assert json.loads(store.job(1).context) == {"mode": "guard"}
+    assert store.job(1).note.startswith("가드 허용")
+    assert json.loads(store.job(2).context) == {"mode": "root_cause"}
+    assert store.job(2).note.startswith("근본 원인만")
+    assert "a guard is acceptable" in sent[0]["messages"][0]["content"]
+    assert "Never make such a change" in sent[1]["messages"][0]["content"]

@@ -82,7 +82,17 @@ class Kind:
     timeout: float = FIX_TIMEOUT  # LLM 대기 시간(초)
     # 보내는 코드가 쓰는 다른 곳의 정의(함수·매크로·전역·타입)를 요청에 참고용으로 붙일지
     uses_definitions: bool = True
+    # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값. 비어 있으면 고를 것이 없다
+    modes: tuple[tuple[str, str, str], ...] = ()
+    # 작업 정보(context)로 시스템 지시문을 고른다. None이면 system_prompt 하나뿐이다
+    system_prompt_for: Callable[[Any], str] | None = None
     auto_select: Callable[[Finding], bool] = always  # "수정 모두 선택"이 고를 행인지
+
+    def prompt(self, context: Any) -> str:
+        """이 작업에 보낼 시스템 지시문."""
+        if self.system_prompt_for is None:
+            return self.system_prompt
+        return self.system_prompt_for(context)
 
     def rank(self, label: str) -> int:
         """중요한 대상일수록 작은 값. choices에 없는 배지 글자는 맨 뒤다."""

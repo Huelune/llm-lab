@@ -430,7 +430,7 @@ def make_request(
         lines = [finding.line for finding in findings if finding.line is not None]
         picked = tuple(pick_definitions(definitions, source.name, source.text, first, last, lines))
     messages = [
-        {"role": "system", "content": kind.system_prompt},
+        {"role": "system", "content": kind.prompt(context)},
         {
             "role": "user",
             "content": build_prompt(kind, findings, source, first, last, context, picked),

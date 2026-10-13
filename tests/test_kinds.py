@@ -269,7 +269,8 @@ def test_rte_region_covers_every_row_of_the_group():
 
 def test_rte_and_misra_prompts_offer_the_manual_decision():
     # 답 처리가 바뀌었으므로(판단 값 추가) prompt_version도 올라간다
-    assert "answer manual" in RTE.system_prompt and RTE.prompt_version == 5
+    assert "manual" in RTE.system_prompt and RTE.prompt_version == 5  # 가드 허용도 manual을 둔다
+    assert "answer manual" in RTE.prompt({"mode": "root_cause"})
     assert "answer manual" in MISRA.system_prompt and MISRA.prompt_version == 2
     assert "manual" not in KINDS["codemetrics"].system_prompt  # CodeMetrics는 그대로
 
@@ -307,7 +308,18 @@ def test_rte_and_misra_prompts_explain_the_definitions_section():
     assert sentence in RTE.system_prompt and sentence in MISRA.system_prompt
     assert "Edits must stay in the numbered code;" in RTE.system_prompt
     assert "Edits must stay in the numbered code;" in MISRA.system_prompt
-    assert "answer manual and name that file and function" in RTE.system_prompt
-    assert "not in the code or the definitions shown" in RTE.system_prompt
+    assert "answer manual and name that file and function" in RTE.prompt({"mode": "root_cause"})
+    assert "not in the code or the definitions shown" in RTE.prompt({"mode": "root_cause"})
     assert "Definitions of" not in CODEMETRICS.system_prompt
     assert RTE.prompt_version == 5 and MISRA.prompt_version == 2  # 답 처리는 그대로
+
+
+def test_rte_modes_default_to_guard_and_pick_the_prompt():
+    # 작업마다 고르는 처리 방식. 첫 항목이 기본값이고, 작업 정보의 mode로 지시문을 고른다
+    assert [value for value, _, _ in RTE.modes] == ["guard", "root_cause"]
+    assert RTE.system_prompt == RTE.system_prompt_for({"mode": "guard"}) == RTE.prompt(None)
+    assert "a guard is acceptable" in RTE.prompt({"mode": "guard"})
+    root = RTE.prompt({"mode": "root_cause"})
+    assert "Never make such a change" in root and "a guard is acceptable" not in root
+    assert "answer manual and name that file and function" in root
+    assert MISRA.modes == () and MISRA.prompt({"anything": 1}) == MISRA.system_prompt

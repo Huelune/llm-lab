@@ -50,9 +50,11 @@ def _new_row(kind: Kind, finding: Finding, match: Match) -> NewRow:
     return NewRow(finding, name, "pending", grp=kind.group_key(finding, name))
 
 
-def _job_note(sheet: Sheet, definitions: int = 0, unreadable: int = 0) -> str:
-    """작업 메모 한 줄: 종류가 엑셀 전체에서 읽은 메모, 뺀 행의 이유별 개수, 참고 정의 수."""
-    parts = [sheet.prepared.note] if sheet.prepared.note else []
+def _job_note(sheet: Sheet, definitions: int = 0, unreadable: int = 0, mode_label: str = "") -> str:
+    """작업 메모 한 줄: 처리 방식, 종류가 읽은 메모, 뺀 행의 이유별 개수, 참고 정의 수."""
+    parts = [mode_label] if mode_label else []
+    if sheet.prepared.note:
+        parts.append(sheet.prepared.note)
     if sheet.skipped:
         skipped = ", ".join(f"{reason} {count}" for reason, count in sheet.skipped.items())
         parts.append(f"제외: {skipped}")
@@ -136,6 +138,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         source_dir: Annotated[str, Form()] = "",
         kind: Annotated[str, Form()] = "rte",
         choice: Annotated[list[str] | None, Form()] = None,
+        mode: Annotated[list[str] | None, Form()] = None,
     ) -> Response:
         sheet_kind = KINDS.get(kind)
         if sheet_kind is None:
@@ -170,6 +173,15 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             found, unreadable = scan_folder(root)
             definitions = used_definitions(found, [source.text for source in files])
         data = sheet.prepared.data
+        # 처리 방식 라디오 값은 "종류:방식"이다. 고른 종류의 것이 없으면 첫 방식이 기본값이다
+        mode_label = ""
+        if sheet_kind.modes:
+            wanted = {
+                value.removeprefix(prefix) for value in mode or [] if value.startswith(prefix)
+            }
+            chosen = next((m for m in sheet_kind.modes if m[0] in wanted), sheet_kind.modes[0])
+            mode_label = chosen[1]
+            data = {**(data if isinstance(data, dict) else {}), "mode": chosen[0]}
         job_id = store.create_job(
             excel.filename or "",
             sheet.sheet,
@@ -178,7 +190,9 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             rows,
             source_root=str(root),
             kind=sheet_kind.name,
-            note=_job_note(sheet, len({(d.file, d.first) for d in definitions}), unreadable),
+            note=_job_note(
+                sheet, len({(d.file, d.first) for d in definitions}), unreadable, mode_label
+            ),
             definitions=definitions,
             context="" if data is None else json.dumps(data, ensure_ascii=False),
         )

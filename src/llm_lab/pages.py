@@ -120,6 +120,7 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
   margin: 6px 0; }
 .notice.paused { background: var(--gray-bg); color: var(--text); }
 .kind { margin: 2px 0; }
+.modes { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 2px; }
 .choices { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 6px 22px;
   font-size: 13px; }
 .retry { margin: 6px 0 10px; }
@@ -420,6 +421,15 @@ def _kind_step() -> str:
             f"{' checked' if label in kind.defaults else ''}> {escape(label)}</label>"
             for label in kind.choices
         )
+        if kind.modes:
+            radios = "".join(
+                f'<label><input type="radio" name="mode" '
+                f'value="{escape(kind.name)}:{escape(value)}"'
+                f"{' checked' if number_ == 0 else ''}> {escape(label)}</label>"
+                for number_, (value, label, _) in enumerate(kind.modes)
+            )
+            helps = " / ".join(f"{escape(label)}: {escape(help)}" for _, label, help in kind.modes)
+            boxes += f'<div class="modes">처리 방식: {radios}</div><p class="hint">{helps}</p>'
         blocks.append(
             f'<div class="kind"><label><input type="radio" name="kind" '
             f'value="{escape(kind.name)}"{" checked" if first else ""}> '
