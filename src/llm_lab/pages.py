@@ -229,8 +229,14 @@ const tabs = [...document.querySelectorAll('[data-tab]')];
 function showTab(name) {
   tabs.forEach(t => t.classList.toggle('on', t.dataset.tab === name));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== name; });
+  history.replaceState(null, '', '#' + name);  // 새로 고침 뒤에도 보던 탭이 열린다
 }
 tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+const wantedTab = location.hash.slice(1);
+if (tabs.some(t => t.dataset.tab === wantedTab)) showTab(wantedTab);
+// 처리 중인 작업 페이지는 스크립트로 다시 읽는다. meta refresh와 달리 주소의 #(탭)이 남는다
+const live = document.querySelector('main[data-refresh]');
+if (live) setTimeout(() => location.reload(), Number(live.dataset.refresh) * 1000);
 document.querySelectorAll('[data-show]').forEach(link => link.addEventListener('click', event => {
   event.preventDefault();
   showTab('detail');
@@ -290,14 +296,15 @@ refresh();
 
 
 def page(title: str, body: str, *, refresh: bool = False) -> str:
-    meta = '<meta http-equiv="refresh" content="5">' if refresh else ""
+    """refresh면 스크립트가 5초마다 페이지를 다시 읽는다 (보던 탭은 주소의 #으로 남는다)."""
+    main = '<main data-refresh="5">' if refresh else "<main>"
     return (
-        f'<!doctype html><html lang="ko"><head><meta charset="utf-8">{meta}'
+        f'<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)} · {APP_NAME}</title><style>{STYLE}</style></head><body>"
         f'<div class="topbar"><div class="inner"><a class="name" href="/">{APP_NAME}</a>'
         '<a href="/">새 분석</a><a href="/results">작업 목록</a></div></div>'
-        f"<main>{body}</main><script>{SCRIPT}</script></body></html>"
+        f"{main}{body}</main><script>{SCRIPT}</script></body></html>"
     )
 
 

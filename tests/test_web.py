@@ -112,7 +112,7 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert 'data-copy="git -c core.autocrlf=false apply --check fixes.patch"' in page
     assert 'action="/results/1/fixes.patch"' in page
     assert 'id="toggle-all"' in page  # 수정 모두 선택
-    assert 'http-equiv="refresh"' not in page
+    assert "data-refresh=" not in page
     assert len(sent) == 1  # 소스가 없는 행은 LLM에 보내지 않는다
 
 
@@ -214,7 +214,11 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
 
     page = client.get("/results/1").text
 
-    assert 'http-equiv="refresh"' in page
+    # 새로 고침은 스크립트가 하고(location.reload), 보고 있던 탭은 주소의 #으로 남긴다
+    assert '<main data-refresh="5">' in page
+    assert 'http-equiv="refresh"' not in page
+    assert "location.reload()" in page
+    assert "location.hash" in page and "replaceState" in page
     assert '<span class="badge blue">처리 중 1/2</span>' in page
     assert '<div class="progress"><div style="width:50%"></div></div>' in page
     assert 'type="checkbox"' not in page
@@ -368,7 +372,7 @@ def test_running_job_can_be_stopped_and_continued(tmp_path):
     page = client.get("/results/1").text
     assert "멈춘 작업입니다." in page
     assert ">이어서 처리</button>" in page
-    assert 'http-equiv="refresh"' not in page
+    assert "data-refresh=" not in page
 
     client.post("/results/1/retry")
     for task in list(queued):
