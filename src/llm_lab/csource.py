@@ -5,8 +5,13 @@
 
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
+
+from llm_lab.sources import DecodeError, decode_source
 
 MAX_DEFINITION_LINES = 80  # 정의 하나를 이 줄 수에서 자른다
 HEAD_LINES = 10  # 블록 위로 서명을 찾아 올라가는 최대 줄 수 (fixer.SIGNATURE_LINES와 같다)
@@ -268,3 +273,51 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
     words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
     if words:
         add(words[-1], "variable", first, last)
+
+
+SOURCE_SUFFIXES = {".c", ".h"}
+
+
+def scan_folder(root: Path) -> tuple[list[Definition], int]:
+    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다."""
+    definitions: list[Definition] = []
+    unreadable = 0
+    for folder, dirs, files in os.walk(root):
+        dirs[:] = sorted(name for name in dirs if not name.startswith("."))
+        for name in sorted(files):
+            if Path(name).suffix.casefold() not in SOURCE_SUFFIXES:
+                continue
+            path = Path(folder, name)
+            relative = path.relative_to(root).as_posix()
+            try:
+                source = decode_source(relative, path.read_bytes())
+            except DecodeError, OSError:
+                unreadable += 1
+                continue
+            definitions.extend(find_definitions(relative, source.text))
+    return definitions, unreadable
+
+
+def _names(code: str) -> list[str]:
+    """주석을 지운 글의 식별자, 처음 나온 순서로 한 번씩. C 예약어는 뺀다."""
+    found: list[str] = []
+    known: set[str] = set()
+    for name in IDENTIFIER.findall(code):
+        if name not in known and name not in C_KEYWORDS:
+            known.add(name)
+            found.append(name)
+    return found
+
+
+def identifiers(text: str) -> list[str]:
+    return _names(blank_comments(text))
+
+
+def used_definitions(definitions: Iterable[Definition], texts: Iterable[str]) -> list[Definition]:
+    """분석 대상 파일들이 쓰는 이름의 정의만, 이름·파일·줄 순서로."""
+    used: set[str] = set()
+    for text in texts:
+        used.update(identifiers(text))
+    return sorted(
+        (d for d in definitions if d.name in used), key=lambda d: (d.name, d.file, d.first)
+    )

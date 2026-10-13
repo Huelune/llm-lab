@@ -3,8 +3,11 @@ from llm_lab.csource import (
     Definition,
     blank_comments,
     find_definitions,
+    identifiers,
+    scan_folder,
     split_lines,
     top_level_blocks,
+    used_definitions,
 )
 
 CODE = """\
@@ -179,3 +182,40 @@ def test_initialized_variable_with_parentheses_is_a_variable():
 
     assert ("mask", "variable", 18, 18) in found
     assert ("flag", "variable", 19, 19) in found
+
+
+def test_scan_folder_reads_c_and_h_in_any_case_and_counts_unreadable(tmp_path):
+    (tmp_path / "inc").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "inc" / "LIMITS.H").write_bytes(b"#define BUF_LEN 16\n")
+    (tmp_path / "main.c").write_bytes("int counter; /* 주석 */\n".encode("cp949"))
+    (tmp_path / "mixed.c").write_bytes(b"int a;\r\nint b;\n")  # 줄바꿈이 섞여 못 읽음
+    (tmp_path / "notes.txt").write_bytes(b"int ignored;\n")
+    (tmp_path / ".git" / "hook.c").write_bytes(b"int hidden;\n")
+
+    definitions, unreadable = scan_folder(tmp_path)
+
+    # 훑는 순서는 폴더 구조를 따르므로 정렬해서 비교한다
+    assert sorted((d.name, d.file) for d in definitions) == [
+        ("BUF_LEN", "inc/LIMITS.H"),
+        ("counter", "main.c"),
+    ]
+    assert unreadable == 1
+
+
+def test_identifiers_are_unique_in_order_without_keywords_or_comment_text():
+    text = "int total = BUF_LEN + lookup[0]; // BUF_LEN again, hidden_name\nreturn total;\n"
+
+    assert identifiers(text) == ["total", "BUF_LEN", "lookup"]
+
+
+def test_used_definitions_keeps_only_names_the_analysed_sources_use():
+    definitions = [
+        Definition("BUF_LEN", "macro", "inc/limits.h", 1, 1, "#define BUF_LEN 16"),
+        Definition("unused_fn", "function", "b.c", 1, 3, "int unused_fn(void)\n{\n}"),
+        Definition("counter", "variable", "a.c", 6, 6, "int counter = 0;"),
+    ]
+
+    kept = used_definitions(definitions, ["int x = BUF_LEN;\n", "counter++;\n"])
+
+    assert [d.name for d in kept] == ["BUF_LEN", "counter"]
