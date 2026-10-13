@@ -154,6 +154,7 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .pick { display: flex; gap: 4px; align-items: center; cursor: pointer; }
 .item .body { padding: 0 10px 8px; }
 .detail { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.item.hit { outline: 2px solid var(--brand); outline-offset: 2px; }  /* "보기"로 찾아온 카드 */
 .reason { background: #f3f7fe; border-left: 3px solid var(--brand); padding: 5px 9px;
   border-radius: 4px; margin: 0 0 6px; }
 .excluded { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
@@ -232,17 +233,53 @@ function showTab(name) {
   history.replaceState(null, '', '#' + name);  // 새로 고침 뒤에도 보던 탭이 열린다
 }
 tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
-const wantedTab = location.hash.slice(1);
-if (tabs.some(t => t.dataset.tab === wantedTab)) showTab(wantedTab);
-// 처리 중인 작업 페이지는 스크립트로 다시 읽는다. meta refresh와 달리 주소의 #(탭)이 남는다
-const live = document.querySelector('main[data-refresh]');
-if (live) setTimeout(() => location.reload(), Number(live.dataset.refresh) * 1000);
+function highlight(card) {
+  document.querySelectorAll('.item.hit').forEach(item => item.classList.remove('hit'));
+  card.classList.add('hit');
+}
 document.querySelectorAll('[data-show]').forEach(link => link.addEventListener('click', event => {
   event.preventDefault();
   showTab('detail');
   const target = document.getElementById(link.dataset.show);
-  if (target) target.scrollIntoView({block: 'start'});
+  if (!target) return;
+  highlight(target);
+  history.replaceState(null, '', '#' + target.id);  // 다시 읽어도 같은 카드를 강조한다
+  target.scrollIntoView({block: 'start'});
 }));
+// 처음 열 때: 주소의 #이 탭이면 그 탭을, 카드면 자세히 보기 탭에서 그 카드를 강조한다
+const wanted = location.hash.slice(1);
+const wantedCard = wanted ? document.getElementById(wanted) : null;
+if (tabs.some(t => t.dataset.tab === wanted)) {
+  showTab(wanted);
+} else if (wantedCard && wantedCard.classList.contains('item')) {
+  showTab('detail');
+  history.replaceState(null, '', '#' + wanted);
+  highlight(wantedCard);
+}
+// 스크롤: 다시 읽기 전에 저장해 둔 위치가 있으면 그리로, 없고 카드가 있으면 카드로
+const scrollKey = 'scroll:' + location.pathname;
+function savedScroll() {
+  try { return sessionStorage.getItem(scrollKey); } catch (e) { return null; }
+}
+function rememberScroll() {
+  try { sessionStorage.setItem(scrollKey, String(window.scrollY)); } catch (e) {}
+}
+function forgetScroll() {
+  try { sessionStorage.removeItem(scrollKey); } catch (e) {}
+}
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+const scrollBack = savedScroll();
+if (scrollBack !== null) {
+  forgetScroll();
+  window.scrollTo(0, Number(scrollBack));
+} else if (wantedCard) {
+  wantedCard.scrollIntoView({block: 'start'});
+}
+// 처리 중인 작업 페이지는 스크립트로 다시 읽는다. meta refresh와 달리 주소의 #과 스크롤이 남는다
+const live = document.querySelector('main[data-refresh]');
+if (live) {
+  setTimeout(() => { rememberScroll(); location.reload(); }, Number(live.dataset.refresh) * 1000);
+}
 const filters = [...document.querySelectorAll('[data-filter]')];
 filters.forEach(button => button.addEventListener('click', () => {
   filters.forEach(b => b.classList.toggle('on', b === button));

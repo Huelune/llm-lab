@@ -219,6 +219,9 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     assert 'http-equiv="refresh"' not in page
     assert "location.reload()" in page
     assert "location.hash" in page and "replaceState" in page
+    # 다시 읽기 전에 스크롤 위치를 저장했다가 되돌리고, "보기"로 간 카드는 강조한다
+    assert "sessionStorage" in page and "scrollRestoration" in page
+    assert ".item.hit" in page and "classList.add('hit')" in page
     assert '<span class="badge blue">처리 중 1/2</span>' in page
     assert '<div class="progress"><div style="width:50%"></div></div>' in page
     assert 'type="checkbox"' not in page
