@@ -53,9 +53,19 @@ def source_folder(tmp_path) -> Path:
     return root
 
 
-def upload(client, excel: bytes, folder, kind="rte", choices=("rte:Red", "rte:Orange"), mode=None):
+def upload(
+    client,
+    excel: bytes,
+    folder,
+    kind="rte",
+    choices=("rte:Red", "rte:Orange"),
+    mode=None,
+    ref_dirs=None,
+):
     files = [("excel", ("rte.xlsx", excel))]
     data = {"source_dir": str(folder), "kind": kind, "choice": list(choices)}
+    if ref_dirs:
+        data["ref_dirs"] = ref_dirs
     if mode:
         data["mode"] = [mode]
     return client.post("/results", files=files, data=data, follow_redirects=False)
@@ -803,3 +813,50 @@ def test_job_keeps_the_chosen_mode_and_defaults_to_guard(tmp_path):
     assert store.job(2).note.startswith("근본 원인만")
     assert "a guard is acceptable" in sent[0]["messages"][0]["content"]
     assert "Never make such a change" in sent[1]["messages"][0]["content"]
+
+
+def project_with_shared_code(tmp_path) -> tuple[Path, Path]:
+    """소스 폴더(proj/app)와, 그 위 폴더의 공용 코드. calc.c는 헤더 별칭으로 공용 함수를 부른다."""
+    top = tmp_path / "proj"
+    app = top / "app"
+    (app / "src").mkdir(parents=True)
+    (top / "common").mkdir()
+    (app / "src" / "calc.c").write_bytes(
+        b'#include "api.h"\nint divide(int a, int b)\n{\n    return a / api_scale(b);\n}\n'
+    )
+    (top / "common" / "api.h").write_bytes(b"#define api_scale(v) drv_scale(v)\n")
+    (top / "common" / "drv.c").write_bytes(b"int drv_scale(int v)\n{\n    return v + 1;\n}\n")
+    return app, top
+
+
+def test_reference_folders_supply_definitions_outside_the_source_folder(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
+    app, top = project_with_shared_code(tmp_path)
+    excel = rte_excel(rte_row("Orange Check", line=4))
+
+    response = upload(client, excel, app, ref_dirs=f'"{top}"\n')
+
+    assert response.status_code == 303
+    content = sent[0]["messages"][1]["content"]
+    assert "// ../common/api.h line 1\n#define api_scale(v) drv_scale(v)" in content
+    assert "// ../common/drv.c lines 1-4\nint drv_scale(int v)" in content
+    # 위 폴더를 참고 폴더로 줘도 소스 폴더 안의 정의는 두 번 저장되지 않는다
+    assert [d.file for d in store.definitions(1) if d.name == "divide"] == ["src/calc.c"]
+    assert "참고 폴더 1개" in store.job(1).note
+
+
+def test_missing_reference_folder_is_rejected(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    response = upload(
+        client, rte_excel(rte_row()), source_folder(tmp_path), ref_dirs=str(tmp_path / "nope")
+    )
+
+    assert response.status_code == 400
+    assert "참고 폴더" in response.text
+
+
+def test_home_has_a_reference_folder_box(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    assert 'name="ref_dirs"' in client.get("/").text

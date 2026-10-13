@@ -295,17 +295,27 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
 SOURCE_SUFFIXES = {".c", ".h"}
 
 
-def scan_folder(root: Path) -> tuple[list[Definition], int]:
-    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다."""
+def scan_folder(
+    root: Path, skip: Path | None = None, prefix: str = ""
+) -> tuple[list[Definition], int]:
+    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다.
+
+    skip 폴더(참고 폴더 안에 든 소스 폴더)는 건너뛰고, 파일 이름 앞에 prefix를 붙인다.
+    """
     definitions: list[Definition] = []
     unreadable = 0
+    skipped = skip.resolve() if skip is not None else None
     for folder, dirs, files in os.walk(root):
-        dirs[:] = sorted(name for name in dirs if not name.startswith("."))
+        dirs[:] = sorted(
+            name
+            for name in dirs
+            if not name.startswith(".") and Path(folder, name).resolve() != skipped
+        )
         for name in sorted(files):
             if Path(name).suffix.casefold() not in SOURCE_SUFFIXES:
                 continue
             path = Path(folder, name)
-            relative = path.relative_to(root).as_posix()
+            relative = prefix + path.relative_to(root).as_posix()
             try:
                 source = decode_source(relative, path.read_bytes())
             except DecodeError, OSError:
@@ -331,13 +341,52 @@ def identifiers(text: str) -> list[str]:
 
 
 def used_definitions(definitions: Iterable[Definition], texts: Iterable[str]) -> list[Definition]:
-    """분석 대상 파일들이 쓰는 이름의 정의만, 이름·파일·줄 순서로."""
+    """분석 대상 파일들이 쓰는 이름의 정의만, 이름·파일·줄 순서로.
+
+    매크로가 다른 이름의 별칭이면(`#define A B`) 그 이름의 정의도 ALIAS_DEPTH 단계까지 넣는다.
+    """
+    definitions = list(definitions)
     used: set[str] = set()
     for text in texts:
         used.update(identifiers(text))
+    frontier = set(used)
+    for _ in range(ALIAS_DEPTH):
+        targets = {
+            target
+            for d in definitions
+            if d.name in frontier and (target := macro_target(d)) and target not in used
+        }
+        if not targets:
+            break
+        used |= targets
+        frontier = targets
     return sorted(
         (d for d in definitions if d.name in used), key=lambda d: (d.name, d.file, d.first)
     )
+
+
+ALIAS_DEPTH = 3  # 매크로 별칭을 따라가는 최대 단계
+# `#define NAME` 또는 `#define NAME(params)` 뒤의 본문
+MACRO_BODY = re.compile(r"^\s*#\s*define\s+[A-Za-z_]\w*(?:\([^)]*\))?\s*(.*)$", re.S)
+# 본문이 다른 이름 하나이거나 그 이름의 호출로 시작하면 별칭이다: B, B(x), (B(x)), ((B))
+ALIAS_BODY = re.compile(r"^\(*\s*([A-Za-z_]\w*)\s*(?:\(|\)*\s*$)")
+
+
+def macro_target(definition: Definition) -> str | None:
+    """별칭 매크로가 가리키는 이름. 별칭이 아니거나 매크로가 아니면 None."""
+    if definition.kind != "macro":
+        return None
+    text = definition.text.replace("\\\n", " ")
+    body = MACRO_BODY.match(text)
+    if not body:
+        return None
+    alias = ALIAS_BODY.match(body.group(1).strip())
+    if not alias:
+        return None
+    target = alias.group(1)
+    if target in C_KEYWORDS or target == definition.name:
+        return None
+    return target
 
 
 MAX_DEFINITIONS = 12  # 요청 하나에 붙이는 정의 수
@@ -386,8 +435,15 @@ def pick_definitions(
 
     picked: list[Definition] = []
     placed: set[tuple[str, int]] = set()  # 열거 상수·별칭마다 같은 몸체가 따로 있다. 한 번만 싣는다
+    seen: set[str] = set()  # 이미 고른 이름 (별칭 순환을 막는다)
     total = 0
-    for name in wanted:
+
+    def place(name: str, depth: int) -> bool:
+        """name의 정의를 싣고, 별칭이면 가리키는 구현을 바로 뒤에 싣는다. 상한에 닿으면 False."""
+        nonlocal total
+        if name in seen:
+            return True
+        seen.add(name)
         candidates = sorted(
             by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first)
         )
@@ -396,8 +452,16 @@ def pick_definitions(
                 continue
             size = definition.text.count("\n") + 1
             if len(picked) >= MAX_DEFINITIONS or total + size > MAX_DEFINITION_TOTAL_LINES:
-                return picked
+                return False
             picked.append(definition)
             placed.add((definition.file, definition.first))
             total += size
+            target = macro_target(definition)
+            if target and depth < ALIAS_DEPTH and not place(target, depth + 1):
+                return False
+        return True
+
+    for name in wanted:
+        if not place(name, 0):
+            break
     return picked

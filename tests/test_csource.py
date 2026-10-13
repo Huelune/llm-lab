@@ -6,6 +6,7 @@ from llm_lab.csource import (
     blank_comments,
     find_definitions,
     identifiers,
+    macro_target,
     pick_definitions,
     scan_folder,
     split_lines,
@@ -450,3 +451,69 @@ def test_pick_ignores_a_finding_line_far_before_the_sent_range():
     picked = pick_definitions(definitions, "src/use.c", REGION, 8, 13, [1, 12])
 
     assert [d.name for d in picked] == ["counter", "lookup"]
+
+
+def macro(name, text, file="inc/api.h", first=1):
+    return Definition(name, "macro", file, first, first, text)
+
+
+def function(name, file="lib/impl.c", first=10):
+    return Definition(name, "function", file, first, first + 2, f"int {name}(int x)\n{{\n}}")
+
+
+def test_macro_target_reads_simple_aliases_only():
+    assert macro_target(macro("api_read", "#define api_read drv_read")) == "drv_read"
+    assert macro_target(macro("api_read", "#define api_read(x) drv_read(x)")) == "drv_read"
+    assert macro_target(macro("api_read", "#define api_read(x) (drv_read((x)))")) == "drv_read"
+    assert macro_target(macro("BUF_LEN", "#define BUF_LEN 16")) is None
+    assert macro_target(macro("SUM", "#define SUM(a, b) ((a) + (b))")) is None
+    assert macro_target(macro("SELF", "#define SELF SELF")) is None
+    assert macro_target(function("drv_read")) is None
+
+
+def test_used_definitions_follow_macro_aliases_to_their_implementation():
+    definitions = [
+        macro("api_read", "#define api_read(x) mid_read(x)"),
+        macro("mid_read", "#define mid_read drv_read", first=2),
+        function("drv_read"),
+        function("unrelated"),
+    ]
+
+    kept = used_definitions(definitions, ["int v = api_read(3);\n"])
+
+    assert [d.name for d in kept] == ["api_read", "drv_read", "mid_read"]
+
+
+def test_alias_cycles_stop():
+    definitions = [macro("ping", "#define ping pong"), macro("pong", "#define pong ping", first=2)]
+
+    assert [d.name for d in used_definitions(definitions, ["ping();\n"])] == ["ping", "pong"]
+    picked = pick_definitions(
+        definitions, "src/use.c", "int f(void) { return ping(); }\n", 1, 1, [1]
+    )
+    assert [d.name for d in picked] == ["ping", "pong"]
+
+
+def test_pick_puts_the_implementation_right_after_its_alias():
+    definitions = [
+        macro("api_read", "#define api_read(x) drv_read(x)"),
+        function("drv_read"),
+        macro("BUF_LEN", "#define BUF_LEN 16", first=5),
+    ]
+    text = "int f(int i)\n{\n    return api_read(i) + BUF_LEN;\n}\n"
+
+    picked = pick_definitions(definitions, "src/use.c", text, 1, 4, [3])
+
+    assert [d.name for d in picked] == ["api_read", "drv_read", "BUF_LEN"]
+
+
+def test_scan_folder_can_prefix_names_and_skip_the_source_folder(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "common").mkdir()
+    (tmp_path / "src" / "use.c").write_bytes(b"int use_it(void)\n{\n    return 0;\n}\n")
+    (tmp_path / "common" / "impl.c").write_bytes(b"int drv_read(int x)\n{\n    return x;\n}\n")
+
+    definitions, unreadable = scan_folder(tmp_path, skip=tmp_path / "src", prefix="../")
+
+    assert [(d.name, d.file) for d in definitions] == [("drv_read", "../common/impl.c")]
+    assert unreadable == 0

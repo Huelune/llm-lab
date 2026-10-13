@@ -487,6 +487,11 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         r'placeholder="예: C:\work\brake\src" autocomplete="off">'
         '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
         '<p class="hint" id="pick-note"></p>'
+        '<p class="hint">참고 폴더 (선택): 부르는 함수나 헤더가 소스 폴더 밖(상위·옆 폴더)에 '
+        "있으면 한 줄에 하나씩 적습니다. 정의를 찾는 데만 쓰고, 수정과 패치는 위 소스 "
+        "폴더에서만 합니다.</p>"
+        '<textarea name="ref_dirs" rows="2" autocomplete="off" '
+        r'placeholder="예: C:\work\brake\common"></textarea>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
         + _kind_step()
         + '<div class="step"><div class="num">4</div><div><h3>분석 시작</h3>'
