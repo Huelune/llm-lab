@@ -84,10 +84,11 @@ class Edit:
 
 @dataclass(frozen=True)
 class FixResult:
-    decision: str  # "fix" | "no_fix"
+    # fix: 수정안 있음 / no_fix: 지금 코드로 괜찮음 / manual: 고쳐야 하지만 사람이 정해야 함
+    decision: str  # "fix" | "no_fix" | "manual"
     reason: str
-    edits: tuple[Edit, ...]  # no_fix면 비어 있음
-    diff: str  # 화면용 unified diff, no_fix면 ""
+    edits: tuple[Edit, ...]  # fix가 아니면 비어 있음
+    diff: str  # 화면용 unified diff, fix가 아니면 ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -365,7 +366,7 @@ FIX_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "number": {"type": "integer"},
-                    "decision": {"type": "string", "enum": ["fix", "no_fix"]},
+                    "decision": {"type": "string", "enum": ["fix", "no_fix", "manual"]},
                     "reason": {"type": "string"},
                 },
                 "required": ["number", "decision", "reason"],
@@ -546,7 +547,7 @@ def read_decisions(data: dict[str, Any], count: int) -> list[tuple[str, str]]:
     if not isinstance(answers, list) or not all(
         isinstance(item, dict)
         and type(item.get("number")) is int
-        and item.get("decision") in ("fix", "no_fix")
+        and item.get("decision") in ("fix", "no_fix", "manual")
         and isinstance(item.get("reason"), str)
         for item in answers
     ):
@@ -562,11 +563,11 @@ def read_decisions(data: dict[str, Any], count: int) -> list[tuple[str, str]]:
 
 
 def share(decisions: list[tuple[str, str]], edits: tuple[Edit, ...], diff: str) -> list[FixResult]:
-    """판단마다 결과 하나. fix 행은 묶음이 함께 쓰는 수정과 diff를 갖는다."""
+    """판단마다 결과 하나. fix 행만 묶음이 함께 쓰는 수정과 diff를 갖는다."""
     return [
         FixResult("fix", reason, edits, diff)
         if decision == "fix"
-        else FixResult("no_fix", reason, (), "")
+        else FixResult(decision, reason, (), "")
         for decision, reason in decisions
     ]
 
@@ -574,10 +575,10 @@ def share(decisions: list[tuple[str, str]], edits: tuple[Edit, ...], diff: str) 
 def edits_results(data: dict[str, Any], request: Request) -> list[FixResult]:
     """공통 답 처리: 행별 판단과, fix가 하나라도 있으면 edits로 만든 묶음 공통 수정.
 
-    모두 no_fix면 edits는 버린다.
+    fix가 없으면 edits는 버린다.
     """
     decisions = read_decisions(data, len(request.findings))
-    if all(decision == "no_fix" for decision, _ in decisions):
+    if not any(decision == "fix" for decision, _ in decisions):
         return share(decisions, (), "")
     edits, diff = _located_edits(data.get("edits"), request)
     return share(decisions, edits, diff)

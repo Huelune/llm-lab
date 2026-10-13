@@ -61,6 +61,29 @@ def test_no_fix_ignores_edits():
     assert (result.decision, result.edits, result.diff) == ("no_fix", (), "")
 
 
+MANUAL_REASON = "호출자가 넘기는 값의 범위를 정해야 합니다."
+
+
+def test_manual_decision_is_accepted_and_has_no_edits():
+    handler, sent = scripted(answer(("manual", MANUAL_REASON)))
+
+    (result,) = ask(handler)
+
+    assert result == FixResult("manual", MANUAL_REASON, (), "")
+    findings = sent[0]["response_format"]["json_schema"]["schema"]["properties"]["findings"]
+    assert findings["items"]["properties"]["decision"]["enum"] == ["fix", "no_fix", "manual"]
+
+
+def test_manual_row_in_a_mixed_group_does_not_take_the_shared_edits():
+    reply = answer(("fix", REASON), ("manual", MANUAL_REASON), edits=[DIVIDE_FIX])
+    handler, _ = scripted(reply)
+
+    first, second = ask(handler, [finding(), finding(row=3, line=1, check="Overflow")])
+
+    assert first.decision == "fix" and first.edits
+    assert (second.decision, second.edits, second.diff) == ("manual", (), "")
+
+
 def test_group_gets_a_decision_per_finding_and_shares_the_edits():
     findings = [finding(), finding(row=3, check="Overflow")]
     handler, sent = scripted(

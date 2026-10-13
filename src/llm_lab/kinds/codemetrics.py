@@ -393,7 +393,7 @@ def prompt_tail(context: Any, findings: list[Finding], source: SourceFile) -> st
 def to_results(data: dict[str, Any], request: Request) -> list[FixResult]:
     """행별 판단과, fix가 하나라도 있으면 code로 만든 묶음 공통 수정.
 
-    모두 no_fix면 code는 버린다.
+    fix가 없으면 code는 버린다.
     """
     decisions = read_decisions(data, len(request.findings))
     pairs = zip(decisions, request.findings, strict=True)
@@ -404,7 +404,7 @@ def to_results(data: dict[str, Any], request: Request) -> list[FixResult]:
                 "format",
                 CALLING_FIX,
             )
-    if all(decision == "no_fix" for decision, _ in decisions):
+    if not any(decision == "fix" for decision, _ in decisions):
         return share(decisions, (), "")
     edits, diff = _code_edits(data.get("code"), request)
     return share(decisions, edits, diff)

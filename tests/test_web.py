@@ -590,12 +590,30 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     assert 'data-tab="overview"' in page and 'data-tab="detail"' in page
     assert "한눈에 보기" in page and "자세히 보기" in page
     assert "검사 종류별" in page and "파일별" in page
-    # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 확인 필요 1
+    # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 직접 수정 0, 확인 필요 1
     assert (
         '<tr><td>Division by zero</td><td class="num">2</td><td class="num">1</td>'
-        '<td class="num">0</td><td class="num">1</td></tr>'
+        '<td class="num">0</td><td class="num">0</td><td class="num">1</td></tr>'
     ) in page
     assert '<td class="mono">src/calc.c</td>' in page
+
+
+def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
+    reason = "호출자가 넘기는 값의 범위를 정해야 합니다."
+    client, _, _ = make_service(tmp_path, answer(("manual", reason)))
+    upload(client, rte_excel(rte_row("Red Check")), source_folder(tmp_path))
+
+    page = client.get("/results/1").text
+
+    assert '<span class="badge orange">직접 수정</span> <b>1</b>' in page  # 맨 위 줄
+    assert '<th class="num">직접 수정</th>' in page  # 검사 종류별·파일별 표
+    assert (
+        '<tr><td>Division by zero</td><td class="num">1</td><td class="num">0</td>'
+        '<td class="num">0</td><td class="num">1</td><td class="num">0</td></tr>'
+    ) in page
+    assert 'data-filter="manual"' in page  # 칩
+    assert 'type="checkbox"' not in page  # 고를 diff가 없다
+    assert reason in page
 
 
 def test_row_errors_read_as_what_happened_and_what_to_do(tmp_path):
