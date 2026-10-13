@@ -1,9 +1,12 @@
 from llm_lab.csource import (
     MAX_DEFINITION_LINES,
+    MAX_DEFINITION_TOTAL_LINES,
+    MAX_DEFINITIONS,
     Definition,
     blank_comments,
     find_definitions,
     identifiers,
+    pick_definitions,
     scan_folder,
     split_lines,
     top_level_blocks,
@@ -219,3 +222,105 @@ def test_used_definitions_keeps_only_names_the_analysed_sources_use():
     kept = used_definitions(definitions, ["int x = BUF_LEN;\n", "counter++;\n"])
 
     assert [d.name for d in kept] == ["BUF_LEN", "counter"]
+
+
+def definition(name, file="inc/limits.h", first=1, kind="macro", lines=1):
+    text = "\n".join(f"{name} line {i}" for i in range(lines))
+    return Definition(name, kind, file, first, first + lines - 1, text)
+
+
+REGION = """\
+#include "limits.h"
+static int local_helper(void)
+{
+    return 1;
+}
+int use(int i)
+{
+    int v = lookup[i % BUF_LEN];
+    int w = v;
+    int x = w;
+    int y = x;
+    return y + local_helper() + counter;
+}
+"""
+
+
+def test_pick_prefers_names_near_the_finding_then_the_rest_in_order():
+    definitions = [
+        definition("counter", file="a.c", kind="variable"),
+        definition("BUF_LEN"),
+        definition("lookup", file="a.c", kind="variable"),
+    ]
+
+    # 검사 줄 12의 위아래 2줄(10~13)에는 counter만 있고, lookup·BUF_LEN은 8줄에 있다
+    picked = pick_definitions(definitions, "src/use.c", REGION, 6, 13, [12])
+
+    assert [d.name for d in picked] == ["counter", "lookup", "BUF_LEN"]
+
+
+def test_pick_skips_definitions_inside_the_code_being_sent():
+    inside = Definition("local_helper", "function", "src/use.c", 2, 5, "...")
+    outside = Definition("local_helper", "function", "other.c", 2, 5, "...")
+
+    picked = pick_definitions([inside, outside], "src/use.c", REGION, 1, 13, [12])
+
+    assert picked == [outside]
+
+
+def test_pick_ranks_same_file_then_headers_and_keeps_two_per_name():
+    definitions = [
+        definition("BUF_LEN", file="z.c"),
+        definition("BUF_LEN", file="inc/limits.h"),
+        definition("BUF_LEN", file="src/use.c", first=90),
+        definition("BUF_LEN", file="inc/other.h"),
+    ]
+
+    picked = pick_definitions(definitions, "src/use.c", REGION, 6, 13, [8])
+
+    assert [(d.file, d.first) for d in picked] == [("src/use.c", 90), ("inc/limits.h", 1)]
+
+
+def test_pick_keeps_both_ifdef_variants_from_one_header():
+    definitions = [definition("BUF_LEN", first=3), definition("BUF_LEN", first=7)]
+
+    picked = pick_definitions(definitions, "src/use.c", REGION, 6, 13, [8])
+
+    assert [d.first for d in picked] == [3, 7]
+
+
+def test_pick_window_does_not_leave_the_sent_range():
+    definitions = [definition("counter", file="a.c", kind="variable")]
+
+    # 검사 줄 12의 창(10~14)이 범위 끝 13을 넘고, 검사 줄 8의 창(6~10)이 범위 시작 8 앞으로 나간다
+    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [12])] == [
+        "counter"
+    ]
+    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [8])] == [
+        "counter"
+    ]
+
+
+def test_pick_stops_at_the_count_and_line_caps():
+    many = [definition(f"name_{i}", first=i + 1) for i in range(MAX_DEFINITIONS + 3)]
+    text = (
+        "int f(void) { return "
+        + " + ".join(f"name_{i}" for i in range(MAX_DEFINITIONS + 3))
+        + "; }\n"
+    )
+
+    assert len(pick_definitions(many, "f.c", text, 1, 1, [1])) == MAX_DEFINITIONS
+
+    big = [definition("huge", lines=MAX_DEFINITION_TOTAL_LINES - 5), definition("more", lines=10)]
+    text = "int f(void) { return huge + more; }\n"
+
+    assert [d.name for d in pick_definitions(big, "f.c", text, 1, 1, [1])] == ["huge"]
+
+
+def test_pick_is_deterministic():
+    definitions = [definition("lookup", file="a.c", kind="variable"), definition("BUF_LEN")]
+
+    first = pick_definitions(definitions, "src/use.c", REGION, 6, 10, [8])
+    second = pick_definitions(list(reversed(definitions)), "src/use.c", REGION, 6, 10, [8])
+
+    assert first == second

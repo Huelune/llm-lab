@@ -321,3 +321,59 @@ def used_definitions(definitions: Iterable[Definition], texts: Iterable[str]) ->
     return sorted(
         (d for d in definitions if d.name in used), key=lambda d: (d.name, d.file, d.first)
     )
+
+
+MAX_DEFINITIONS = 12  # 요청 하나에 붙이는 정의 수
+MAX_DEFINITION_TOTAL_LINES = 400  # 요청 하나에 붙이는 정의 줄 수 합계
+NEAR_LINES = 2  # 검사 줄 위아래로 이만큼 안의 이름을 먼저 고른다
+PER_NAME = 2  # 같은 이름의 정의는 요청 하나에 이만큼
+
+
+def _rank(definition: Definition, source_name: str) -> int:
+    if definition.file == source_name:
+        return 0
+    return 1 if definition.file.casefold().endswith(".h") else 2
+
+
+def pick_definitions(
+    definitions: Iterable[Definition],
+    source_name: str,
+    text: str,
+    first: int,
+    last: int,
+    lines: Iterable[int],
+) -> list[Definition]:
+    """보내는 범위(first~last)가 쓰는 이름의 정의 가운데 범위 밖의 것을, 상한 안에서 고른다.
+
+    검사 줄(lines) 위아래 NEAR_LINES 안의 이름을 행 순서대로 먼저, 나머지는 범위 안 첫 등장 순서로.
+    같은 이름은 같은 파일 → 헤더 → 그 밖 순서로 PER_NAME개까지. 같은 입력에는 같은 결과.
+    """
+    code = split_lines(blank_comments(text))[first - 1 : last]
+    near: list[str] = []
+    for line in lines:
+        lo, hi = max(line - NEAR_LINES, first), min(line + NEAR_LINES, last)
+        near.extend(_names("\n".join(code[lo - first : hi - first + 1])))
+    wanted = _names(" ".join(near)) if near else []
+    for name in _names("\n".join(code)):
+        if name not in wanted:
+            wanted.append(name)
+
+    by_name: dict[str, list[Definition]] = {}
+    for definition in definitions:
+        if definition.file == source_name and first <= definition.first and definition.last <= last:
+            continue  # 이미 보내는 코드 안에 있다
+        by_name.setdefault(definition.name, []).append(definition)
+
+    picked: list[Definition] = []
+    total = 0
+    for name in wanted:
+        candidates = sorted(
+            by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first)
+        )
+        for definition in candidates[:PER_NAME]:
+            size = definition.text.count("\n") + 1
+            if len(picked) >= MAX_DEFINITIONS or total + size > MAX_DEFINITION_TOTAL_LINES:
+                return picked
+            picked.append(definition)
+            total += size
+    return picked
