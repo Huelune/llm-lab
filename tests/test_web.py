@@ -608,6 +608,8 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     assert '<td class="mono" title="src/calc.c">src/calc.c</td>' in page
     # 표가 길어져도 상자 안에서 스크롤하고, 아래 내용을 밀어내지 않는다
     assert ".box { max-height:" in page and "text-overflow: ellipsis" in page
+    # 상자 안 숫자 열은 좁게 두어 이름 칸을 넓힌다 (머리글은 두 줄로 접힐 수 있다)
+    assert ".box td.num, .box th.num { width: 40px;" in page
 
 
 def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):

@@ -141,6 +141,8 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .box th { position: sticky; top: 0; }
 .box td:first-child, .box th:first-child { overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
+.box td.num, .box th.num { width: 40px; padding-left: 4px; padding-right: 4px; }
+.box th.num { white-space: normal; word-break: keep-all; line-height: 1.2; vertical-align: bottom; }
 .box h3 { font-size: 12px; margin: 0 6px 4px; color: var(--muted); }
 .list td.summary { color: var(--muted); max-width: 520px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
