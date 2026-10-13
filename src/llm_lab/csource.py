@@ -32,6 +32,7 @@ POINTER_NAME = re.compile(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)")
 SUBSCRIPT = re.compile(r"\[[^\]]*\]")
 TYPE_KEYWORD = re.compile(r"(?:typedef|struct|union|enum)\b")  # 단어 전체. enum_t는 아니다
 TYPEDEF = re.compile(r"typedef\b")
+EXTERN_BEFORE = re.compile(r"\bextern\s*$")  # 문자열은 지워져 `extern "C" {`가 `extern   {`가 된다
 BARE_TAG = re.compile(r"(?:struct|union|enum)\s+[A-Za-z_]\w*")  # `struct tag;` 전방 선언
 
 
@@ -106,16 +107,22 @@ def blank_comments(text: str) -> str:
 
 
 def top_level_blocks(text: str) -> list[tuple[int, int]]:
-    """최상위 { … } 블록의 (시작 줄, 끝 줄) 목록. 주석·문자열·문자 상수 안의 중괄호는 무시한다."""
+    """최상위 { … } 블록의 (시작 줄, 끝 줄) 목록. 주석·문자열·문자 상수 안의 중괄호는 무시한다.
+
+    `extern "C" {`의 중괄호는 블록으로 세지 않는다 (짝인 `}`는 깊이 0이라 저절로 무시된다).
+    """
     blocks: list[tuple[int, int]] = []
     depth = 0
     line = 1
     start = 0
-    for ch in blank_comments(text):
+    code = blank_comments(text)
+    for index, ch in enumerate(code):
         if ch == "\n":
             line += 1
         elif ch == "{":
             if depth == 0:
+                if EXTERN_BEFORE.search(code[max(0, index - 200) : index]):
+                    continue  # extern "C" { … }는 묶음일 뿐이다. 안의 정의는 최상위로 본다
                 start = line
             depth += 1
         elif ch == "}" and depth > 0:

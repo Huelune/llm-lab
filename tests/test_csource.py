@@ -366,3 +366,43 @@ def test_repeated_names_of_one_body_count_once_toward_the_caps():
     assert len(picked) == MAX_DEFINITIONS  # 열거 몸체 1개 + 나머지 11개
     assert [d.name for d in picked].count("E_0") == 1
     assert not any(d.name in ("E_1", "E_4") for d in picked)
+
+
+CPLUSPLUS_HEADER = """\
+#ifndef API_H
+#define API_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+#define API_MAX 8
+typedef int api_id_t;
+typedef enum {
+    API_OK,
+    API_FAIL
+} api_status_t;
+extern int api_table[API_MAX];
+static inline int api_twice(int v)
+{
+    return v * 2;
+}
+#ifdef __cplusplus
+}
+#endif
+#endif
+"""
+
+
+def test_header_wrapped_in_extern_c_is_scanned_inside_the_wrapper():
+    found = names(find_definitions("inc/api.h", CPLUSPLUS_HEADER))
+
+    assert ("API_MAX", "macro", 6, 6) in found
+    assert ("api_id_t", "type", 7, 7) in found
+    assert ("api_status_t", "type", 8, 11) in found
+    assert ("API_OK", "type", 8, 11) in found
+    assert ("api_table", "variable", 12, 12) in found
+    assert ("api_twice", "function", 13, 16) in found
+    assert not any(name == "extern" for name, _, _, _ in found)
+
+
+def test_extern_c_braces_do_not_make_a_block():
+    assert top_level_blocks(CPLUSPLUS_HEADER) == [(8, 11), (14, 16)]
