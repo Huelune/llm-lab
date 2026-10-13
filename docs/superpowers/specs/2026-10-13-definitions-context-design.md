@@ -1,7 +1,7 @@
 # 다른 파일의 정의를 LLM에 함께 보내기 설계
 
 - 작성일: 2026-10-13
-- 상태: 승인됨 (2026-10-13). 검토에서 typedef·struct·enum 정의를 범위에 넣음
+- 상태: 구현됨 (2026-10-13, master 5de19ff). 검토에서 typedef·struct·enum 정의를 범위에 넣음. 최종 검토 뒤 고친 것: 이름이 여럿인 정의는 요청·메모에서 한 번만 셈, `extern "C"` 묶음 헤더 지원, 매크로 꼴 서명의 이름 찾기, 지시문은 "numbered code"로 표현
 - 구현 계획: `docs/superpowers/plans/2026-10-13-definitions-context.md`
 - 바탕: `2026-10-08-sheet-kinds-misra-design.md`(종류 기반)와 `2026-10-07-rte-fixer-design.md`. 여기 적지 않은 것은 그대로 따른다.
 
