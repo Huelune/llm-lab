@@ -79,7 +79,7 @@ def test_very_long_function_is_not_sent(monkeypatch):
 
 def test_limits_come_from_the_job_not_from_code():
     excel = metrics_excel(metric_row(threshold=99, actual=100), conditions=None)
-    sheet = read_sheet(io.BytesIO(excel), CODEMETRICS, ["단계 모름"])
+    sheet = read_sheet(io.BytesIO(excel), CODEMETRICS, ["Unknown"])
 
     request = make_request(CODEMETRICS, sheet.findings, SOURCE, sheet.prepared.data)
 

@@ -51,7 +51,7 @@ from llm_lab.sources import SourceFile
 
 REQUIRED = ("file", "function", "line", "check", "threshold", "actual value")
 # 배지 글자 (이 도구가 정한 이름). 조건 시트의 판정 글은 카드 메모에 그대로 보인다
-FAIL, MIDDLE, UNKNOWN = "Fail", "가운데", "단계 모름"
+FAIL, MIDDLE, UNKNOWN = "Fail", "Conditional Pass", "Unknown"
 NO_FUNCTION = "파일 단위 지표 (Function 없음)"
 PASSED = "조건 시트상 Pass"
 # 지표 이름을 낱말로 비교할 때 빼는 낱말
@@ -257,7 +257,7 @@ def prepare(workbook: Any) -> Prepared:
 
 
 def _stage(context: Any, check: str, actual: str) -> tuple[str, str, str]:
-    """(배지 글자, 조건 시트 판정 글, 단계 모름 이유). Pass면 배지 글자가 'pass'다."""
+    """(배지 글자, 조건 시트 판정 글, Unknown 이유). Pass면 배지 글자가 'pass'다."""
     data = context or {}
     metrics = data.get("metrics") or []
     if not metrics:
@@ -290,7 +290,7 @@ def read_row(cell: Cell, row: int, context: Any) -> Finding | str:
     if verdict:
         note += f" · 조건 시트: {verdict}"
     if unknown:
-        note += f" · 단계 모름: {unknown}"
+        note += f" · Unknown: {unknown}"
     return Finding(
         row=row,
         color="",
@@ -466,7 +466,7 @@ def same_function(finding: Finding, file_name: str) -> str:
 
 
 def not_middle(finding: Finding) -> bool:
-    """가운데 단계 행은 사람이 검토해서 고른다."""
+    """Conditional Pass 단계 행은 사람이 검토해서 고른다."""
     return finding.category != MIDDLE
 
 

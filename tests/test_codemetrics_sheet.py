@@ -23,10 +23,11 @@ def read(data: bytes, selected=(FAIL, MIDDLE, UNKNOWN)):
 
 ROWS = [
     metric_row(actual=24),  # 2행: 21 이상 → Fail
-    metric_row(actual=15, function="other()", line=20),  # 3행: 11~20 → 가운데
+    metric_row(actual=15, function="other()", line=20),  # 3행: 11~20 → Conditional Pass
     metric_row(actual=8, function="third()", line=30),  # 4행: 1~10 → Pass라 뺀다
     metric_row("Number of Call Levels", threshold=3, actual=5),  # 5행: 값으로 이음, 4 이상 → Fail
-    metric_row("Number of Calling Functions", threshold=4, actual=6),  # 6행: 낱말로 이음 → 가운데
+    # 6행: 낱말로 이음 → Conditional Pass
+    metric_row("Number of Calling Functions", threshold=4, actual=6),
     metric_row("Number of Called Functions", threshold=6, actual=9),  # 7행: 조건 시트에 없음
     metric_row(function="", line=None),  # 8행: 파일 단위 지표
 ]
@@ -47,7 +48,7 @@ def test_targets_get_their_stage_from_the_condition_sheet():
     first = sheet.findings[0]
     assert (first.threshold, first.actual, first.function) == ("10", "24", "grade()")
     assert first.note == "값 24 · 기준 10 · 조건 시트: Fail (고칠 것)"
-    assert sheet.findings[-1].note == "값 9 · 기준 6 · 단계 모름: 조건 시트에 짝이 없는 지표"
+    assert sheet.findings[-1].note == "값 9 · 기준 6 · Unknown: 조건 시트에 짝이 없는 지표"
     assert sheet.prepared.note == (
         "조건 시트: 지표 3개 · 조건 시트에서 짝을 찾지 못한 지표 1개 · 값으로 이은 지표 1개"
     )
@@ -57,7 +58,7 @@ def test_without_a_condition_sheet_every_row_is_a_target_of_unknown_stage():
     sheet = read(metrics_excel(metric_row(actual=3), conditions=None))
 
     assert [(f.category, f.note) for f in sheet.findings] == [
-        (UNKNOWN, "값 3 · 기준 10 · 단계 모름: 조건 시트 없음")
+        (UNKNOWN, "값 3 · 기준 10 · Unknown: 조건 시트 없음")
     ]
     assert sheet.prepared.note == "조건 시트 없음: 결과 시트 Threshold만 씀"
 
@@ -71,7 +72,7 @@ def test_values_outside_every_band_or_not_numbers_are_unknown_with_a_reason():
     rows = [metric_row(actual=30), metric_row(actual="n/a")]
     sheet = read(metrics_excel(*rows, conditions=conditions))
 
-    assert [f.note.split("단계 모름: ")[1] for f in sheet.findings] == [
+    assert [f.note.split("Unknown: ")[1] for f in sheet.findings] == [
         "범위 글을 읽지 못함",
         "Actual Value가 숫자가 아님",
     ]
@@ -174,7 +175,8 @@ def test_calling_and_called_metrics_pair_with_their_own_check():
 
 
 def test_a_pass_with_conditions_is_a_middle_band_not_a_pass():
-    # 가운데 단계 판정 글에 pass 낱말이 섞여 있어도 Pass로 보고 빼면 그 단계가 통째로 빠진다
+    # Conditional Pass 단계 판정 글에 pass 낱말이 섞여 있어도 Pass로 보고 빼면
+    # 그 단계가 통째로 빠진다
     conditions = [
         ["No", "지표", "기준", "판정"],
         [1, "Cyclomatic Complexity", "1 ~ 10", "Pass"],
