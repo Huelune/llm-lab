@@ -39,10 +39,10 @@ uv run llm-probe
 1. 회사 정식 분석 설정(프로젝트·옵션 파일)을 정하고, 두 번 모두 그 설정을 씁니다.
 2. 소스를 패치 전 원본으로 되돌리고, 원본 폴더를 따로 복사해 둡니다.
 3. Polyspace를 돌리고 결과 엑셀을 만듭니다.
-4. 서버를 끈 상태에서 저장해 둔 작업 목록과 LLM 답을 모두 지웁니다. `N files deleted`가 나오면 됩니다(N은 1~3).
+4. 서버를 끈 상태에서 저장해 둔 작업 목록, LLM 답, 대화 기록을 모두 지웁니다. `N files deleted`가 나오면 됩니다.
 
    ```bash
-   uv run python -c "from pathlib import Path; n=[p.unlink() for p in Path('private').glob('fixer.db*')]; print(len(n), 'files deleted')"
+   uv run python -c "from pathlib import Path; n=[p.unlink() for p in [*Path('private').glob('fixer.db*'), *Path('private/llm-logs').glob('*.md')]]; print(len(n), 'files deleted')"
    ```
 
    LLM 답만 지우고 작업 목록은 남기려면 대신 이것을 씁니다. `N cached answers deleted`가 나옵니다.
