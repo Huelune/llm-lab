@@ -30,10 +30,13 @@ from llm_lab.sources import Match, load_from_folder
 from llm_lab.store import Job, NewRow, Row, Store, StoreError
 from llm_lab.worker import Worker, daemon_pool
 
-# .env처럼 프로젝트 루트 기준. private/는 git에서 제외되어 있다
-DB_PATH = Path("private/fixer.db")
+# .env처럼 프로젝트 루트 기준. private/는 git에서 제외되어 있다. --profile NAME이면 private/NAME
+DATA_DIR = Path("private")
+DB_NAME = "fixer.db"
 # 행마다 LLM과 오간 대화를 Markdown 파일로 남기는 폴더
-LOG_DIR = Path("private/llm-logs")
+LOG_DIR_NAME = "llm-logs"
+DB_PATH = DATA_DIR / DB_NAME
+LOG_DIR = DATA_DIR / LOG_DIR_NAME
 WORKERS = 2
 RECENT_JOBS = 10  # 첫 화면에 보여줄 최근 작업 수
 LISTED_JOBS = 100  # 작업 목록 화면에 보여줄 작업 수
@@ -255,22 +258,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-browser", action="store_true", help="서버를 켤 때 브라우저를 자동으로 열지 않음"
     )
+    parser.add_argument(
+        "--profile",
+        metavar="NAME",
+        help="설정은 .env.NAME, 작업 DB와 대화 기록은 private/NAME을 쓴다 "
+        "(같은 폴더에서 서버를 하나 더 띄울 때)",
+    )
     args = parser.parse_args(argv)
+    data_dir = DATA_DIR / args.profile if args.profile else DATA_DIR
     try:
-        settings = load_settings()
+        settings = load_settings(args.profile)
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return 1
     try:
-        store = Store(DB_PATH)
+        store = Store(data_dir / DB_NAME)
     except StoreError as exc:
         print(f"DB 오류: {exc}", file=sys.stderr)
         return 1
     submit = daemon_pool(WORKERS)
-    worker = Worker(store, get_client(settings), settings.model, submit, log_dir=LOG_DIR)
+    worker = Worker(
+        store, get_client(settings), settings.model, submit, log_dir=data_dir / LOG_DIR_NAME
+    )
     worker.resume()
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"\n  접속 주소: {url}   (끄려면 Ctrl+C)\n")
+    profile_note = f"   프로필: {args.profile}" if args.profile else ""
+    print(f"\n  접속 주소: {url}{profile_note}   (끄려면 Ctrl+C)\n")
     if not args.no_browser:
         threading.Thread(target=open_when_ready, args=(url, args.port), daemon=True).start()
     # 끄면 처리 중이거나 줄 서 있는 행은 버린다. 다음에 켤 때 resume()이 이어서 처리한다.

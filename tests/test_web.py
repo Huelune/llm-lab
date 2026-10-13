@@ -23,6 +23,7 @@ from rte_fixtures import (
 )
 
 from llm_lab import web
+from llm_lab.config import OPTIONAL_VARS, REQUIRED_VARS
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.folder_picker import PickerError
 from llm_lab.kinds import KINDS, RTE
@@ -627,3 +628,37 @@ def test_conflicting_fixes_are_marked_and_red_is_picked_first(tmp_path):
     assert 'name="row" value="1" data-auto="0" data-conflicts="2"' in page
     assert "이번엔 제외" in page
     assert "행 3 수정과 같은 줄을 고칩니다" in page
+
+
+def test_main_profile_uses_its_env_file_and_data_folder(tmp_path, monkeypatch):
+    # 같은 폴더에서 서버를 하나 더 띄울 때 설정과 DB·기록이 프로필별로 갈린다
+    monkeypatch.chdir(tmp_path)
+    for key in (*REQUIRED_VARS, *OPTIONAL_VARS):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env.b").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_MODEL=alt-model\n", encoding="utf-8"
+    )
+    workers = []
+    monkeypatch.setattr(web.uvicorn, "run", lambda app, **kwargs: None)
+    monkeypatch.setattr(
+        web,
+        "Worker",
+        lambda *args, **kwargs: workers.append((args, kwargs)) or Worker(*args, **kwargs),
+    )
+
+    assert web.main(["--no-browser", "--profile", "b"]) == 0
+
+    ((args, kwargs),) = workers
+    assert args[2] == "alt-model"
+    assert kwargs["log_dir"] == Path("private/b/llm-logs")
+    assert (tmp_path / "private" / "b" / "fixer.db").is_file()
+    assert not (tmp_path / "private" / "fixer.db").exists()
+
+
+def test_main_names_the_missing_profile_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("LLM_MODEL", MODEL)
+
+    assert web.main(["--no-browser", "--profile", "b"]) == 1
+    assert ".env.b" in capsys.readouterr().err

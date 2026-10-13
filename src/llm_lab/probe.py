@@ -473,9 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--context", action="store_true", help="기본 점검 대신 컨텍스트 길이(최대 입력 토큰)를 잼"
     )
+    parser.add_argument("--profile", metavar="NAME", help=".env 대신 .env.NAME을 읽는다")
     args = parser.parse_args(argv)
     try:
-        settings = load_settings()
+        settings = load_settings(args.profile)
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return 1

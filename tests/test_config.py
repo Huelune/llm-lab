@@ -264,3 +264,25 @@ def test_azure_client_kind_requires_api_key():
     # AzureOpenAI는 키를 api-key 헤더로 보내므로 키 없이는 만들 수 없다
     with pytest.raises(ConfigError, match="LLM_API_KEY"):
         settings_from_env({**VALID, "LLM_CLIENT": "azure", "LLM_API_KEY": ""})
+
+
+def test_profile_reads_its_own_env_file(isolated):
+    # 같은 폴더에서 설정을 둘 쓸 때: .env.<프로필>을 읽는다
+    (isolated / ".env").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_MODEL=main\n", encoding="utf-8"
+    )
+    (isolated / ".env.b").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_MODEL=alt-model\n", encoding="utf-8"
+    )
+
+    assert load_settings("b").model == "alt-model"
+    assert load_settings().model == "main"
+
+
+def test_missing_profile_file_is_an_error(isolated):
+    (isolated / ".env").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_MODEL=main\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError, match=r"\.env\.b"):
+        load_settings("b")

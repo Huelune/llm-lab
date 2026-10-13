@@ -124,6 +124,8 @@ bash:
 LLM_MODEL="후보 모델" uv run llm-probe --verbose --output probe-후보.txt
 ```
 
+후보마다 `.env.b`, `.env.c`처럼 파일을 두고 `uv run llm-probe --profile b`로 돌려도 됩니다. llm-fix-server도 `--profile b --port 8001`로 같은 폴더에서 하나 더 띄울 수 있어, 두 모델의 수정안을 나란히 비교할 때 씁니다.
+
 ### 비교 기준
 
 | 기준 | 어디서 보나 | 보는 눈 |

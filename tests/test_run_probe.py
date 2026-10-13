@@ -6,7 +6,7 @@ import httpx2
 from fake_llm import API_KEY, MODEL, completion, error, healthy_server, make_client, request_kind
 
 from llm_lab import probe
-from llm_lab.config import Settings
+from llm_lab.config import OPTIONAL_VARS, REQUIRED_VARS, Settings
 
 SETTINGS = Settings(base_url="https://llm.test/v1", api_key=API_KEY, model=MODEL)
 
@@ -277,3 +277,22 @@ def test_header_notes_azure_client_kind(capsys):
     first_line = capsys.readouterr().out.splitlines()[0]
 
     assert "Azure 방식" in first_line
+
+
+def test_main_profile_reads_its_env_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for key in (*REQUIRED_VARS, *OPTIONAL_VARS):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env.b").write_text(
+        "LLM_BASE_URL=https://llm.test/v1\nLLM_MODEL=alt-model\n", encoding="utf-8"
+    )
+    seen = []
+
+    def fake_client(settings):
+        seen.append(settings)
+        return make_client(healthy_server)
+
+    monkeypatch.setattr(probe, "get_client", fake_client)
+
+    assert probe.main(["--profile", "b"]) == 0
+    assert seen[0].model == "alt-model"

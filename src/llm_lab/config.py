@@ -108,9 +108,14 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
     )
 
 
-def load_settings() -> Settings:
-    """현재 디렉터리의 .env를 읽고, 비어 있지 않은 OS 환경변수를 우선 적용한다."""
-    path = Path(".env")
+def load_settings(profile: str | None = None) -> Settings:
+    """현재 디렉터리의 .env를 읽고, 비어 있지 않은 OS 환경변수를 우선 적용한다.
+
+    profile을 주면 .env 대신 .env.<profile>을 읽는다 (같은 폴더에서 설정을 둘 쓸 때).
+    """
+    path = Path(f".env.{profile}") if profile else Path(".env")
+    if profile and not path.is_file():
+        raise ConfigError(f"프로필 설정 파일이 없습니다: {path} (.env.example을 복사해 만드세요)")
     merged: dict[str, str | None] = {}
     if path.is_file():
         try:
