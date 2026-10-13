@@ -60,7 +60,7 @@ ROWS: list[list[object]] = [
 def test_counts_per_check(tmp_path: Path) -> None:
     screen = peek.summarize(_workbook(tmp_path / "m.xlsx", ROWS))
 
-    assert any("Metrics_Result" in line and "데이터 5행" in line for line in screen)
+    assert any(line.startswith("결과 시트 (헤더 ") and "데이터 5행" in line for line in screen)
     assert _check_line(screen, "Cyclomatic Complexity") == (["2", "0"], ["2", "0", "0", "0"])
     # 숫자가 아닌 Threshold("<= 80")는 비교하지 않고 따로 센다
     assert _check_line(screen, "Number of Paths") == (["2", "0"], ["1", "0", "0", "1"])
@@ -114,7 +114,7 @@ def test_many_checks_fit_one_screen(tmp_path: Path) -> None:
 
 def test_missing_sheet_names_only_columns(tmp_path: Path) -> None:
     book = Workbook()
-    book.active.title = "RTE_Result"
+    book.active.title = "secret_RTE_Result"  # 시트 이름도 회사 값이라 찍지 않는다
     book.active.append(["secret project title"])
     book.active.append(["ID", "TYPE", "File", "line", "check", "detail"])
     path = tmp_path / "rte.xlsx"
@@ -123,7 +123,7 @@ def test_missing_sheet_names_only_columns(tmp_path: Path) -> None:
     text = "\n".join(peek.summarize(path))
 
     assert "CodeMetrics 시트를 찾지 못했습니다" in text
-    assert "[RTE_Result] 필요한 열 3/6개" in text
+    assert "결과 시트 1: 필요한 열 3/6개" in text
     assert "없는 열: function, threshold, actual value" in text
     assert "secret" not in text and "TYPE" not in text
 
@@ -131,7 +131,7 @@ def test_missing_sheet_names_only_columns(tmp_path: Path) -> None:
 def test_screen_never_shows_company_values(tmp_path: Path) -> None:
     book = Workbook()
     sheet = book.active
-    sheet.title = "Metrics_Result"
+    sheet.title = "secret_Metrics_Result"  # 시트 이름도 회사 값이라 찍지 않는다
     sheet.append([*HEADER, "secret column"])
     sheet.append(
         [
@@ -152,6 +152,7 @@ def test_screen_never_shows_company_values(tmp_path: Path) -> None:
     text = "\n".join(peek.summarize(path))
 
     assert "secret" not in text
+    assert "결과 시트 (헤더 1행) / 데이터 1행 / Check 1종" in text
     # 알 수 없는 열은 이름 대신 개수만 센다
     assert (
         "열: file, function, line, check, threshold, actual value, status, comment "
