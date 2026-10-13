@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 from html import escape
+from urllib.parse import quote
 
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.patch import APPLY_COMMAND, find_conflicts, pick_without_conflicts
@@ -116,6 +117,11 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .progress { height: 6px; background: var(--gray-bg); border-radius: 999px; overflow: hidden;
   margin: 6px 0 2px; }
 .progress div { height: 100%; background: var(--brand); }
+.spinner { display: inline-block; width: 14px; height: 14px; margin-right: 6px;
+  vertical-align: -2px; border: 2px solid var(--gray-bg); border-top-color: var(--brand);
+  border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 .notice { background: var(--red-bg); color: var(--red); border-radius: 6px; padding: 6px 10px;
   margin: 6px 0; }
 .notice.paused { background: var(--gray-bg); color: var(--text); }
@@ -283,6 +289,14 @@ if (scrollBack !== null) {
 } else if (wantedCard) {
   wantedCard.scrollIntoView({block: 'start'});
 }
+// 분석 시작을 누르면 엑셀을 읽는 몇 초 동안 단추를 잠그고 스피너를 보인다
+const analyze = document.getElementById('analyze');
+if (analyze) analyze.addEventListener('submit', () => {
+  const button = analyze.querySelector('button[type="submit"]');
+  if (!button) return;
+  button.disabled = true;
+  button.innerHTML = '<span class="spinner"></span>엑셀을 읽는 중…';
+});
 // 처리 중인 작업 페이지는 스크립트로 다시 읽는다. meta refresh와 달리 주소의 #과 스크롤이 남는다
 const live = document.querySelector('main[data-refresh]');
 if (live) {
@@ -340,12 +354,24 @@ refresh();
 """
 
 
+# 탭 아이콘: 파란 둥근 네모 위의 체크 표시. 외부 파일을 읽지 않도록 data URI로 넣고
+# /favicon.ico로도 같은 그림을 준다
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="7" fill="#1f5fbf"/>'
+    '<path d="M8 17l5 5 11-12" fill="none" stroke="#fff" stroke-width="3.5" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+FAVICON_HREF = "data:image/svg+xml," + quote(FAVICON_SVG)
+
+
 def page(title: str, body: str, *, refresh: bool = False) -> str:
     """refresh면 스크립트가 5초마다 페이지를 다시 읽는다 (보던 탭은 주소의 #으로 남는다)."""
     main = '<main data-refresh="5">' if refresh else "<main>"
     return (
         f'<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f'<link rel="icon" href="{FAVICON_HREF}">'
         f"<title>{escape(title)} · {APP_NAME}</title><style>{STYLE}</style></head><body>"
         f'<div class="topbar"><div class="inner"><a class="name" href="/">{APP_NAME}</a>'
         '<a href="/">새 분석</a><a href="/results">작업 목록</a></div></div>'
@@ -438,7 +464,8 @@ def _kind_step() -> str:
 def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> str:
     options = "".join(f'<option value="{escape(folder)}">' for folder in recent_dirs)
     form = (
-        '<form class="card" method="post" action="/results" enctype="multipart/form-data">'
+        '<form id="analyze" class="card" method="post" action="/results" '
+        'enctype="multipart/form-data">'
         '<div class="step"><div class="num">1</div><div><h3>Polyspace 결과 엑셀</h3>'
         '<p class="hint">이름이 _Result로 끝나는 결과 시트가 있는 .xlsx 파일 하나</p>'
         '<input type="file" name="excel" accept=".xlsx" required></div></div>'
@@ -788,7 +815,8 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
         percent = round(done * 100 / total) if total else 100
         body += (
             f'<div class="progress"><div style="width:{percent}%"></div></div>'
-            f'<p class="sub">{done}/{total} 처리 · 5초마다 새로 고칩니다</p>'
+            f'<p class="sub"><span class="spinner"></span>{done}/{total} 처리 · '
+            "5초마다 새로 고칩니다</p>"
             f'<form class="retry" method="post" action="/results/{job.id}/stop">'
             '<button class="btn plain" type="submit">멈춤</button></form>'
         )

@@ -24,7 +24,7 @@ from llm_lab.config import ConfigError, load_settings
 from llm_lab.csource import scan_folder, used_definitions
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
-from llm_lab.pages import error_page, index_page, job_page, results_page
+from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, Sheet, SheetError, read_sheet
 from llm_lab.sources import Match, load_from_folder
@@ -105,6 +105,11 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return index_page(with_rows(store.jobs(limit=RECENT_JOBS)), store.recent_roots())
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        # 브라우저가 자동으로 찾는 주소. 페이지의 data URI와 같은 그림이다
+        return Response(FAVICON_SVG, media_type="image/svg+xml")
 
     @app.get("/results", response_class=HTMLResponse)
     def results() -> str:
