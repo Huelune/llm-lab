@@ -6,6 +6,7 @@ from fake_llm import MODEL, completion, error, make_client, scripted
 from misra_fixtures import misra_finding
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
+from llm_lab.csource import Definition
 from llm_lab.fixer import (
     MISMATCH_SUMMARIES,
     EditMismatch,
@@ -17,7 +18,7 @@ from llm_lab.fixer import (
     make_request,
     propose_fixes,
 )
-from llm_lab.kinds import MISRA, RTE
+from llm_lab.kinds import CODEMETRICS, MISRA, RTE
 from llm_lab.sources import decode_source
 
 SOURCE = decode_source("calc.c", CALC_C)
@@ -355,3 +356,40 @@ def test_kind_answer_with_the_wrong_result_count_is_asked_again_then_fails():
     assert more == "자세히: 판단 수가 행 수와 다름 (2번 시도)"
     assert len(sent) == 2
     assert "판단 수가 행 수와 다름" in sent[1]["messages"][3]["content"]
+
+
+LIMIT = Definition("LIMIT", "macro", "inc/limits.h", 3, 3, "#define LIMIT 16")
+USER = decode_source("use.c", b"int use(int b)\n{\n    return LIMIT / b;\n}\n")
+
+
+def test_request_appends_the_definitions_the_code_uses():
+    request = make_request(RTE, [finding(line=3)], USER, definitions=[LIMIT])
+
+    assert request.definitions == (LIMIT,)
+    content = request.messages[1]["content"]
+    assert content.index("```c\n    1| int use(int b)") < content.index(
+        "Definitions from other places"
+    )
+    assert "for reference only. Edits must stay in the code above." in content
+    assert "```c\n// inc/limits.h line 3\n#define LIMIT 16\n```" in content
+
+
+def test_request_without_matching_definitions_has_no_definitions_section():
+    unused = Definition("OTHER", "macro", "inc/limits.h", 4, 4, "#define OTHER 1")
+
+    request = make_request(RTE, [finding(line=3)], USER, definitions=[unused])
+
+    assert request.definitions == ()
+    assert "Definitions from other places" not in request.messages[1]["content"]
+
+
+def test_definitions_change_the_cache_key():
+    plain = make_request(RTE, [finding(line=3)], USER)
+    with_limit = make_request(RTE, [finding(line=3)], USER, definitions=[LIMIT])
+
+    assert cache_key(MODEL, plain) != cache_key(MODEL, with_limit)
+
+
+def test_codemetrics_requests_ignore_definitions():
+    assert CODEMETRICS.uses_definitions is False
+    assert RTE.uses_definitions is True and MISRA.uses_definitions is True

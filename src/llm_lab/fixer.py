@@ -8,13 +8,14 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 import openai
 from openai import OpenAI
 
-from llm_lab.csource import split_lines, top_level_blocks
+from llm_lab.csource import Definition, pick_definitions, split_lines, top_level_blocks
 from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
@@ -349,10 +350,35 @@ class Request:
     last: int
     context: Any  # 작업 정보 (polyspace.Prepared.data)
     messages: list[dict[str, str]]
+    definitions: tuple[Definition, ...] = ()  # 코드 뒤에 붙인 다른 곳의 정의
+
+
+def definitions_block(definitions: tuple[Definition, ...]) -> str:
+    """코드 뒤에 붙이는 다른 곳의 정의 절. 베끼지 못하게 줄 번호는 붙이지 않는다."""
+    if not definitions:
+        return ""
+    parts = []
+    for definition in definitions:
+        where = (
+            f"line {definition.first}"
+            if definition.first == definition.last
+            else f"lines {definition.first}-{definition.last}"
+        )
+        parts.append(f"```c\n// {definition.file} {where}\n{definition.text}\n```")
+    return (
+        "\n\nDefinitions from other places, for reference only. "
+        "Edits must stay in the code above.\n\n" + "\n\n".join(parts)
+    )
 
 
 def build_prompt(
-    kind: Kind, findings: list[Finding], source: SourceFile, first: int, last: int, context: Any
+    kind: Kind,
+    findings: list[Finding],
+    source: SourceFile,
+    first: int,
+    last: int,
+    context: Any,
+    definitions: tuple[Definition, ...] = (),
 ) -> str:
     blocks = []
     for number, finding in enumerate(findings, start=1):
@@ -366,12 +392,16 @@ def build_prompt(
         + (f"\n\n{tail}" if tail else "")
         + f"\n\nCode (lines {first}-{last} of {source.name}; "
         "each line starts with its number and '| '):\n"
-        f"```c\n{numbered(source.text, first, last)}\n```"
+        f"```c\n{numbered(source.text, first, last)}\n```" + definitions_block(definitions)
     )
 
 
 def make_request(
-    kind: Kind, findings: list[Finding], source: SourceFile, context: Any = None
+    kind: Kind,
+    findings: list[Finding],
+    source: SourceFile,
+    context: Any = None,
+    definitions: Iterable[Definition] = (),
 ) -> Request:
     """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError."""
     line_count = len(split_lines(source.text))
@@ -395,11 +425,18 @@ def make_request(
                 )
             )
     first, last = kind.region(source.text, findings)
+    picked: tuple[Definition, ...] = ()
+    if kind.uses_definitions:
+        lines = [finding.line for finding in findings if finding.line is not None]
+        picked = tuple(pick_definitions(definitions, source.name, source.text, first, last, lines))
     messages = [
         {"role": "system", "content": kind.system_prompt},
-        {"role": "user", "content": build_prompt(kind, findings, source, first, last, context)},
+        {
+            "role": "user",
+            "content": build_prompt(kind, findings, source, first, last, context, picked),
+        },
     ]
-    return Request(kind, list(findings), source, first, last, context, messages)
+    return Request(kind, list(findings), source, first, last, context, messages, picked)
 
 
 def cache_key(model: str, request: Request) -> str:

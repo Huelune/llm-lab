@@ -80,6 +80,8 @@ class Kind:
     answer_schema: Mapping[str, Any] = field(default_factory=lambda: FIX_SCHEMA)
     to_results: Callable[[dict[str, Any], Request], list[FixResult]] = edits_results
     timeout: float = FIX_TIMEOUT  # LLM 대기 시간(초)
+    # 보내는 코드가 쓰는 다른 곳의 정의(함수·매크로·전역·타입)를 요청에 참고용으로 붙일지
+    uses_definitions: bool = True
     auto_select: Callable[[Finding], bool] = always  # "수정 모두 선택"이 고를 행인지
 
     def rank(self, label: str) -> int:
