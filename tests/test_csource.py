@@ -137,3 +137,45 @@ def test_same_name_at_the_same_place_is_recorded_once():
     text = "typedef struct node { int v; } node;\n"
 
     assert names(find_definitions("n.h", text)) == [("node", "type", 1, 1)]
+
+
+STRUCT_USERS = """struct point make_point(void)
+{
+    struct point p = {0, 0};
+    return p;
+}
+struct node *find_node(int key)
+{
+    return 0;
+}
+enum_t get_mode(void)
+{
+    return 0;
+}
+struct cfg g_cfg = {1, 2};
+struct cfg g_other;
+enum mode current_mode;
+struct fwd;
+static int mask = (1 << 3);
+uint8_t flag = (uint8_t)1;
+"""
+
+
+def test_struct_and_enum_used_as_types_do_not_make_a_type_definition():
+    found = names(find_definitions("s.c", STRUCT_USERS))
+
+    assert ("make_point", "function", 1, 5) in found  # struct를 돌려주는 함수
+    assert ("find_node", "function", 6, 9) in found
+    assert ("get_mode", "function", 10, 13) in found  # enum_t는 enum 키워드가 아니다
+    assert ("g_cfg", "variable", 14, 14) in found  # 초기화 있는 struct 전역
+    assert ("g_other", "variable", 15, 15) in found  # 초기화 없는 struct 전역
+    assert ("current_mode", "variable", 16, 16) in found
+    assert not any(kind == "type" for _, kind, _, _ in found)
+    assert not any(name == "fwd" for name, _, _, _ in found)  # 전방 선언만 뺀다
+
+
+def test_initialized_variable_with_parentheses_is_a_variable():
+    found = names(find_definitions("s.c", STRUCT_USERS))
+
+    assert ("mask", "variable", 18, 18) in found
+    assert ("flag", "variable", 19, 19) in found

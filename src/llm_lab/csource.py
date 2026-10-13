@@ -25,7 +25,9 @@ ASSIGNED = re.compile(r"([A-Za-z_]\w*)\s*(?:\[[^=]*\])?\s*=")
 CALLED = re.compile(r"([A-Za-z_]\w*)\s*\(")
 POINTER_NAME = re.compile(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)")
 SUBSCRIPT = re.compile(r"\[[^\]]*\]")
-TYPE_HEADS = ("typedef", "struct", "union", "enum")
+TYPE_KEYWORD = re.compile(r"(?:typedef|struct|union|enum)\b")  # 단어 전체. enum_t는 아니다
+TYPEDEF = re.compile(r"typedef\b")
+BARE_TAG = re.compile(r"(?:struct|union|enum)\s+[A-Za-z_]\w*")  # `struct tag;` 전방 선언
 
 
 def split_lines(text: str) -> list[str]:
@@ -206,12 +208,14 @@ def find_definitions(file: str, text: str) -> list[Definition]:
         first = _head_start(code, start)
         head = ATTRIBUTE.sub(" ", " ".join(code[first - 1 : start]).split("{", 1)[0]).strip()
         last = end
-        if head.startswith(TYPE_HEADS):
+        # 타입 정의는 키워드 꼴: 키워드로 시작하고 `{` 앞에 '('나 '='가 없다.
+        # `struct point make(void)`는 함수, `struct cfg g = {…}`는 전역이다
+        if TYPE_KEYWORD.match(head) and "(" not in head and "=" not in head:
             last = _statement_end(code, end)
             tag = TAG.match(head)
             if tag:
                 add(tag.group(1), "type", first, last)
-            if head.startswith("typedef"):
+            if TYPEDEF.match(head):
                 for name in _names_after_brace(code, end, last):
                     add(name, "type", first, last)
             if ENUM_HEAD.match(head):
@@ -247,7 +251,7 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
     text = " ".join(code[number - 1] for number in numbers).split(";", 1)[0].strip()
     text = ATTRIBUTE.sub(" ", text)
     first, last = numbers[0], numbers[-1]
-    if text.startswith("typedef"):
+    if TYPEDEF.match(text):
         flat = SUBSCRIPT.sub("", text)
         pointer = POINTER_NAME.search(flat)
         if pointer:
@@ -257,9 +261,10 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
         if words:
             add(words[-1], "type", first, last)
         return
-    if "(" in text or text.startswith(("struct", "union", "enum")):
+    declared = text.split("=", 1)[0].strip()  # '(' 검사는 '=' 앞에서만. 값의 괄호는 상관없다
+    if "(" in declared or BARE_TAG.fullmatch(declared):
         return  # 함수 원형, 전방 선언
-    flat = SUBSCRIPT.sub("", text).split("=", 1)[0]
+    flat = SUBSCRIPT.sub("", declared)
     words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
     if words:
         add(words[-1], "variable", first, last)
