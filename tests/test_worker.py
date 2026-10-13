@@ -122,7 +122,7 @@ def test_writes_conversation_log_for_each_row(tmp_path):
     (text,) = logs(tmp_path)
     assert f"# 작업 {job_id} · RTE · 엑셀 2행" in text
     assert "- 보낸 주소: https://llm.test/v1/chat/completions" in text
-    assert "You review one Polyspace Code Prover" in text  # 시스템 메시지 그대로
+    assert "You review the Polyspace Code Prover run-time checks" in text  # 시스템 메시지 그대로
     assert "    3|     return a / b;" in text  # 보낸 코드 그대로
     assert "(b != 0) ? a / b : 0;" in text  # 받은 응답 그대로
     assert "- 결과: 수정 - b가 0일 때를 검사합니다." in text

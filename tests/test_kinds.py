@@ -2,6 +2,7 @@ import pytest
 from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_finding, misra_row, open_workbook
 from rte_fixtures import RTE_HEADER, finding, rte_row, workbook_bytes
 
+from llm_lab.fixer import select_region
 from llm_lab.kinds import KINDS, MISRA, RTE
 from llm_lab.kinds.misra import NO_CATEGORY, category_word, rule_key
 from llm_lab.polyspace import Finding, Prepared, column_name
@@ -241,7 +242,29 @@ def test_misra_groups_rows_on_the_same_line_of_the_same_file():
     assert MISRA.group_key(misra_finding(line=4), "src/calc.c") == "src/calc.c:4"
     assert MISRA.group_key(first, "src/other.c") == "src/other.c:3"
     assert MISRA.group_key(misra_finding(line=None), "src/calc.c") == ""  # 혼자 보낸다
-    assert RTE.group_key(finding(), "src/calc.c") == ""
+
+
+def test_rte_groups_rows_of_the_same_function_of_the_same_file():
+    first = finding()
+    same_function = finding(row=3, line=1, check="Overflow", function=" divide ")
+
+    assert RTE.group_key(first, "src/calc.c") == "src/calc.c:divide"
+    assert RTE.group_key(same_function, "src/calc.c") == "src/calc.c:divide"
+    # C는 대소문자를 가리므로 이름을 소문자로 맞추지 않는다
+    assert RTE.group_key(finding(function="Divide"), "src/calc.c") == "src/calc.c:Divide"
+    assert RTE.group_key(finding(function="other"), "src/calc.c") == "src/calc.c:other"
+    assert RTE.group_key(first, "src/other.c") == "src/other.c:divide"
+    assert RTE.group_key(finding(function=""), "src/calc.c") == ""  # 혼자 보낸다
+
+
+def test_rte_region_covers_every_row_of_the_group():
+    # 2400줄: 네 줄짜리 함수 600개. 파일이 길면 행마다 그 함수만 고르는데, 묶음은 모두 덮어야 한다
+    text = "".join(f"int f{i}(void)\n{{\n    return {i};\n}}\n" for i in range(600))
+    top, bottom = finding(line=3), finding(row=3, line=2399)
+
+    assert RTE.region(text, [top]) == select_region(text, 3)
+    assert RTE.region(text, [top, bottom]) == (1, 2400)
+    assert RTE.region(text, [bottom, top]) == (1, 2400)
 
 
 def test_misra_order_colors_and_defaults():

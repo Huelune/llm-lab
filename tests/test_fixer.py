@@ -44,7 +44,9 @@ def test_fix_returns_edits_diff_and_sends_schema_and_numbered_code():
     assert schema["schema"]["required"] == ["findings", "edits"]
     assert request["messages"][0] == {"role": "system", "content": RTE.system_prompt}
     prompt = request["messages"][1]["content"]
-    assert prompt.startswith("Polyspace Code Prover result:\n\nFinding 1:\n- TYPE: Orange Check\n")
+    assert prompt.startswith(
+        "Polyspace Code Prover results in one C function:\n\nFinding 1:\n- TYPE: Orange Check\n"
+    )
     assert "- check: Division by zero" in prompt
     assert "- File: calc.c\n- line: 3\n\nCode (lines 1-4 of calc.c;" in prompt
     assert "    3|     return a / b;" in prompt

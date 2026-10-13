@@ -134,7 +134,8 @@ def test_result_json(tmp_path):
     data = client.get("/api/results/1").json()
 
     assert (data["state"], data["kind"], data["note"]) == ("done", "rte", "제외: Gray Check 1")
-    assert [row["group"] for row in data["rows"]] == ["", ""]
+    # 소스를 찾은 행은 파일:함수 묶음에 들어가고, 소스가 없는 행은 묶음이 없다
+    assert [row["group"] for row in data["rows"]] == ["src/calc.c:divide", ""]
     assert data["base_folder"] == str(folder)
     assert [(r["state"], r["decision"]) for r in data["rows"]] == [
         ("done", "fix"),
@@ -193,7 +194,10 @@ def test_patch_needs_a_chosen_fix(tmp_path):
 def test_overlapping_fixes_conflict(tmp_path):
     other = {"original": "    return a / b;", "replacement": "    return b ? a / b : -1;"}
     client, _, _ = make_service(tmp_path, fix_answer(), fix_answer(edits=[other]))
-    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", check="Overflow"))
+    # 다른 함수의 행이라 따로 보내는데, 답이 같은 줄을 고친다
+    excel = rte_excel(
+        rte_row("Orange Check"), rte_row("Red Check", check="Overflow", function="other")
+    )
     upload(client, excel, source_folder(tmp_path))
 
     response = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
@@ -319,6 +323,23 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert patch.content.count(b"+    return (b != 0) ? a / b : 0;\n") == 1
 
 
+def test_rte_job_sends_one_function_together(tmp_path):
+    reply = answer(("fix", REASON), ("fix", "같은 수정으로 함께 고침"), edits=[DIVIDE_FIX])
+    client, _, sent = make_service(tmp_path, reply)
+    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", line=1, check="Overflow"))
+
+    upload(client, excel, source_folder(tmp_path))
+
+    assert len(sent) == 1  # 같은 함수의 두 행을 한 번에 보냈다
+    prompt = sent[0]["messages"][1]["content"]
+    assert "Finding 1:\n- TYPE: Red Check\n" in prompt  # 줄 순서: 1번 줄의 Red가 먼저
+    assert "Finding 2:\n- TYPE: Orange Check\n" in prompt
+    page = client.get("/results/1").text
+    assert "함께 보낸 행: 엑셀 3행" in page and "함께 보낸 행: 엑셀 2행" in page
+    patch = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
+    assert patch.status_code == 200  # 같은 수정은 하나로 합쳐 겹침이 아니다
+
+
 def test_no_fix_row_in_a_mixed_group_does_not_claim_the_shared_fix(tmp_path):
     reply = answer(("fix", REASON), ("no_fix", "직접 고쳐야 합니다."), edits=[DIVIDE_FIX])
     client, _, _ = make_service(tmp_path, reply)
@@ -358,7 +379,9 @@ def test_running_job_can_be_stopped_and_continued(tmp_path):
 def test_stopped_job_still_gives_a_patch_for_finished_rows(tmp_path):
     queued = []
     client, _, _ = make_service(tmp_path, fix_answer(), submit=queued.append)
-    excel = rte_excel(rte_row("Orange Check"), rte_row("Orange Check", line=1, check="Overflow"))
+    excel = rte_excel(
+        rte_row("Orange Check"), rte_row("Orange Check", line=1, check="Overflow", function="other")
+    )
     upload(client, excel, source_folder(tmp_path))
 
     queued[0]()  # 첫 묶음(엑셀 2행)만 처리하고
@@ -378,7 +401,9 @@ def test_kind_decides_which_fixes_are_picked_automatically(tmp_path, monkeypatch
     }
     # Red(엑셀 3행)를 먼저 보내므로 첫 답이 Red 몫이다
     client, _, _ = make_service(tmp_path, fix_answer(edits=[header]), fix_answer())
-    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", line=1, check="Overflow"))
+    excel = rte_excel(
+        rte_row("Orange Check"), rte_row("Red Check", line=1, check="Overflow", function="other")
+    )
     upload(client, excel, source_folder(tmp_path))
 
     page = client.get("/results/1").text
@@ -590,7 +615,9 @@ def test_row_errors_read_as_what_happened_and_what_to_do(tmp_path):
 def test_conflicting_fixes_are_marked_and_red_is_picked_first(tmp_path):
     other = {"original": "    return a / b;", "replacement": "    return b ? a / b : -1;"}
     client, _, _ = make_service(tmp_path, fix_answer(), fix_answer(edits=[other]))
-    excel = rte_excel(rte_row("Orange Check"), rte_row("Red Check", check="Overflow"))
+    excel = rte_excel(
+        rte_row("Orange Check"), rte_row("Red Check", check="Overflow", function="other")
+    )
     upload(client, excel, source_folder(tmp_path))
 
     page = client.get("/results/1").text
