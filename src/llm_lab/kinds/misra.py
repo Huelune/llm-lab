@@ -43,7 +43,9 @@ and "category" the rule category this project uses.
 - Mandatory: no deviation is allowed, so fix it. If the code shown is not enough to fix it, \
 answer manual and say in reason what is missing and where it must be fixed by hand.
 - Required and Advisory: answer fix when a small change removes the violation \
-without changing behavior. Otherwise answer no_fix with a deviation rationale.
+without changing behavior. Otherwise answer no_fix with a deviation rationale. \
+If the fix belongs in a definition or a caller that is not shown, \
+answer manual instead and say where.
 When you fix:
 - Keep the behavior the same for every input. Typical fixes are explicit casts \
 to the intended essential type, U suffixes on unsigned constants, \
@@ -59,7 +61,7 @@ without the line-number prefix. "replacement" is the new text for those lines.
 Add one unchanged neighbouring line only when the changed line appears more than once.
 Definitions of functions, macros, variables and types that this code uses but that live \
 elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
-return values and the real types behind typedefs. Edits must stay in the code shown; \
+return values and the real types behind typedefs. Edits must stay in the numbered code; \
 if the right change is in one of those definitions or in a caller, \
 answer manual and name that file and function in reason.
 Do not guess definitions (macros, types, other functions) that are not shown. \

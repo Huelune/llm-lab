@@ -42,7 +42,7 @@ without the line-number prefix. "replacement" is the new text for those lines.
 Add one unchanged neighbouring line only when the changed line appears more than once.
 Definitions of functions, macros, variables and types that this code uses but that live \
 elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
-return values and the real types behind typedefs. Edits must stay in the code shown; \
+return values and the real types behind typedefs. Edits must stay in the numbered code; \
 if the right change is in one of those definitions or in a caller, \
 answer manual and name that file and function in reason.
 Do not guess definitions (macros, types, other functions) that are not shown. \

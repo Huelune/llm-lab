@@ -370,7 +370,7 @@ def test_request_appends_the_definitions_the_code_uses():
     assert content.index("```c\n    1| int use(int b)") < content.index(
         "Definitions from other places"
     )
-    assert "for reference only. Edits must stay in the code above." in content
+    assert "for reference only. Edits must stay in the numbered code above." in content
     assert "```c\n// inc/limits.h line 3\n#define LIMIT 16\n```" in content
 
 

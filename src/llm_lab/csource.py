@@ -370,6 +370,8 @@ def pick_definitions(
     near: list[str] = []
     for line in lines:
         lo, hi = max(line - NEAR_LINES, first), min(line + NEAR_LINES, last)
+        if hi < lo:
+            continue  # 검사 줄이 범위에서 멀다
         near.extend(_names("\n".join(code[lo - first : hi - first + 1])))
     wanted = _names(" ".join(near)) if near else []
     for name in _names("\n".join(code)):

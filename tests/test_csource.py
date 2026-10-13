@@ -438,3 +438,15 @@ def test_function_pointer_parameter_type_does_not_rename_the_function():
     text = "int run_job(unsigned x, handler_t (*cb)(int))\n{\n    return 0;\n}\n"
 
     assert names(find_definitions("run.c", text)) == [("run_job", "function", 1, 4)]
+
+
+def test_pick_ignores_a_finding_line_far_before_the_sent_range():
+    definitions = [
+        definition("counter", file="a.c", kind="variable"),
+        definition("lookup", file="a.c", first=5, kind="variable"),
+    ]
+
+    # 검사 줄 1은 범위 8~13보다 한참 앞이라 창이 없다. 줄 12의 창(counter)이 먼저 와야 한다
+    picked = pick_definitions(definitions, "src/use.c", REGION, 8, 13, [1, 12])
+
+    assert [d.name for d in picked] == ["counter", "lookup"]

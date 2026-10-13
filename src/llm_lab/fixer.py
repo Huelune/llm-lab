@@ -367,7 +367,7 @@ def definitions_block(definitions: tuple[Definition, ...]) -> str:
         parts.append(f"```c\n// {definition.file} {where}\n{definition.text}\n```")
     return (
         "\n\nDefinitions from other places, for reference only. "
-        "Edits must stay in the code above.\n\n" + "\n\n".join(parts)
+        "Edits must stay in the numbered code above.\n\n" + "\n\n".join(parts)
     )
 
 

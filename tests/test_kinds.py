@@ -295,9 +295,18 @@ def test_kinds_have_unique_names_and_defaults_among_choices():
         assert set(kind.defaults) <= set(kind.choices)
 
 
+def test_misra_prompt_sends_fixes_that_live_elsewhere_to_manual():
+    assert (
+        "If the fix belongs in a definition or a caller that is not shown, "
+        "answer manual instead and say where."
+    ) in MISRA.system_prompt
+
+
 def test_rte_and_misra_prompts_explain_the_definitions_section():
     sentence = "Definitions of functions, macros, variables and types"
     assert sentence in RTE.system_prompt and sentence in MISRA.system_prompt
+    assert "Edits must stay in the numbered code;" in RTE.system_prompt
+    assert "Edits must stay in the numbered code;" in MISRA.system_prompt
     assert "answer manual and name that file and function" in RTE.system_prompt
     assert "not in the code or the definitions shown" in RTE.system_prompt
     assert "Definitions of" not in CODEMETRICS.system_prompt
