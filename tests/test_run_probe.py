@@ -248,3 +248,21 @@ def test_header_notes_project_id_without_showing_it(capsys):
 
     assert "프로젝트 ID 있음" in first_line
     assert "proj-1" not in first_line
+
+
+def test_project_id_echoed_by_server_is_masked(capsys):
+    # 게이트웨이가 오류 메시지에 프로젝트 ID를 되돌려 보내는 경우도 키처럼 가린다
+    settings = Settings(
+        base_url="https://llm.test/v1", api_key=API_KEY, model=MODEL, project_id="proj-1"
+    )
+
+    def handler(request):
+        if request_kind(request) == "tools":
+            return error(400, "tools rejected for project proj-1")
+        return healthy_server(request)
+
+    probe.run_probe(make_client(handler), settings)
+    out = capsys.readouterr().out
+
+    assert "proj-1" not in out
+    assert "tools rejected for project ***" in out

@@ -356,9 +356,10 @@ def _emitter(settings: Settings, output: TextIO | None) -> Callable[[str], None]
     """화면(과 output 파일)에 한 줄씩 쓰는 함수를 만든다."""
 
     def emit(text: str) -> None:
-        # 서버가 오류 메시지에 키를 되돌려 보내도 출력에는 남기지 않는다
-        if settings.api_key:
-            text = text.replace(settings.api_key, "***")
+        # 서버가 오류 메시지에 키나 프로젝트 ID를 되돌려 보내도 출력에는 남기지 않는다
+        for secret in (settings.api_key, settings.project_id):
+            if secret:
+                text = text.replace(secret, "***")
         print(text)
         if output is not None:
             print(text, file=output)
