@@ -371,6 +371,8 @@ def _header(settings: Settings) -> str:
     options = [f"model: {settings.model}"]
     if not settings.api_key:
         options.append("API 키 없음")
+    if settings.project_id:
+        options.append("프로젝트 ID 있음")
     if not settings.verify_ssl:
         options.append("인증서 검사 끔")
     if settings.enable_thinking is not None:

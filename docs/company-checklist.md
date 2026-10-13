@@ -30,7 +30,7 @@
 
 ## 2. `.env` 작성
 
-- [ ] `.env.example`을 `.env`로 복사하고 `LLM_BASE_URL`(`/v1`까지 포함)과 `LLM_MODEL`을 채웁니다. 키가 있는 서버면 `LLM_API_KEY`도 채웁니다.
+- [ ] `.env.example`을 `.env`로 복사하고 `LLM_BASE_URL`(`/v1`까지 포함)과 `LLM_MODEL`을 채웁니다. 키가 있는 서버면 `LLM_API_KEY`도 채웁니다. 키와 함께 프로젝트 ID를 받았다면 `LLM_PROJECT_ID`와, 안내문에 적힌 헤더 이름을 `LLM_PROJECT_HEADER`에 채웁니다.
 - [ ] 선택 항목(`LLM_VERIFY_SSL`, `LLM_ENABLE_THINKING`)은 `.env.example`의 설명을 보고 필요할 때만 채웁니다.
 - [ ] 키는 채팅이나 스크린샷에 올리지 않습니다.
 
@@ -70,7 +70,7 @@ API 키는 화면과 파일 어디에도 나오지 않습니다.
 |---|---|
 | 서버에 접속할 수 없음 / 시간 초과 | 프록시 없이 직접 붙어야 하면 LLM 호스트를 `NO_PROXY`에 추가합니다. 프록시를 거쳐야 하면 `HTTPS_PROXY`를 설정합니다. |
 | 인증서 검증 실패 | 사내 루트 인증서를 OS 인증서 저장소에 넣거나 `SSL_CERT_FILE=/경로/사내CA.pem`을 설정합니다. 둘 다 안 되는 자체 서명 인증서면 `LLM_VERIFY_SSL=false`를 넣습니다. |
-| 인증 실패(401/403) | `LLM_API_KEY`. 비워 뒀다면 그 서버는 키가 필요하다는 뜻입니다. |
+| 인증 실패(401/403) | `LLM_API_KEY`. 비워 뒀다면 그 서버는 키가 필요하다는 뜻입니다. 프로젝트 ID를 받았다면 `LLM_PROJECT_ID`와 `LLM_PROJECT_HEADER`의 헤더 이름도 확인합니다. |
 | 경로를 찾을 수 없음(404) | `LLM_BASE_URL` 끝의 `/v1`과 `LLM_MODEL` 이름 |
 
 ## 6. 질문지 전달

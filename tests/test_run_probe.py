@@ -236,3 +236,15 @@ def test_main_writes_output_file_in_utf8_and_masks_key(tmp_path, monkeypatch, ca
     assert "✅ 지원" in saved
     assert '"pong"' in saved
     assert API_KEY not in saved
+
+
+def test_header_notes_project_id_without_showing_it(capsys):
+    settings = Settings(
+        base_url="https://llm.test/v1", api_key=API_KEY, model=MODEL, project_id="proj-1"
+    )
+
+    probe.run_probe(make_client(healthy_server), settings)
+    first_line = capsys.readouterr().out.splitlines()[0]
+
+    assert "프로젝트 ID 있음" in first_line
+    assert "proj-1" not in first_line

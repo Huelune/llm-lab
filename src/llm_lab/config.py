@@ -11,7 +11,15 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 REQUIRED_VARS = ("LLM_BASE_URL", "LLM_MODEL")
-OPTIONAL_VARS = ("LLM_API_KEY", "LLM_TIMEOUT", "LLM_VERIFY_SSL", "LLM_ENABLE_THINKING")
+OPTIONAL_VARS = (
+    "LLM_API_KEY",
+    "LLM_PROJECT_ID",
+    "LLM_PROJECT_HEADER",
+    "LLM_TIMEOUT",
+    "LLM_VERIFY_SSL",
+    "LLM_ENABLE_THINKING",
+)
+DEFAULT_PROJECT_HEADER = "OpenAI-Project"
 DEFAULT_TIMEOUT = 60.0
 BOOL_VALUES = {
     **dict.fromkeys(("true", "1", "yes", "on"), True),
@@ -36,6 +44,9 @@ class Settings:
     verify_ssl: bool = True
     # None이면 chat_template_kwargs를 보내지 않아 서버 기본값을 따른다
     enable_thinking: bool | None = None
+    # 키와 별도로 프로젝트 ID 헤더를 요구하는 게이트웨이용. 비어 있으면 헤더를 보내지 않는다
+    project_id: str = field(default="", repr=False)
+    project_header: str = DEFAULT_PROJECT_HEADER
 
 
 def _parse_bool(key: str, value: str) -> bool:
@@ -77,6 +88,8 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
         timeout=timeout,
         verify_ssl=_parse_bool("LLM_VERIFY_SSL", values["LLM_VERIFY_SSL"] or "true"),
         enable_thinking=_parse_bool("LLM_ENABLE_THINKING", thinking) if thinking else None,
+        project_id=values["LLM_PROJECT_ID"],
+        project_header=values["LLM_PROJECT_HEADER"] or DEFAULT_PROJECT_HEADER,
     )
 
 

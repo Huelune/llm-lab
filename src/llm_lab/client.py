@@ -45,16 +45,20 @@ def get_client(settings: Settings | None = None) -> OpenAI:
     # 헤더 뒤에 합쳐지므로 개인 키가 회사 키를 덮어쓸 수 있어, 인증은 명시하고 조직·프로젝트
     # 헤더는 omit으로 제거한다. 키가 없으면 인증 헤더 자체를 omit한다.
     authorization = f"Bearer {settings.api_key}" if settings.api_key else omit
+    headers: dict[str, Any] = {
+        "Authorization": authorization,
+        "OpenAI-Organization": omit,
+        "OpenAI-Project": omit,
+    }
+    if settings.project_id:
+        # 회사 프로젝트 ID는 게이트웨이가 정한 이름의 헤더로 보낸다 (기본 이름이면 위 omit을 덮어씀)
+        headers[settings.project_header] = settings.project_id
     client = CompanyOpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key or NO_KEY_PLACEHOLDER,
         timeout=settings.timeout,
         http_client=None if settings.verify_ssl else DefaultHttpxClient(verify=False),
-        default_headers={
-            "Authorization": authorization,  # type: ignore[dict-item]
-            "OpenAI-Organization": omit,  # type: ignore[dict-item]
-            "OpenAI-Project": omit,  # type: ignore[dict-item]
-        },
+        default_headers=headers,
     )
     client.omit_authorization = not settings.api_key
     if settings.enable_thinking is not None:

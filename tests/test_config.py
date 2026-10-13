@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from llm_lab.config import ConfigError, Settings, load_settings, settings_from_env
+from llm_lab.config import (
+    OPTIONAL_VARS,
+    REQUIRED_VARS,
+    ConfigError,
+    Settings,
+    load_settings,
+    settings_from_env,
+)
 
 VALID = {"LLM_BASE_URL": "https://llm.test/v1", "LLM_API_KEY": "secret-key", "LLM_MODEL": "m1"}
 
@@ -88,14 +95,7 @@ def test_repr_hides_api_key():
 def isolated(tmp_path, monkeypatch):
     """임시 디렉터리로 이동하고 LLM_* 환경변수를 비운다."""
     monkeypatch.chdir(tmp_path)
-    for key in (
-        "LLM_BASE_URL",
-        "LLM_API_KEY",
-        "LLM_MODEL",
-        "LLM_TIMEOUT",
-        "LLM_VERIFY_SSL",
-        "LLM_ENABLE_THINKING",
-    ):
+    for key in (*REQUIRED_VARS, *OPTIONAL_VARS):
         monkeypatch.delenv(key, raising=False)
     return tmp_path
 
@@ -209,3 +209,30 @@ def test_load_settings_ignores_dotenv_in_parent_directory(isolated, monkeypatch)
 
     with pytest.raises(ConfigError, match="LLM_BASE_URL"):
         load_settings()
+
+
+def test_project_id_defaults_to_empty_with_standard_header():
+    settings = settings_from_env(VALID)
+
+    assert settings.project_id == ""
+    assert settings.project_header == "OpenAI-Project"
+
+
+def test_project_id_and_header_name_are_read():
+    # 키와 별도로 프로젝트 ID 헤더를 요구하는 게이트웨이가 있고, 헤더 이름은 게이트웨이마다 다르다
+    settings = settings_from_env(
+        {**VALID, "LLM_PROJECT_ID": " proj-1 ", "LLM_PROJECT_HEADER": " X-Test-Project "}
+    )
+
+    assert settings.project_id == "proj-1"
+    assert settings.project_header == "X-Test-Project"
+
+
+def test_blank_project_header_keeps_the_standard_name():
+    settings = settings_from_env({**VALID, "LLM_PROJECT_ID": "proj-1", "LLM_PROJECT_HEADER": " "})
+
+    assert settings.project_header == "OpenAI-Project"
+
+
+def test_repr_hides_project_id():
+    assert "proj-1" not in repr(settings_from_env({**VALID, "LLM_PROJECT_ID": "proj-1"}))

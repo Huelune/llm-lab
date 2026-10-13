@@ -159,3 +159,35 @@ def test_verify_ssl_false_accepts_self_signed_certificate(self_signed_server):
     page = get_client(settings).with_options(max_retries=0).models.list()
 
     assert [item.id for item in page.data] == ["m1"]
+
+
+def test_project_id_is_sent_as_openai_project_header_by_default(monkeypatch):
+    # 개인 OPENAI_PROJECT_ID가 환경변수에 있어도 회사 프로젝트 ID가 나가야 한다
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "proj_personal")
+    http_client, sent = capture()
+    settings = Settings(
+        base_url="https://llm.test/v1", api_key="k", model="m1", project_id="proj-1"
+    )
+
+    client = get_client(settings).with_options(max_retries=0, http_client=http_client)
+    client.models.list()
+
+    assert sent[0].headers["openai-project"] == "proj-1"
+
+
+def test_project_header_name_follows_settings():
+    # 게이트웨이가 자체 이름의 헤더로 프로젝트 ID를 받는 경우
+    http_client, sent = capture()
+    settings = Settings(
+        base_url="https://llm.test/v1",
+        api_key="k",
+        model="m1",
+        project_id="proj-1",
+        project_header="X-Test-Project",
+    )
+
+    client = get_client(settings).with_options(max_retries=0, http_client=http_client)
+    client.chat.completions.create(model="m1", messages=[{"role": "user", "content": "hi"}])
+
+    assert sent[0].headers["x-test-project"] == "proj-1"
+    assert "openai-project" not in sent[0].headers
