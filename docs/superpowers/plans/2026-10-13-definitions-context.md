@@ -597,7 +597,7 @@ def scan_folder(root: Path) -> tuple[list[Definition], int]:
             relative = path.relative_to(root).as_posix()
             try:
                 source = decode_source(relative, path.read_bytes())
-            except (DecodeError, OSError):
+            except DecodeError, OSError:
                 unreadable += 1
                 continue
             definitions.extend(find_definitions(relative, source.text))
@@ -624,7 +624,9 @@ def used_definitions(definitions: Iterable[Definition], texts: Iterable[str]) ->
     used: set[str] = set()
     for text in texts:
         used.update(identifiers(text))
-    return sorted((d for d in definitions if d.name in used), key=lambda d: (d.name, d.file, d.first))
+    return sorted(
+        (d for d in definitions if d.name in used), key=lambda d: (d.name, d.file, d.first)
+    )
 ```
 
 - [ ] **Step 4: 통과 확인**
@@ -725,13 +727,21 @@ def test_pick_window_does_not_leave_the_sent_range():
     definitions = [definition("counter", file="a.c", kind="variable")]
 
     # 검사 줄 12의 창(10~14)이 범위 끝 13을 넘고, 검사 줄 8의 창(6~10)이 범위 시작 8 앞으로 나간다
-    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [12])] == ["counter"]
-    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [8])] == ["counter"]
+    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [12])] == [
+        "counter"
+    ]
+    assert [d.name for d in pick_definitions(definitions, "src/use.c", REGION, 8, 13, [8])] == [
+        "counter"
+    ]
 
 
 def test_pick_stops_at_the_count_and_line_caps():
     many = [definition(f"name_{i}", first=i + 1) for i in range(MAX_DEFINITIONS + 3)]
-    text = "int f(void) { return " + " + ".join(f"name_{i}" for i in range(MAX_DEFINITIONS + 3)) + "; }\n"
+    text = (
+        "int f(void) { return "
+        + " + ".join(f"name_{i}" for i in range(MAX_DEFINITIONS + 3))
+        + "; }\n"
+    )
 
     assert len(pick_definitions(many, "f.c", text, 1, 1, [1])) == MAX_DEFINITIONS
 
@@ -804,7 +814,9 @@ def pick_definitions(
     picked: list[Definition] = []
     total = 0
     for name in wanted:
-        candidates = sorted(by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first))
+        candidates = sorted(
+            by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first)
+        )
         for definition in candidates[:PER_NAME]:
             size = definition.text.count("\n") + 1
             if len(picked) >= MAX_DEFINITIONS or total + size > MAX_DEFINITION_TOTAL_LINES:
@@ -861,7 +873,9 @@ def test_definitions_round_trip_in_name_file_line_order(tmp_path):
     store = Store(tmp_path / "fixer.db")
     rows = [NewRow(FINDING, "calc.c", "pending")]
 
-    job_id = store.create_job("rte.xlsx", "RTE_Result", 0, [SOURCE], rows, definitions=reversed(DEFINITIONS))
+    job_id = store.create_job(
+        "rte.xlsx", "RTE_Result", 0, [SOURCE], rows, definitions=reversed(DEFINITIONS)
+    )
 
     assert store.definitions(job_id) == DEFINITIONS
     assert store.definitions(job_id + 1) == []
@@ -964,7 +978,9 @@ def test_request_appends_the_definitions_the_code_uses():
 
     assert request.definitions == (LIMIT,)
     content = request.messages[1]["content"]
-    assert content.index("```c\n    1| int use(int b)") < content.index("Definitions from other places")
+    assert content.index("```c\n    1| int use(int b)") < content.index(
+        "Definitions from other places"
+    )
     assert "for reference only. Edits must stay in the code above." in content
     assert "```c\n// inc/limits.h line 3\n#define LIMIT 16\n```" in content
 
@@ -1018,7 +1034,11 @@ def definitions_block(definitions: tuple[Definition, ...]) -> str:
         return ""
     parts = []
     for definition in definitions:
-        where = f"line {definition.first}" if definition.first == definition.last else f"lines {definition.first}-{definition.last}"
+        where = (
+            f"line {definition.first}"
+            if definition.first == definition.last
+            else f"lines {definition.first}-{definition.last}"
+        )
         parts.append(f"```c\n// {definition.file} {where}\n{definition.text}\n```")
     return (
         "\n\nDefinitions from other places, for reference only. "
