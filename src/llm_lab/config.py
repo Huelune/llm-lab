@@ -18,8 +18,11 @@ OPTIONAL_VARS = (
     "LLM_TIMEOUT",
     "LLM_VERIFY_SSL",
     "LLM_ENABLE_THINKING",
+    "LLM_CLIENT",
+    "LLM_API_VERSION",
 )
 DEFAULT_PROJECT_HEADER = "OpenAI-Project"
+CLIENT_KINDS = ("openai", "azure")
 DEFAULT_TIMEOUT = 60.0
 BOOL_VALUES = {
     **dict.fromkeys(("true", "1", "yes", "on"), True),
@@ -47,6 +50,10 @@ class Settings:
     # 키와 별도로 프로젝트 ID 헤더를 요구하는 게이트웨이용. 비어 있으면 헤더를 보내지 않는다
     project_id: str = field(default="", repr=False)
     project_header: str = DEFAULT_PROJECT_HEADER
+    # openai: LLM_BASE_URL/chat/completions에 Bearer 키.
+    # azure: 회사 샘플처럼 AzureOpenAI로 LLM_BASE_URL/openai/deployments/<모델>/… 에 api-key 헤더
+    client_kind: str = "openai"
+    api_version: str = ""
 
 
 def _parse_bool(key: str, value: str) -> bool:
@@ -78,6 +85,12 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
         if timeout <= 0:
             raise ConfigError(f"LLM_TIMEOUT은 0보다 커야 합니다: {values['LLM_TIMEOUT']!r}")
 
+    client_kind = values["LLM_CLIENT"].lower() or "openai"
+    if client_kind not in CLIENT_KINDS:
+        raise ConfigError(f"LLM_CLIENT은 openai 또는 azure여야 합니다: {values['LLM_CLIENT']!r}")
+    if client_kind == "azure" and not values["LLM_API_KEY"]:
+        raise ConfigError("LLM_CLIENT=azure면 LLM_API_KEY가 필요합니다 (api-key 헤더로 보냄)")
+
     # SDK가 /chat/completions를 직접 붙이므로, requests용 전체 주소를 넣었으면 잘라낸다
     base_url = values["LLM_BASE_URL"].rstrip("/").removesuffix("/chat/completions")
     thinking = values["LLM_ENABLE_THINKING"]
@@ -90,6 +103,8 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
         enable_thinking=_parse_bool("LLM_ENABLE_THINKING", thinking) if thinking else None,
         project_id=values["LLM_PROJECT_ID"],
         project_header=values["LLM_PROJECT_HEADER"] or DEFAULT_PROJECT_HEADER,
+        client_kind=client_kind,
+        api_version=values["LLM_API_VERSION"],
     )
 
 

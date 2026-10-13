@@ -236,3 +236,31 @@ def test_blank_project_header_keeps_the_standard_name():
 
 def test_repr_hides_project_id():
     assert "proj-1" not in repr(settings_from_env({**VALID, "LLM_PROJECT_ID": "proj-1"}))
+
+
+def test_client_kind_defaults_to_openai_without_api_version():
+    settings = settings_from_env(VALID)
+
+    assert settings.client_kind == "openai"
+    assert settings.api_version == ""
+
+
+def test_azure_client_kind_and_api_version_are_read():
+    # 회사 샘플이 AzureOpenAI를 쓰는 경우. 대소문자와 공백은 무시한다
+    settings = settings_from_env(
+        {**VALID, "LLM_CLIENT": " Azure ", "LLM_API_VERSION": " 2024-10-21 "}
+    )
+
+    assert settings.client_kind == "azure"
+    assert settings.api_version == "2024-10-21"
+
+
+def test_unknown_client_kind_is_rejected():
+    with pytest.raises(ConfigError, match="LLM_CLIENT"):
+        settings_from_env({**VALID, "LLM_CLIENT": "vllm"})
+
+
+def test_azure_client_kind_requires_api_key():
+    # AzureOpenAI는 키를 api-key 헤더로 보내므로 키 없이는 만들 수 없다
+    with pytest.raises(ConfigError, match="LLM_API_KEY"):
+        settings_from_env({**VALID, "LLM_CLIENT": "azure", "LLM_API_KEY": ""})

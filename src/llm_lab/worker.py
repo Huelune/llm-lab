@@ -11,6 +11,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
+from llm_lab.client import chat_endpoint
 from llm_lab.fixer import (
     Exchange,
     FatalLLMError,
@@ -171,7 +172,7 @@ class Worker:
             findings=findings,
             source_name=source_name,
             model=self.model,
-            endpoint=f"{self.client.base_url}chat/completions",
+            endpoint=chat_endpoint(self.client, self.model),
             extra_body=getattr(self.client, "chat_extra_body", {}),
             exchanges=exchanges,
             outcomes=outcomes,

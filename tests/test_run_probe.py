@@ -266,3 +266,14 @@ def test_project_id_echoed_by_server_is_masked(capsys):
 
     assert "proj-1" not in out
     assert "tools rejected for project ***" in out
+
+
+def test_header_notes_azure_client_kind(capsys):
+    settings = Settings(
+        base_url="https://llm.test", api_key=API_KEY, model=MODEL, client_kind="azure"
+    )
+
+    probe.run_probe(make_client(healthy_server), settings)
+    first_line = capsys.readouterr().out.splitlines()[0]
+
+    assert "Azure 방식" in first_line

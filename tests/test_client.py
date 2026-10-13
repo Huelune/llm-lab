@@ -9,7 +9,7 @@ import openai
 import pytest
 from fake_llm import completion, models, request_json
 
-from llm_lab.client import get_client
+from llm_lab.client import chat_endpoint, get_client
 from llm_lab.config import Settings
 from llm_lab.probe import SSL_ERROR, classify_error
 
@@ -191,3 +191,93 @@ def test_project_header_name_follows_settings():
 
     assert sent[0].headers["x-test-project"] == "proj-1"
     assert "openai-project" not in sent[0].headers
+
+
+AZURE = Settings(
+    base_url="https://llm.test",
+    api_key="company-key",
+    model="m1",
+    timeout=15.0,
+    client_kind="azure",
+    project_id="proj-1",
+    project_header="X-Test-Project",
+)
+
+
+def test_azure_client_sends_the_sample_path_and_headers(monkeypatch):
+    # 회사 샘플(AzureOpenAI, api_version="")과 같은 경로·헤더로 나가야 한다. 개인 환경변수는 무시
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer sk-personal")
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-personal")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "proj_personal")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2099-01-01")
+    monkeypatch.setenv("AZURE_OPENAI_AD_TOKEN", "ad-personal")
+    http_client, sent = capture()
+
+    client = get_client(AZURE).with_options(max_retries=0, http_client=http_client)
+    client.chat.completions.create(model="m1", messages=[{"role": "user", "content": "hi"}])
+
+    request = sent[0]
+    assert request.url.path == "/openai/deployments/m1/chat/completions"
+    assert request.url.query == b""
+    assert request.headers["api-key"] == "company-key"
+    assert request.headers["x-test-project"] == "proj-1"
+    assert "authorization" not in request.headers
+    assert "openai-organization" not in request.headers
+    assert "openai-project" not in request.headers
+    assert client.timeout == 15.0
+
+
+def test_azure_api_version_goes_to_the_query():
+    http_client, sent = capture()
+    settings = Settings(
+        base_url="https://llm.test",
+        api_key="k",
+        model="m1",
+        client_kind="azure",
+        api_version="2024-10-21",
+    )
+
+    client = get_client(settings).with_options(max_retries=0, http_client=http_client)
+    client.chat.completions.create(model="m1", messages=[{"role": "user", "content": "hi"}])
+
+    assert sent[0].url.params["api-version"] == "2024-10-21"
+
+
+def test_azure_client_sends_enable_thinking_too():
+    http_client, sent = capture()
+    settings = Settings(
+        base_url="https://llm.test",
+        api_key="k",
+        model="m1",
+        client_kind="azure",
+        enable_thinking=False,
+    )
+
+    client = get_client(settings).with_options(max_retries=0, http_client=http_client)
+    client.chat.completions.create(model="m1", messages=[{"role": "user", "content": "hi"}])
+
+    assert request_json(sent[0])["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_chat_endpoint_names_the_real_path_for_both_kinds():
+    # 작업 기록에 적는 주소. Azure 방식은 SDK가 deployments 경로를 끼워 넣는다
+    assert chat_endpoint(get_client(SETTINGS), "m1") == "https://llm.test/v1/chat/completions"
+    assert (
+        chat_endpoint(get_client(AZURE), "m1")
+        == "https://llm.test/openai/deployments/m1/chat/completions"
+    )
+
+
+def test_azure_client_honours_verify_ssl(self_signed_server):
+    settings = Settings(
+        base_url=self_signed_server,
+        api_key="k",
+        model="m1",
+        timeout=5.0,
+        client_kind="azure",
+        verify_ssl=False,
+    )
+
+    page = get_client(settings).with_options(max_retries=0).models.list()
+
+    assert [item.id for item in page.data] == ["m1"]

@@ -2,9 +2,12 @@ import subprocess
 import sys
 import threading
 
+import httpx2
 from fake_llm import API_KEY, MODEL, error, make_client, scripted
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
+from llm_lab.client import get_client
+from llm_lab.config import Settings
 from llm_lab.sources import decode_source
 from llm_lab.store import NewRow, Store
 from llm_lab.worker import Worker, daemon_pool
@@ -310,3 +313,23 @@ def test_daemon_pool_does_not_hold_up_exit():
     )
 
     subprocess.run([sys.executable, "-c", code], check=True, timeout=30)
+
+
+def test_log_shows_the_azure_deployment_path(tmp_path):
+    # Azure 방식은 SDK가 경로를 바꾸므로 기록의 주소도 실제 경로여야 한다
+    handler, _ = scripted(fix_answer())
+    settings = Settings(
+        base_url="https://llm.test", api_key=API_KEY, model=MODEL, client_kind="azure"
+    )
+    client = get_client(settings).with_options(
+        max_retries=0, http_client=httpx2.Client(transport=httpx2.MockTransport(handler))
+    )
+    store = Store(tmp_path / "fixer.db")
+    worker = Worker(store, client, MODEL, run_now, log_dir=tmp_path / "logs")
+    rows = [NewRow(finding(), "calc.c", "pending")]
+    job_id = store.create_job("rte.xlsx", "RTE_Result", 0, [SOURCE], rows)
+
+    worker.start(job_id)
+
+    (text,) = logs(tmp_path)
+    assert "- 보낸 주소: https://llm.test/openai/deployments/m1/chat/completions" in text
