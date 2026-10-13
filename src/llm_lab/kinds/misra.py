@@ -57,6 +57,11 @@ For example, do not cast a composite expression (Rule 10.8); cast its operands.
 without the line-number prefix. "replacement" is the new text for those lines.
 - Keep each edit small: "original" holds only the lines you change. \
 Add one unchanged neighbouring line only when the changed line appears more than once.
+Definitions of functions, macros, variables and types that this code uses but that live \
+elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
+return values and the real types behind typedefs. Edits must stay in the code shown; \
+if the right change is in one of those definitions or in a caller, \
+answer manual and name that file and function in reason.
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write each "reason" in Korean, one to three sentences that a reviewer can paste \

@@ -25,8 +25,8 @@ When the code must change, decide between fix and manual:
 is safe on every execution and static analysis can prove it: initialise the variable, \
 use the real array size as the bound, check the value where it enters the function, \
 correct the loop bound, and similar.
-- Otherwise answer manual: the cause is not in the code shown (the value comes from \
-a caller, a definition or data that is not shown), or the only change you could make \
+- Otherwise answer manual: the cause is not in the code or the definitions shown \
+(the value comes from a caller or from data that is not shown), or the only change you could make \
 would hide the failure (a default or fallback value, skipping the operation, \
 an early return, a condition that is always true). Never make such a change. \
 In reason say what has to be decided and where: which caller, value or definition.
@@ -40,6 +40,11 @@ Keep the behavior for valid inputs.
 without the line-number prefix. "replacement" is the new text for those lines.
 - Keep each edit small: "original" holds only the lines you change, not the whole function. \
 Add one unchanged neighbouring line only when the changed line appears more than once.
+Definitions of functions, macros, variables and types that this code uses but that live \
+elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
+return values and the real types behind typedefs. Edits must stay in the code shown; \
+if the right change is in one of those definitions or in a caller, \
+answer manual and name that file and function in reason.
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write each "reason" in Korean, one to three sentences that a reviewer can paste \

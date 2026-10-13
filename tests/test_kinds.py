@@ -3,7 +3,7 @@ from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_finding, misra_ro
 from rte_fixtures import RTE_HEADER, finding, rte_row, workbook_bytes
 
 from llm_lab.fixer import select_region
-from llm_lab.kinds import KINDS, MISRA, RTE
+from llm_lab.kinds import CODEMETRICS, KINDS, MISRA, RTE
 from llm_lab.kinds.misra import NO_CATEGORY, category_word, rule_key
 from llm_lab.polyspace import Finding, Prepared, column_name
 
@@ -293,3 +293,12 @@ def test_kinds_have_unique_names_and_defaults_among_choices():
     assert all(name == kind.name for name, kind in KINDS.items())
     for kind in KINDS.values():
         assert set(kind.defaults) <= set(kind.choices)
+
+
+def test_rte_and_misra_prompts_explain_the_definitions_section():
+    sentence = "Definitions of functions, macros, variables and types"
+    assert sentence in RTE.system_prompt and sentence in MISRA.system_prompt
+    assert "answer manual and name that file and function" in RTE.system_prompt
+    assert "not in the code or the definitions shown" in RTE.system_prompt
+    assert "Definitions of" not in CODEMETRICS.system_prompt
+    assert RTE.prompt_version == 5 and MISRA.prompt_version == 2  # 답 처리는 그대로
