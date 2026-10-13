@@ -1,15 +1,21 @@
-"""RTE(런타임 오류) 결과 시트: Polyspace Code Prover의 Red·Orange 검사."""
+"""RTE(런타임 오류) 결과 시트: Polyspace Code Prover의 Red·Orange 검사.
+
+같은 파일의 같은 함수에 걸린 검사는 한 번에 보낸다. 같은 줄의 수정이 서로 겹치지 않고,
+한 원인에서 나온 여러 검사를 한 번에 고치기 위해서다.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from llm_lab.fixer import select_region
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import Finding, cell_text, line_number, norm
 
 SYSTEM_PROMPT = """\
-You review one Polyspace Code Prover run-time check in C code \
-and decide whether the code must change.
+You review the Polyspace Code Prover run-time checks found in one C function \
+and decide for each whether the code must change. \
+All findings in one request are in the same function.
 - Red Check: Polyspace proved that the operation fails whenever it runs. Fix it.
 - Orange Check: Polyspace could not prove the operation safe. \
 Fix it if some execution can really fail. \
@@ -17,7 +23,10 @@ If the code shown guarantees safety, answer no_fix and name the lines that guara
 When you fix:
 - Make the safety provable by static analysis: explicit range checks, \
 division-by-zero checks, initialization and similar.
-- Change as little as possible. Do not touch lines unrelated to the check. \
+- One set of edits is shared by every finding you answer fix, so fix them together. \
+When several findings come from one cause in the code shown, fix that cause once \
+instead of each use.
+- Change as little as possible. Do not touch lines unrelated to the findings. \
 Keep the behavior for valid inputs.
 - Copy each edit's "original" exactly from the code shown, as whole consecutive lines, \
 without the line-number prefix. "replacement" is the new text for those lines.
@@ -25,8 +34,8 @@ without the line-number prefix. "replacement" is the new text for those lines.
 Add one unchanged neighbouring line only when the changed line appears more than once.
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
-Write "reason" in Korean, one to three sentences that a reviewer can paste \
-into a Polyspace comment.
+Write each "reason" in Korean, one to three sentences that a reviewer can paste \
+into the Polyspace comment of that finding.
 Answer with JSON only. "findings" has one entry for each numbered finding. \
 "edits" is [] when no finding is fix.
 """
@@ -61,6 +70,26 @@ def color_of(finding: Finding) -> str:
     return finding.color
 
 
+def same_function(finding: Finding, file_name: str) -> str:
+    """같은 파일의 같은 함수에 걸린 행끼리 묶는다. Function이 비면 혼자다.
+
+    C는 대소문자를 가리므로 이름은 공백만 정리하고 그대로 비교한다.
+    """
+    name = " ".join(finding.function.split())
+    return f"{file_name}:{name}" if name else ""
+
+
+def region(text: str, findings: list[Finding]) -> tuple[int, int]:
+    """묶음의 모든 행이 보이도록, 행마다 고른 범위를 하나로 합친다."""
+    first = last = 0
+    for finding in findings:
+        assert finding.line is not None  # make_request가 먼저 확인한다
+        start, end = select_region(text, finding.line)
+        first = start if not first else min(first, start)
+        last = max(last, end)
+    return first, last
+
+
 RTE = Kind(
     name="rte",
     title="RTE",
@@ -72,7 +101,9 @@ RTE = Kind(
     defaults=("Red", "Orange"),
     colors={"Red": "red", "Orange": "orange"},
     system_prompt=SYSTEM_PROMPT,
-    heading="Polyspace Code Prover result",
+    heading="Polyspace Code Prover results in one C function",
     # 4: 공통 답 형식 (findings + edits)
     prompt_version=4,
+    group_key=same_function,
+    region=region,
 )
