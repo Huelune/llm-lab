@@ -135,6 +135,12 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
 .box { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
   padding: 6px 4px; }
+/* 검사 종류가 많아도(MISRA 규칙 100여 개) 상자 안에서 스크롤하고, 이름은 한 줄로 줄인다 */
+.box { max-height: 340px; overflow: auto; }
+.box table { table-layout: fixed; }
+.box th { position: sticky; top: 0; }
+.box td:first-child, .box th:first-child { overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .box h3 { font-size: 12px; margin: 0 6px 4px; color: var(--muted); }
 .list td.summary { color: var(--muted); max-width: 520px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
@@ -568,7 +574,8 @@ def _group_table(title: str, groups: dict[str, Counter], mono: bool) -> str:
             f'<td class="num">{counts[key]}</td>'
             for key in ("all", "fix", "nofix", "manual", "problem")
         )
-        lines.append(f"<tr><td{css}>{escape(name)}</td>{cells}</tr>")
+        # 긴 이름(MISRA 규칙 문장)은 CSS가 한 줄로 줄이므로 전체는 title로 보인다
+        lines.append(f'<tr><td{css} title="{escape(name)}">{escape(name)}</td>{cells}</tr>')
     return (
         f'<div class="box"><h3>{title}</h3><table><tr><th></th><th class="num">전체</th>'
         '<th class="num">수정</th><th class="num">불필요</th><th class="num">직접 수정</th>'

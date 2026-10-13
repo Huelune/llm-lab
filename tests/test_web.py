@@ -599,11 +599,15 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     assert "한눈에 보기" in page and "자세히 보기" in page
     assert "검사 종류별" in page and "파일별" in page
     # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 직접 수정 0, 확인 필요 1
+    # 긴 이름(MISRA 규칙 문장)은 한 줄로 줄이고 전체는 title로 보인다
     assert (
-        '<tr><td>Division by zero</td><td class="num">2</td><td class="num">1</td>'
-        '<td class="num">0</td><td class="num">0</td><td class="num">1</td></tr>'
+        '<tr><td title="Division by zero">Division by zero</td><td class="num">2</td>'
+        '<td class="num">1</td><td class="num">0</td><td class="num">0</td>'
+        '<td class="num">1</td></tr>'
     ) in page
-    assert '<td class="mono">src/calc.c</td>' in page
+    assert '<td class="mono" title="src/calc.c">src/calc.c</td>' in page
+    # 표가 길어져도 상자 안에서 스크롤하고, 아래 내용을 밀어내지 않는다
+    assert ".box { max-height:" in page and "text-overflow: ellipsis" in page
 
 
 def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
@@ -616,8 +620,9 @@ def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
     assert '<span class="badge orange">직접 수정</span> <b>1</b>' in page  # 맨 위 줄
     assert '<th class="num">직접 수정</th>' in page  # 검사 종류별·파일별 표
     assert (
-        '<tr><td>Division by zero</td><td class="num">1</td><td class="num">0</td>'
-        '<td class="num">0</td><td class="num">1</td><td class="num">0</td></tr>'
+        '<tr><td title="Division by zero">Division by zero</td><td class="num">1</td>'
+        '<td class="num">0</td><td class="num">0</td><td class="num">1</td>'
+        '<td class="num">0</td></tr>'
     ) in page
     assert 'data-filter="manual"' in page  # 칩
     assert 'type="checkbox"' not in page  # 고를 diff가 없다
