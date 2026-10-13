@@ -45,8 +45,9 @@ int scale(int x)
 CHOICES = ["codemetrics:Fail", "codemetrics:Conditional Pass", "codemetrics:Unknown"]
 EXCEL = metrics_excel(
     metric_row(actual=24),  # 엑셀 2행: grade, Fail
-    metric_row("Number of Calling Functions", threshold=4, actual=6),  # 3행: grade, Conditional Pass
-    metric_row(actual=15, function="scale()", line=1, file=SCALE_PATH),  # 4행: scale, Conditional Pass
+    # 3행: grade, Conditional Pass / 4행: scale, Conditional Pass
+    metric_row("Number of Calling Functions", threshold=4, actual=6),
+    metric_row(actual=15, function="scale()", line=1, file=SCALE_PATH),
 )
 ANSWERS = (
     code_answer(

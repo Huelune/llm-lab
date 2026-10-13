@@ -26,7 +26,8 @@ ROWS = [
     metric_row(actual=15, function="other()", line=20),  # 3행: 11~20 → Conditional Pass
     metric_row(actual=8, function="third()", line=30),  # 4행: 1~10 → Pass라 뺀다
     metric_row("Number of Call Levels", threshold=3, actual=5),  # 5행: 값으로 이음, 4 이상 → Fail
-    metric_row("Number of Calling Functions", threshold=4, actual=6),  # 6행: 낱말로 이음 → Conditional Pass
+    # 6행: 낱말로 이음 → Conditional Pass
+    metric_row("Number of Calling Functions", threshold=4, actual=6),
     metric_row("Number of Called Functions", threshold=6, actual=9),  # 7행: 조건 시트에 없음
     metric_row(function="", line=None),  # 8행: 파일 단위 지표
 ]
@@ -174,7 +175,8 @@ def test_calling_and_called_metrics_pair_with_their_own_check():
 
 
 def test_a_pass_with_conditions_is_a_middle_band_not_a_pass():
-    # Conditional Pass 단계 판정 글에 pass 낱말이 섞여 있어도 Pass로 보고 빼면 그 단계가 통째로 빠진다
+    # Conditional Pass 단계 판정 글에 pass 낱말이 섞여 있어도 Pass로 보고 빼면
+    # 그 단계가 통째로 빠진다
     conditions = [
         ["No", "지표", "기준", "판정"],
         [1, "Cyclomatic Complexity", "1 ~ 10", "Pass"],
