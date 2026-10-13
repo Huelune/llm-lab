@@ -219,6 +219,9 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     assert 'http-equiv="refresh"' not in page
     assert "location.reload()" in page
     assert "location.hash" in page and "replaceState" in page
+    # 다시 읽기 전에 스크롤 위치를 저장했다가 되돌리고, "보기"로 간 카드는 강조한다
+    assert "sessionStorage" in page and "scrollRestoration" in page
+    assert ".item.hit" in page and "classList.add('hit')" in page
     assert '<span class="badge blue">처리 중 1/2</span>' in page
     assert '<div class="progress"><div style="width:50%"></div></div>' in page
     assert 'type="checkbox"' not in page
@@ -596,11 +599,17 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     assert "한눈에 보기" in page and "자세히 보기" in page
     assert "검사 종류별" in page and "파일별" in page
     # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 직접 수정 0, 확인 필요 1
+    # 긴 이름(MISRA 규칙 문장)은 한 줄로 줄이고 전체는 title로 보인다
     assert (
-        '<tr><td>Division by zero</td><td class="num">2</td><td class="num">1</td>'
-        '<td class="num">0</td><td class="num">0</td><td class="num">1</td></tr>'
+        '<tr><td title="Division by zero">Division by zero</td><td class="num">2</td>'
+        '<td class="num">1</td><td class="num">0</td><td class="num">0</td>'
+        '<td class="num">1</td></tr>'
     ) in page
-    assert '<td class="mono">src/calc.c</td>' in page
+    assert '<td class="mono" title="src/calc.c">src/calc.c</td>' in page
+    # 표가 길어져도 상자 안에서 스크롤하고, 아래 내용을 밀어내지 않는다
+    assert ".box { max-height:" in page and "text-overflow: ellipsis" in page
+    # 상자 안 숫자 열은 좁게 두어 이름 칸을 넓힌다 (머리글은 두 줄로 접힐 수 있다)
+    assert ".box td.num, .box th.num { width: 40px;" in page
 
 
 def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
@@ -613,8 +622,9 @@ def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
     assert '<span class="badge orange">직접 수정</span> <b>1</b>' in page  # 맨 위 줄
     assert '<th class="num">직접 수정</th>' in page  # 검사 종류별·파일별 표
     assert (
-        '<tr><td>Division by zero</td><td class="num">1</td><td class="num">0</td>'
-        '<td class="num">0</td><td class="num">1</td><td class="num">0</td></tr>'
+        '<tr><td title="Division by zero">Division by zero</td><td class="num">1</td>'
+        '<td class="num">0</td><td class="num">0</td><td class="num">1</td>'
+        '<td class="num">0</td></tr>'
     ) in page
     assert 'data-filter="manual"' in page  # 칩
     assert 'type="checkbox"' not in page  # 고를 diff가 없다
