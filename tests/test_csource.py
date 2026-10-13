@@ -406,3 +406,35 @@ def test_header_wrapped_in_extern_c_is_scanned_inside_the_wrapper():
 
 def test_extern_c_braces_do_not_make_a_block():
     assert top_level_blocks(CPLUSPLUS_HEADER) == [(8, 11), (14, 16)]
+
+
+MACRO_STYLE = """\
+FUNC(void, CODE) Drv_Init(void)
+{
+    return;
+}
+VAR(uint8, AUTOMATIC) g_val = 0;
+extern VAR(uint8, AUTOMATIC) g_other;
+FUNC(void, CODE) Drv_Stop(void);
+int read_value(int index);
+int (*get_h(int id))(void)
+{
+    return 0;
+}
+"""
+
+
+def test_macro_style_signatures_use_the_name_nearest_the_body():
+    found = names(find_definitions("drv.c", MACRO_STYLE))
+
+    assert ("Drv_Init", "function", 1, 4) in found  # FUNC(...)는 서명의 일부일 뿐이다
+    assert ("g_val", "variable", 5, 5) in found  # VAR(...) 전역은 원형이 아니다
+    assert ("g_other", "variable", 6, 6) in found
+    assert ("get_h", "function", 9, 12) in found  # 함수 포인터를 돌려주는 함수
+    assert not any(name in ("FUNC", "VAR", "Drv_Stop", "read_value") for name, _, _, _ in found)
+
+
+def test_function_pointer_parameter_type_does_not_rename_the_function():
+    text = "int run_job(unsigned x, handler_t (*cb)(int))\n{\n    return 0;\n}\n"
+
+    assert names(find_definitions("run.c", text)) == [("run_job", "function", 1, 4)]

@@ -174,6 +174,16 @@ def _names_after_brace(code: list[str], end: int, last: int) -> list[str]:
     return [name for name in IDENTIFIER.findall(ATTRIBUTE.sub(" ", tail)) if name not in C_KEYWORDS]
 
 
+def _function_name(head: str) -> str | None:
+    """서명 머리글에서 함수 이름. `FUNC(void, CODE) name(void)`처럼 앞에 매크로가 붙을 수 있어
+    괄호 밖에서 마지막으로 `이름(`이 나오는 것을 쓴다. 괄호 밖에 없으면(`int (*get(int))(void)`)
+    마지막 것. 매개변수의 함수 포인터 형(`cb_t (*cb)(int)`)에 속지 않는다."""
+    calls = [m for m in CALLED.finditer(head) if m.group(1) not in C_KEYWORDS]
+    outer = [m for m in calls if head[: m.start()].count("(") == head[: m.start()].count(")")]
+    chosen = outer or calls
+    return chosen[-1].group(1) if chosen else None
+
+
 def _enumerators(code: list[str], start: int, end: int) -> list[str]:
     """enum 블록의 열거 상수 이름. 쉼표로 나눈 조각마다 첫 식별자다."""
     body = " ".join(code[start - 1 : end])
@@ -239,9 +249,9 @@ def find_definitions(file: str, text: str) -> list[Definition]:
             if match:
                 add(match.group(1), "variable", first, last)
         elif "(" in head:
-            match = CALLED.search(head)
-            if match:
-                add(match.group(1), "function", first, end)
+            name = _function_name(head)
+            if name:
+                add(name, "function", first, end)
         covered.update(range(first, last + 1))
 
     # 블록 밖의 문장: 초기화 없는 전역, extern 선언, 한 줄 typedef
@@ -273,9 +283,9 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
         if words:
             add(words[-1], "type", first, last)
         return
-    declared = text.split("=", 1)[0].strip()  # '(' 검사는 '=' 앞에서만. 값의 괄호는 상관없다
-    if "(" in declared or BARE_TAG.fullmatch(declared):
-        return  # 함수 원형, 전방 선언
+    declared = text.split("=", 1)[0].strip()  # ')' 검사는 '=' 앞에서만. 값의 괄호는 상관없다
+    if declared.endswith(")") or BARE_TAG.fullmatch(declared):
+        return  # 함수 원형(끝이 ')'), 전방 선언. VAR(type, class) name은 변수다
     flat = SUBSCRIPT.sub("", declared)
     words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
     if words:
