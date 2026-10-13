@@ -42,11 +42,11 @@ int scale(int x)
     return x;
 }
 """
-CHOICES = ["codemetrics:Fail", "codemetrics:가운데", "codemetrics:단계 모름"]
+CHOICES = ["codemetrics:Fail", "codemetrics:Conditional Pass", "codemetrics:Unknown"]
 EXCEL = metrics_excel(
     metric_row(actual=24),  # 엑셀 2행: grade, Fail
-    metric_row("Number of Calling Functions", threshold=4, actual=6),  # 3행: grade, 가운데
-    metric_row(actual=15, function="scale()", line=1, file=SCALE_PATH),  # 4행: scale, 가운데
+    metric_row("Number of Calling Functions", threshold=4, actual=6),  # 3행: grade, Conditional Pass
+    metric_row(actual=15, function="scale()", line=1, file=SCALE_PATH),  # 4행: scale, Conditional Pass
 )
 ANSWERS = (
     code_answer(
@@ -88,7 +88,7 @@ def test_home_offers_codemetrics_with_every_stage_checked(tmp_path):
     page = client.get("/").text
 
     assert 'name="kind" value="codemetrics">' in page
-    for stage in ("Fail", "가운데", "단계 모름"):
+    for stage in ("Fail", "Conditional Pass", "Unknown"):
         assert f'name="choice" value="codemetrics:{stage}" checked' in page
 
 
@@ -111,7 +111,7 @@ def test_one_request_per_function_and_middle_fixes_are_left_to_people(tmp_path):
     assert "값 24 · 기준 10 · 조건 시트: Fail (고칠 것)" in page
     assert "조건 시트: 지표 3개" in page
     assert 'name="row" value="1" data-auto="1"' in page  # Fail
-    assert 'name="row" value="3" data-auto="0"' in page  # 가운데
+    assert 'name="row" value="3" data-auto="0"' in page  # Conditional Pass
     assert "자동으로 고르지 않은 수정 1개는 직접 고르세요" in page
 
 
@@ -123,7 +123,7 @@ def test_unchosen_stages_are_not_sent(tmp_path):
 
     assert len(sent) == 1
     assert [row.finding.row for row in store.rows(1)] == [2]
-    assert "가운데 (고르지 않음) 2" in store.job(1).note
+    assert "Conditional Pass (고르지 않음) 2" in store.job(1).note
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git 없음")

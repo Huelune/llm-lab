@@ -111,7 +111,7 @@ def parse_range(text: str) -> tuple[float | None, float | None, bool, bool] | No
 def verdict_kind(verdict: str) -> str:
     """판정 글 → pass | fail | middle.
 
-    pass 낱말 하나뿐인 글만 pass다. 단서가 붙은 Pass(현장 엑셀의 가운데 단계 글)는
+    pass 낱말 하나뿐인 글만 pass다. 단서가 붙은 Pass(현장 엑셀의 Conditional Pass 단계 글)는
     조건부 통과로 보고 middle로 둔다. pass로 잘못 보면 그 행이 대상에서 빠지기 때문이다.
     pass 낱말 없이 fail 낱말이 든 글은 fail, 나머지는 middle이다.
     """

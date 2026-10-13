@@ -193,7 +193,7 @@ def test_parse_range(text: str, parsed: tuple[Any, ...] | None) -> None:
         ("Pass", "pass"),
         (" PASS. ", "pass"),
         ("Fail (고칠 것)", "fail"),
-        # 단서가 붙은 Pass는 조건부 통과로 보고 가운데 단계로 둔다
+        # 단서가 붙은 Pass는 조건부 통과로 보고 Conditional Pass 단계로 둔다
         ("Pass (검토 후 사유 기록)", "middle"),
         ("조건부 Pass", "middle"),
         ("통과", "pass"),
