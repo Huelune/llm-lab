@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from llm_lab.csource import Definition
 from llm_lab.fixer import FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import SourceFile
@@ -18,7 +19,8 @@ from llm_lab.sources import SourceFile
 # 표 구조를 바꾸면 올리고 옛 DB를 옮기는 코드를 넣는다. PRAGMA user_version에 적는다.
 # 2: jobs.source_root (소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 '')
 # 3: jobs.kind·note·context (시트 종류, 작업 메모, 작업 정보 JSON), rows.grp (묶음)
-SCHEMA_VERSION = 3
+# 4: definitions (분석 대상 파일이 쓰는 다른 곳의 정의)
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -58,6 +60,16 @@ CREATE TABLE IF NOT EXISTS cache (
     key TEXT PRIMARY KEY,
     result TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS definitions (
+    job_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    file TEXT NOT NULL,
+    first INTEGER NOT NULL,
+    last INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (job_id, name, file, first)
 );
 """
 
@@ -165,6 +177,7 @@ class Store:
         kind: str = "rte",
         note: str = "",
         context: str = "",
+        definitions: Iterable[Definition] = (),
     ) -> int:
         state = "running" if any(row.state == "pending" for row in rows) else "done"
         with self._write() as db:
@@ -196,6 +209,10 @@ class Store:
                     )
                     for r in rows
                 ],
+            )
+            db.executemany(
+                "INSERT OR IGNORE INTO definitions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(job_id, d.name, d.kind, d.file, d.first, d.last, d.text) for d in definitions],
             )
         return job_id
 
@@ -254,6 +271,16 @@ class Store:
             bom=bool(found["bom"]),
             sha256=found["sha256"],
         )
+
+    def definitions(self, job_id: int) -> list[Definition]:
+        """작업에 저장한 다른 곳의 정의. 이름·파일·줄 순서."""
+        with self._db() as db:
+            found = db.execute(
+                "SELECT name, kind, file, first, last, text FROM definitions "
+                "WHERE job_id = ? ORDER BY name, file, first",
+                (job_id,),
+            ).fetchall()
+        return [Definition(**dict(record)) for record in found]
 
     def set_row(
         self, row_id: int, state: str, result: FixResult | None = None, error: str = ""

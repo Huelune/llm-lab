@@ -3,6 +3,7 @@ from contextlib import closing
 
 import pytest
 
+from llm_lab.csource import Definition
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import decode_source
@@ -255,7 +256,7 @@ def test_database_from_schema_1_gets_source_folder_column(tmp_path):
 
     store = Store(path)
 
-    assert user_version(path) == SCHEMA_VERSION == 3
+    assert user_version(path) == SCHEMA_VERSION == 4
     assert store.job(job_id).source_root == ""
 
 
@@ -275,3 +276,34 @@ def test_database_from_schema_2_gets_kind_note_context_and_group_columns(tmp_pat
     job = store.job(job_id)
     assert (job.kind, job.note, job.context) == ("rte", "", "")
     assert store.rows(job_id)[0].grp == ""
+
+
+DEFINITIONS = [
+    Definition("BUF_LEN", "macro", "inc/limits.h", 3, 3, "#define BUF_LEN 16"),
+    Definition("BUF_LEN", "macro", "inc/limits.h", 7, 7, "#define BUF_LEN 32"),
+    Definition("lookup", "variable", "a.c", 3, 5, "static const u8 lookup[3] = {\n    1, 2, 3\n};"),
+]
+
+
+def test_schema_version_is_four():
+    assert SCHEMA_VERSION == 4
+
+
+def test_definitions_round_trip_in_name_file_line_order(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    rows = [NewRow(FINDING, "calc.c", "pending")]
+
+    job_id = store.create_job(
+        "rte.xlsx", "RTE_Result", 0, [SOURCE], rows, definitions=reversed(DEFINITIONS)
+    )
+
+    assert store.definitions(job_id) == DEFINITIONS
+    assert store.definitions(job_id + 1) == []
+
+
+def test_job_without_definitions_has_an_empty_list(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+
+    job_id = make_job(store, "pending")
+
+    assert store.definitions(job_id) == []
