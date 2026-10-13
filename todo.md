@@ -11,11 +11,14 @@
 git pull
 ```
 
-`.env`에 두 줄을 넣습니다. 헤더 이름은 게이트웨이 안내문에 적힌 것을 그대로 적습니다.
+`.env`를 회사 샘플 코드에 맞춥니다. `LLM_BASE_URL`은 샘플의 base_url 값 그대로, 헤더 이름은 샘플에 적힌 것을 그대로 적습니다.
 
 ```text
+LLM_CLIENT=azure
+LLM_BASE_URL=샘플의 base_url 값
+LLM_API_KEY=발급받은 키
 LLM_PROJECT_ID=발급받은 프로젝트 ID
-LLM_PROJECT_HEADER=안내문의 헤더 이름
+LLM_PROJECT_HEADER=샘플의 헤더 이름
 ```
 
 연결 점검으로 인증이 되는지 봅니다.
@@ -26,7 +29,7 @@ uv run llm-probe
 
 알려줄 것:
 
-- 첫 줄에 `프로젝트 ID 있음`이 보이는지
+- 첫 줄에 `프로젝트 ID 있음`과 `Azure 방식`이 보이는지
 - 1번 연결 점검이 통과했는지, 안 됐으면 오류 종류(401/403 등)
 
 ## 2. RTE 한 바퀴 다시 돌리기 (가장 중요)
