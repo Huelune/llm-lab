@@ -110,7 +110,7 @@ git -c core.autocrlf=false apply fixes.patch
 ```
 
 - 소스는 UTF-8 또는 CP949여야 하고, 한 파일 안의 줄바꿈은 한 가지(CRLF 또는 LF)여야 합니다.
-- 작업과 결과는 `private/fixer.db`에 저장되며 커밋되지 않습니다. 같은 파일·같은 지적은 LLM을 다시 부르지 않습니다. 작업 목록까지 모두 지우려면 서버를 끈 상태에서 `private/fixer.db*` 파일을 지우고, 저장된 LLM 답만 지우려면 `cache` 표를 비웁니다(두 명령은 `todo.md` 2절에 있습니다).
+- 작업과 결과는 `private/fixer.db`에 저장되며 커밋되지 않습니다. 같은 파일·같은 지적은 LLM을 다시 부르지 않습니다. 작업 목록·대화 기록까지 모두 지우려면 서버를 끈 상태에서 `private/fixer.db*`와 `private/llm-logs/*.md`를 지우고, 저장된 LLM 답만 지우려면 `cache` 표를 비웁니다(두 명령은 `todo.md` 2절에 있습니다).
 - LLM과 오간 대화는 묶음마다 `private/llm-logs/시각_job작업번호_row엑셀행.md`로 남습니다(엑셀 행은 묶음의 가장 작은 행). 보낸 메시지(코드 포함), 받은 응답, 응답 원문 JSON이 그대로 들어 있고 API 키는 없습니다. 이전 결과를 재사용해 LLM을 부르지 않은 행도 그렇다고 적힌 파일이 남습니다.
 - 서비스를 껐다 켜면 처리 중이던 작업을 이어서 합니다.
 - 주소: 새 분석 `/`, 작업 목록 `/results`, 작업 결과 `/results/{작업 번호}`, 결과 JSON `/api/results/{작업 번호}`.
