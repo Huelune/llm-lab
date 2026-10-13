@@ -129,6 +129,29 @@ def test_top_counts_keep_every_target_even_at_zero(tmp_path):
     assert '<span class="badge orange">Orange</span> <b>1</b>' in page
 
 
+def test_home_form_shows_a_spinner_while_the_excel_is_read(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+
+    # 분석 시작을 누르면 단추가 잠기고 스피너와 안내가 보인다 (엑셀 읽기가 몇 초 걸린다)
+    assert '<form id="analyze"' in page
+    assert "엑셀을 읽는 중" in page and ".spinner {" in page
+
+
+def test_pages_carry_an_inline_favicon_and_favicon_ico_is_served(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+    icon = client.get("/favicon.ico")
+
+    # 외부 자원을 읽지 않도록 아이콘은 data URI로 head에 들어간다
+    assert '<link rel="icon" href="data:image/svg+xml,' in page
+    assert icon.status_code == 200
+    assert icon.headers["content-type"].startswith("image/svg+xml")
+    assert b"<svg" in icon.content
+
+
 def test_result_json(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     folder = source_folder(tmp_path)
@@ -223,6 +246,7 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     # 새로 고침은 스크립트가 하고(location.reload), 보고 있던 탭은 주소의 #으로 남긴다
     assert '<main data-refresh="5">' in page
     assert 'http-equiv="refresh"' not in page
+    assert '<span class="spinner"></span>1/2 처리 · 5초마다 새로 고칩니다' in page
     assert "location.reload()" in page
     assert "location.hash" in page and "replaceState" in page
     # 다시 읽기 전에 스크롤 위치를 저장했다가 되돌리고, "보기"로 간 카드는 강조한다
