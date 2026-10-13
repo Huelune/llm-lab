@@ -41,7 +41,7 @@ For each finding, decide whether the code must change.
 - "check" gives the rule number and its headline, "detail" what Polyspace found, \
 and "category" the rule category this project uses.
 - Mandatory: no deviation is allowed, so fix it. If the code shown is not enough to fix it, \
-answer no_fix and say in reason that it must be fixed by hand and what is missing.
+answer manual and say in reason what is missing and where it must be fixed by hand.
 - Required and Advisory: answer fix when a small change removes the violation \
 without changing behavior. Otherwise answer no_fix with a deviation rationale.
 When you fix:
@@ -61,7 +61,8 @@ Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write each "reason" in Korean, one to three sentences that a reviewer can paste \
 into the Polyspace comment of that finding. For fix, say what changed. \
-For no_fix, write why the code is acceptable as written.
+For no_fix, write why the code is acceptable as written. \
+For manual, write what must be fixed by hand and what is missing.
 Answer with JSON only. "findings" has one entry for each numbered finding. \
 "edits" is [] when no finding is fix.
 """
@@ -214,7 +215,8 @@ MISRA = Kind(
     colors={"Mandatory": "red", "Required": "orange", "Advisory": "gray"},
     system_prompt=SYSTEM_PROMPT,
     heading="Polyspace MISRA C:2012 results",
-    prompt_version=1,
+    # 2: 판단 값 manual (직접 수정) 추가
+    prompt_version=2,
     prepare=read_conditions,
     group_key=same_line,
     facts=facts,

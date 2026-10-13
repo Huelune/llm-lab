@@ -39,7 +39,13 @@ uv run llm-probe
 1. 회사 정식 분석 설정(프로젝트·옵션 파일)을 정하고, 두 번 모두 그 설정을 씁니다.
 2. 소스를 패치 전 원본으로 되돌리고, 원본 폴더를 따로 복사해 둡니다.
 3. Polyspace를 돌리고 결과 엑셀을 만듭니다.
-4. 저장해 둔 LLM 답을 지웁니다(작업 목록은 남습니다). `N cached answers deleted`가 나오면 됩니다.
+4. 서버를 끈 상태에서 저장해 둔 작업 목록과 LLM 답을 모두 지웁니다. `N files deleted`가 나오면 됩니다(N은 1~3).
+
+   ```bash
+   uv run python -c "from pathlib import Path; n=[p.unlink() for p in Path('private').glob('fixer.db*')]; print(len(n), 'files deleted')"
+   ```
+
+   LLM 답만 지우고 작업 목록은 남기려면 대신 이것을 씁니다. `N cached answers deleted`가 나옵니다.
 
    ```bash
    uv run python -c "import sqlite3; db=sqlite3.connect('private/fixer.db'); n=db.execute('DELETE FROM cache').rowcount; db.commit(); print(n, 'cached answers deleted')"
@@ -65,7 +71,8 @@ uv run llm-probe
 
 - 쓴 설정이 정식 설정인지(예 / 모름)
 - 고치기 전·뒤 엑셀의 Red / Orange / Gray 개수
-- 결과 화면 맨 위 줄(수정 / 수정 불필요 / 확인 필요)과 "같은 줄 겹침으로 N개는 다음 차례"의 N
+- 결과 화면 맨 위 줄(수정 / 수정 불필요 / 직접 수정 / 확인 필요)과 "같은 줄 겹침으로 N개는 다음 차례"의 N
+- "직접 수정" 행의 이유 종류별 개수(원인이 호출자에 있음 / 정의가 안 보임 / 가리는 수정뿐 / 그 밖)
 - 고친 뒤 남은 Red의 검사 종류별 개수
 - 늘어난 Gray 중 패치로 고친 자리가 대략 몇 개인지
 - "확인 필요" 설명 첫 줄의 종류와 개수
@@ -90,7 +97,7 @@ MISRA 시트 분석이 회사 엑셀에서 도는지 봅니다.
 
 알려줄 것:
 
-- 맨 위 숫자: 수정 / 수정 불필요 / 확인 필요
+- 맨 위 숫자: 수정 / 수정 불필요 / 직접 수정 / 확인 필요
 - 메모 줄: "조건 시트: 규칙 N개" / "조건 시트 없음" / "조건 시트에서 쓸 규칙이 없음" 중 어느 것인지(N은 숫자)
 - "자세히 보기 (diff)"의 행 메모: "분류: 조건 시트 …"가 붙은 행 수, "규칙 번호를 못 읽음"과 "조건 시트에서 못 찾은 규칙"이
   각각 없음 / 일부 / 전부인지
@@ -119,7 +126,7 @@ uv run python scripts/peek_metrics.py "새 엑셀 경로.xlsx"
 
 - 작업 메모의 숫자(엑셀 이름이 보이므로 캡처하지 말고 숫자만): `조건 시트: 지표 N개`, `조건 시트에서 짝을 찾지 못한 지표 N개`,
   `값으로 이은 지표 N개`, 뺀 행 수
-- 맨 위 숫자: Fail / 가운데 / 단계 모름, 수정 / 수정 불필요 / 확인 필요
+- 맨 위 숫자: Fail / 가운데 / 단계 모름, 수정 / 수정 불필요 / 직접 수정 / 확인 필요
 - "확인 필요" 설명 첫 줄의 종류와 개수
 - 동작이 바뀐 것 같은 수정의 개수와 모양(코드·이름 없이 말로)
 - `git apply`가 됐는지, 안 됐으면 오류 종류

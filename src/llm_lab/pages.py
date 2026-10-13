@@ -23,10 +23,24 @@ ROW_STATES = {
     "error": "오류",
     "no_source": "소스 없음",
 }
-DECISIONS = {"fix": "수정", "no_fix": "수정 불필요"}
-# 화면의 분류: 오류와 소스 없음은 사용자가 손봐야 하므로 "확인 필요"로 묶는다
-KIND_LABELS = {"fix": "수정", "nofix": "수정 불필요", "problem": "확인 필요", "waiting": "대기"}
-KIND_BADGES = {"fix": "blue", "nofix": "gray", "problem": "amber", "waiting": "gray"}
+DECISIONS = {"fix": "수정", "no_fix": "수정 불필요", "manual": "직접 수정"}
+# 화면의 분류. "직접 수정"은 LLM이 고쳐야 한다고 봤지만 사람이 정해야 하는 행(diff 없음),
+# "확인 필요"는 오류와 소스 없음처럼 사용자가 손봐야 하는 행이다
+KIND_LABELS = {
+    "fix": "수정",
+    "nofix": "수정 불필요",
+    "manual": "직접 수정",
+    "problem": "확인 필요",
+    "waiting": "대기",
+}
+KIND_BADGES = {
+    "fix": "blue",
+    "nofix": "gray",
+    "manual": "orange",
+    "problem": "amber",
+    "waiting": "gray",
+}
+KIND_ORDER = ("fix", "nofix", "manual", "problem", "waiting")
 NO_SOURCE_ACTION = "소스 폴더가 맞는지 확인하고, 맞는 폴더로 다시 분석하세요."
 
 STYLE = """
@@ -424,9 +438,9 @@ def _diff(diff: str) -> str:
 
 
 def _kind(row: Row) -> str:
-    """화면 분류: fix / nofix / problem(확인 필요) / waiting."""
+    """화면 분류: fix / nofix / manual(직접 수정) / problem(확인 필요) / waiting."""
     if row.result is not None:
-        return "fix" if row.result.decision == "fix" else "nofix"
+        return {"fix": "fix", "manual": "manual"}.get(row.result.decision, "nofix")
     return "problem" if row.state in ("error", "no_source") else "waiting"
 
 
@@ -495,7 +509,7 @@ def _chips(kind: Kind, job: Job, rows: list[Row]) -> str:
         for label in labels
     ]
     parts += [_badge("gray", f"제외 {job.skipped}"), '<span class="sep">|</span>']
-    for kind in ("fix", "nofix", "problem", "waiting"):
+    for kind in KIND_ORDER:
         if kind != "waiting" or kinds[kind]:
             label = _badge(KIND_BADGES[kind], KIND_LABELS[kind])
             parts.append(f"<span>{label} <b>{kinds[kind]}</b></span>")
@@ -507,14 +521,14 @@ def _group_table(title: str, groups: dict[str, Counter], mono: bool) -> str:
     lines = []
     for name, counts in sorted(groups.items(), key=lambda item: (-item[1]["all"], item[0])):
         cells = "".join(
-            f'<td class="num">{counts[key]}</td>' for key in ("all", "fix", "nofix", "problem")
+            f'<td class="num">{counts[key]}</td>'
+            for key in ("all", "fix", "nofix", "manual", "problem")
         )
         lines.append(f"<tr><td{css}>{escape(name)}</td>{cells}</tr>")
     return (
         f'<div class="box"><h3>{title}</h3><table><tr><th></th><th class="num">전체</th>'
-        '<th class="num">수정</th><th class="num">불필요</th><th class="num">확인 필요</th></tr>'
-        + "".join(lines)
-        + "</table></div>"
+        '<th class="num">수정</th><th class="num">불필요</th><th class="num">직접 수정</th>'
+        '<th class="num">확인 필요</th></tr>' + "".join(lines) + "</table></div>"
     )
 
 
@@ -538,9 +552,7 @@ def _groups(job: Job, rows: list[Row]) -> str:
 def _filters(rows: list[Row]) -> str:
     kinds = Counter(_kind(row) for row in rows)
     buttons = [("all", f"전체 {len(rows)}")] + [
-        (kind, f"{KIND_LABELS[kind]} {kinds[kind]}")
-        for kind in ("fix", "nofix", "problem", "waiting")
-        if kinds[kind]
+        (kind, f"{KIND_LABELS[kind]} {kinds[kind]}") for kind in KIND_ORDER if kinds[kind]
     ]
     html = []
     for kind, label in buttons:

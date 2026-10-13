@@ -16,13 +16,21 @@ SYSTEM_PROMPT = """\
 You review the Polyspace Code Prover run-time checks found in one C function \
 and decide for each whether the code must change. \
 All findings in one request are in the same function.
-- Red Check: Polyspace proved that the operation fails whenever it runs. Fix it.
+- Red Check: Polyspace proved that the operation fails whenever it runs. The code must change.
 - Orange Check: Polyspace could not prove the operation safe. \
-Fix it if some execution can really fail. \
-If the code shown guarantees safety, answer no_fix and name the lines that guarantee it.
+If the code shown guarantees safety, answer no_fix and name the lines that guarantee it. \
+Otherwise the code must change.
+When the code must change, decide between fix and manual:
+- Answer fix only when the code shown lets you remove the cause, so that the operation \
+is safe on every execution and static analysis can prove it: initialise the variable, \
+use the real array size as the bound, check the value where it enters the function, \
+correct the loop bound, and similar.
+- Otherwise answer manual: the cause is not in the code shown (the value comes from \
+a caller, a definition or data that is not shown), or the only change you could make \
+would hide the failure (a default or fallback value, skipping the operation, \
+an early return, a condition that is always true). Never make such a change. \
+In reason say what has to be decided and where: which caller, value or definition.
 When you fix:
-- Make the safety provable by static analysis: explicit range checks, \
-division-by-zero checks, initialization and similar.
 - One set of edits is shared by every finding you answer fix, so fix them together. \
 When several findings come from one cause in the code shown, fix that cause once \
 instead of each use.
@@ -102,8 +110,8 @@ RTE = Kind(
     colors={"Red": "red", "Orange": "orange"},
     system_prompt=SYSTEM_PROMPT,
     heading="Polyspace Code Prover results in one C function",
-    # 4: 공통 답 형식 (findings + edits)
-    prompt_version=4,
+    # 4: 공통 답 형식 (findings + edits) / 5: 판단 값 manual (직접 수정) 추가
+    prompt_version=5,
     group_key=same_function,
     region=region,
 )

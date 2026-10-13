@@ -3,8 +3,8 @@
     uv run python scripts/peek_metrics.py "엑셀 경로.xlsx"
 
 화면은 캡처해서 회사 밖(Claude)으로 보낸다. 그래서 회사 정보는 찍지 않는다: 엑셀 파일 이름, 경로,
-소스 파일·함수 이름, Comment 같은 칸 글자, 오류 메시지 원문(경로가 들어 있을 수 있음). 찍는 것은
-시트 이름, 알려진 열 이름, Polyspace 지표 이름, 기준치와 값의 숫자, 개수뿐이다.
+시트 이름, 소스 파일·함수 이름, Comment 같은 칸 글자, 오류 메시지 원문(경로가 들어 있을 수 있음).
+찍는 것은 알려진 열 이름, Polyspace 지표 이름, 기준치와 값의 숫자, 개수뿐이다.
 임시 파일도 쓰지 않는다.
 """
 
@@ -114,7 +114,10 @@ class CheckStat:
 
 
 def find_sheet(workbook: Any) -> Found | list[str]:
-    """필요한 열이 모두 있는 시트. 못 찾으면 시트마다 필요한 열을 몇 개 찾았는지 한 줄씩."""
+    """필요한 열이 모두 있는 시트. 못 찾으면 결과 시트마다 필요한 열을 몇 개 찾았는지 한 줄씩.
+
+    시트 이름은 회사 값이라 찍지 않고, 결과 시트는 나온 순서의 번호로 가리킨다.
+    """
     found: list[Found] = []
     notes: list[str] = []
     others = 0
@@ -137,7 +140,8 @@ def find_sheet(workbook: Any) -> Found | list[str]:
                 continue
             missing = ", ".join(name for name in REQUIRED if name not in best)
             notes.append(
-                f"  [{sheet.title}] 필요한 열 {len(best)}/{len(REQUIRED)}개, 없는 열: {missing}"
+                f"  결과 시트 {len(notes) + 1}: 필요한 열 {len(best)}/{len(REQUIRED)}개, "
+                f"없는 열: {missing}"
             )
     if not found:
         return [*notes, f"  그 밖의 시트 {others}개 (이름은 찍지 않음)"]
@@ -236,8 +240,7 @@ def _report(found: Found, rows: list[tuple[Any, ...]]) -> list[str]:
     repeated = sum(len(items) != len({check for _, check in items}) for items in functions.values())
     columns = ", ".join(name for name in KNOWN if name in found.columns)
     head = [
-        f"시트: {found.sheet.title} (헤더 {found.header}행) / 데이터 {len(data)}행 / "
-        f"Check {len(checks)}종",
+        f"결과 시트 (헤더 {found.header}행) / 데이터 {len(data)}행 / Check {len(checks)}종",
         f"열: {columns}" + (f" (+ 다른 열 {found.others}개)" if found.others else ""),
         f"Function 빈 행 {empty['function']}, line 빈 행 {empty['line']}, "
         f"Threshold 빈 행 {empty['threshold']}, Actual Value 숫자 아닌 행 {not_number}",

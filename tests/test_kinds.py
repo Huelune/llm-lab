@@ -267,6 +267,13 @@ def test_rte_region_covers_every_row_of_the_group():
     assert RTE.region(text, [bottom, top]) == (1, 2400)
 
 
+def test_rte_and_misra_prompts_offer_the_manual_decision():
+    # 답 처리가 바뀌었으므로(판단 값 추가) prompt_version도 올라간다
+    assert "answer manual" in RTE.system_prompt and RTE.prompt_version == 5
+    assert "answer manual" in MISRA.system_prompt and MISRA.prompt_version == 2
+    assert "manual" not in KINDS["codemetrics"].system_prompt  # CodeMetrics는 그대로
+
+
 def test_misra_order_colors_and_defaults():
     assert MISRA.defaults == ("Mandatory", "Required")
     ranks = [MISRA.rank(label) for label in ("Mandatory", "Required", "Advisory", NO_CATEGORY)]
