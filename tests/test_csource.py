@@ -250,7 +250,7 @@ def test_pick_prefers_names_near_the_finding_then_the_rest_in_order():
     definitions = [
         definition("counter", file="a.c", kind="variable"),
         definition("BUF_LEN"),
-        definition("lookup", file="a.c", kind="variable"),
+        definition("lookup", file="a.c", first=5, kind="variable"),
     ]
 
     # 검사 줄 12의 위아래 2줄(10~13)에는 counter만 있고, lookup·BUF_LEN은 8줄에 있다
@@ -324,3 +324,45 @@ def test_pick_is_deterministic():
     second = pick_definitions(list(reversed(definitions)), "src/use.c", REGION, 6, 10, [8])
 
     assert first == second
+
+
+MODE_ENUM = """\
+typedef enum {
+    MODE_A,
+    MODE_B,
+    MODE_C,
+    MODE_D
+} mode_t;
+"""
+
+
+def test_pick_sends_an_enum_once_however_many_of_its_names_are_used():
+    definitions = find_definitions("inc/mode.h", MODE_ENUM)
+    text = "int f(int x)\n{\n    switch (x) {\n    case MODE_A: return 1;\n"
+    text += "    case MODE_B: return 2;\n    case MODE_C: return 3;\n    }\n    return 0;\n}\n"
+
+    picked = pick_definitions(definitions, "src/use.c", text, 1, 9, [5])
+
+    assert [(d.file, d.first, d.last) for d in picked] == [("inc/mode.h", 1, 6)]
+
+
+def test_pick_sends_a_struct_once_when_its_tag_and_alias_are_both_used():
+    header = "typedef struct node_tag { int v; } node_t, *node_p;\n"
+    definitions = find_definitions("inc/node.h", header)
+    text = "int f(struct node_tag *a, node_t *b, node_p c)\n{\n    return a->v;\n}\n"
+
+    picked = pick_definitions(definitions, "src/use.c", text, 1, 4, [3])
+
+    assert [(d.file, d.first, d.last) for d in picked] == [("inc/node.h", 1, 1)]
+
+
+def test_repeated_names_of_one_body_count_once_toward_the_caps():
+    enum = [Definition(f"E_{i}", "type", "e.h", 1, 3, "enum { E_0, E_1 };") for i in range(5)]
+    others = [definition(f"name_{i}", first=10 + i) for i in range(MAX_DEFINITIONS)]
+    text = "int f(void) { return " + " + ".join(d.name for d in [*enum, *others]) + "; }\n"
+
+    picked = pick_definitions([*enum, *others], "f.c", text, 1, 1, [1])
+
+    assert len(picked) == MAX_DEFINITIONS  # 열거 몸체 1개 + 나머지 11개
+    assert [d.name for d in picked].count("E_0") == 1
+    assert not any(d.name in ("E_1", "E_4") for d in picked)

@@ -178,7 +178,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             rows,
             source_root=str(root),
             kind=sheet_kind.name,
-            note=_job_note(sheet, len(definitions), unreadable),
+            note=_job_note(sheet, len({(d.file, d.first) for d in definitions}), unreadable),
             definitions=definitions,
             context="" if data is None else json.dumps(data, ensure_ascii=False),
         )

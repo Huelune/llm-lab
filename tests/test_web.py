@@ -731,6 +731,19 @@ def test_job_sends_definitions_from_other_files_and_notes_the_count(tmp_path):
     assert [d.name for d in store.definitions(1)] == ["LIMIT", "divide"]
 
 
+def test_note_counts_each_definition_body_once_even_with_several_names(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
+    root = folder_with_header(tmp_path)
+    (root / "inc" / "mode.h").write_bytes(b"typedef enum { MODE_A, MODE_B } mode_t;\n")
+    (root / "src" / "calc.c").write_bytes(USE_C.replace(b"% LIMIT", b"% LIMIT + MODE_A + MODE_B"))
+
+    upload(client, rte_excel(rte_row("Orange Check", line=4)), root)
+
+    content = sent[0]["messages"][1]["content"]
+    assert content.count("typedef enum { MODE_A, MODE_B } mode_t;") == 1
+    assert "참고 정의 3개" in store.job(1).note  # LIMIT, 열거 몸체 1개, divide
+
+
 def test_definitions_inside_the_sent_code_are_stored_but_not_sent(tmp_path):
     client, store, sent = make_service(tmp_path, fix_answer())
 

@@ -346,7 +346,8 @@ def pick_definitions(
     """보내는 범위(first~last)가 쓰는 이름의 정의 가운데 범위 밖의 것을, 상한 안에서 고른다.
 
     검사 줄(lines) 위아래 NEAR_LINES 안의 이름을 행 순서대로 먼저, 나머지는 범위 안 첫 등장 순서로.
-    같은 이름은 같은 파일 → 헤더 → 그 밖 순서로 PER_NAME개까지. 같은 입력에는 같은 결과.
+    같은 이름은 같은 파일 → 헤더 → 그 밖 순서로 PER_NAME개까지. 같은 몸체(파일·시작 줄)는 한 번만.
+    같은 입력에는 같은 결과.
     """
     code = split_lines(blank_comments(text))[first - 1 : last]
     near: list[str] = []
@@ -365,15 +366,19 @@ def pick_definitions(
         by_name.setdefault(definition.name, []).append(definition)
 
     picked: list[Definition] = []
+    placed: set[tuple[str, int]] = set()  # 열거 상수·별칭마다 같은 몸체가 따로 있다. 한 번만 싣는다
     total = 0
     for name in wanted:
         candidates = sorted(
             by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first)
         )
         for definition in candidates[:PER_NAME]:
+            if (definition.file, definition.first) in placed:
+                continue
             size = definition.text.count("\n") + 1
             if len(picked) >= MAX_DEFINITIONS or total + size > MAX_DEFINITION_TOTAL_LINES:
                 return picked
             picked.append(definition)
+            placed.add((definition.file, definition.first))
             total += size
     return picked
