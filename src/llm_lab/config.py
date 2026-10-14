@@ -21,11 +21,15 @@ OPTIONAL_VARS = (
     "LLM_CLIENT",
     "LLM_API_VERSION",
     "LLM_WORKERS",
+    "LLM_FOLLOW_UPS",
 )
 DEFAULT_PROJECT_HEADER = "OpenAI-Project"
 # llm-fix-server가 LLM에 동시에 보내는 요청 수. 게이트웨이 한도는 llm-probe --parallel로 잰다
 DEFAULT_WORKERS = 2
 MAX_WORKERS = 16
+# 묶음마다 LLM이 보이지 않는 정의를 되물을 수 있는 횟수. 0이면 되묻지 않는다(예전과 같은 요청)
+DEFAULT_FOLLOW_UPS = 2
+MAX_FOLLOW_UPS = 3
 CLIENT_KINDS = ("openai", "azure")
 DEFAULT_TIMEOUT = 60.0
 BOOL_VALUES = {
@@ -59,6 +63,7 @@ class Settings:
     client_kind: str = "openai"
     api_version: str = ""
     workers: int = DEFAULT_WORKERS
+    follow_ups: int = DEFAULT_FOLLOW_UPS
 
 
 def _parse_bool(key: str, value: str) -> bool:
@@ -103,6 +108,13 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
             raise ConfigError(f"LLM_WORKERS는 1~{MAX_WORKERS}의 정수여야 합니다: {text!r}")
         workers = int(text)
 
+    follow_ups = DEFAULT_FOLLOW_UPS
+    if values["LLM_FOLLOW_UPS"]:
+        text = values["LLM_FOLLOW_UPS"]
+        if not text.isdigit() or not 0 <= int(text) <= MAX_FOLLOW_UPS:
+            raise ConfigError(f"LLM_FOLLOW_UPS는 0~{MAX_FOLLOW_UPS}의 정수여야 합니다: {text!r}")
+        follow_ups = int(text)
+
     # SDK가 /chat/completions를 직접 붙이므로, requests용 전체 주소를 넣었으면 잘라낸다
     base_url = values["LLM_BASE_URL"].rstrip("/").removesuffix("/chat/completions")
     thinking = values["LLM_ENABLE_THINKING"]
@@ -118,6 +130,7 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
         client_kind=client_kind,
         api_version=values["LLM_API_VERSION"],
         workers=workers,
+        follow_ups=follow_ups,
     )
 
 

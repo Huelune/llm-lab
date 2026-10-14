@@ -297,3 +297,15 @@ def test_missing_profile_file_is_an_error(isolated):
 
     with pytest.raises(ConfigError, match=r"\.env\.b"):
         load_settings("b")
+
+
+def test_follow_ups_default_to_two_and_read_llm_follow_ups():
+    assert settings_from_env(VALID).follow_ups == 2
+    assert settings_from_env({**VALID, "LLM_FOLLOW_UPS": "0"}).follow_ups == 0
+    assert settings_from_env({**VALID, "LLM_FOLLOW_UPS": "3"}).follow_ups == 3
+
+
+@pytest.mark.parametrize("bad", ["4", "-1", "two", "1.5"])
+def test_follow_ups_must_be_a_whole_number_from_0_to_3(bad):
+    with pytest.raises(ConfigError, match="LLM_FOLLOW_UPS"):
+        settings_from_env({**VALID, "LLM_FOLLOW_UPS": bad})
