@@ -511,6 +511,17 @@ def test_misra_fix_in_another_header_is_accepted():
     assert result.edits[0].file == "inc/secret_b.h"
 
 
+def test_trailing_whitespace_in_replacement_lines_is_dropped():
+    # LLM이 줄 끝에 공백을 남기면 git apply가 whitespace 경고를 낸다. 새로 쓰는 줄의 끝 공백은 뗀다
+    padded = {**DIVIDE_FIX, "replacement": "    return (b != 0) ? a / b : 0;  \t"}
+    handler, _ = scripted(answer(("fix", REASON), edits=[padded]))
+
+    (result,) = propose_fixes(make_client(handler), MODEL, make_request(RTE, [finding()], SOURCE))
+
+    assert result.edits[0].replacement.endswith("0;\n")
+    assert "0;  " not in result.diff
+
+
 def test_fix_in_another_file_is_located_there_and_shown_in_the_diff():
     handler, _ = scripted(answer(("fix", REASON), edits=[DRV_FIX]))
 

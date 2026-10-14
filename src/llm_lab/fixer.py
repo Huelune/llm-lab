@@ -168,6 +168,7 @@ def _squash(line: str) -> str:
     return " ".join(line.split())
 
 
+TRAILING_SPACE = re.compile(r"[ \t]+$", re.M)  # 줄 끝 공백·탭
 NUMBER_PREFIX = re.compile(r"^\s*\d+\| ?")
 
 
@@ -867,6 +868,8 @@ def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], 
         if target is None:
             raise EditMismatch(f"edits[{number}].file {asked}은 고칠 수 있게 보낸 파일이 아님")
         file = texts[target]
+        # 새로 쓰는 줄의 끝 공백은 뗀다 (git apply whitespace 경고, `\` 줄 잇기 끊김을 막는다)
+        raw = {**raw, "replacement": TRAILING_SPACE.sub("", raw["replacement"])}
         # 소스 인코딩(CP949 등)으로 못 쓰는 문자가 있으면 패치를 만들 수 없으므로 지금 다시 요청한다
         try:
             raw["replacement"].encode(file.encoding)
