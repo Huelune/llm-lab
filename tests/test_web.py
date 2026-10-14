@@ -769,6 +769,39 @@ def test_main_clear_removes_only_the_profile_records(tmp_path, monkeypatch, caps
     assert (tmp_path / "private" / "llm-logs" / "secret_job1_row2.md").is_file()
 
 
+def test_clear_without_profile_says_records_are_in_another_profile(tmp_path, monkeypatch, capsys):
+    # --profile로 켠 서버의 기록을 --profile 없이 지우면 0개다. 다른 곳에 기록이 있다고 알려 준다
+    monkeypatch.chdir(tmp_path)
+    secret = tmp_path / "private" / "secret"
+    (secret / "llm-logs").mkdir(parents=True)
+    Store(secret / "fixer.db")
+    (secret / "llm-logs" / "secret_job1_row2.md").write_text("x", encoding="utf-8")
+
+    assert web.main(["--clear", "all"]) == 0
+    assert web.main(["--clear", "cache"]) == 0
+
+    out = capsys.readouterr().out
+    hint = (
+        "다른 프로필 1곳에 기록이 있습니다. 서버를 켤 때 쓴 --profile 이름을 붙여 다시 실행하세요."
+    )
+    assert out == f"0 files deleted\n{hint}\n0 cached answers deleted\n{hint}\n"
+    assert "secret" not in out
+    assert (secret / "fixer.db").is_file()
+
+
+def test_clear_with_profile_points_back_to_the_default_records(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    Store(tmp_path / "private" / "fixer.db")
+
+    assert web.main(["--profile", "b", "--clear", "all"]) == 0
+
+    out = capsys.readouterr().out
+    assert out == (
+        "0 files deleted\n"
+        "--profile 없이 켠 서버의 기록이 있습니다. 그 기록이면 --profile 없이 다시 실행하세요.\n"
+    )
+
+
 def test_main_names_the_missing_profile_file(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")

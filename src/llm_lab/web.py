@@ -319,6 +319,25 @@ def open_when_ready(url: str, port: int, timeout: float = 15.0) -> None:
     webbrowser.open(url)
 
 
+def _has_records(folder: Path) -> bool:
+    return (folder / DB_NAME).is_file() or any((folder / LOG_DIR_NAME).glob("*.md"))
+
+
+def _elsewhere_hint(data_dir: Path) -> None:
+    """지울 기록이 없을 때, 다른 프로필이나 기본 위치에 기록이 있으면 알린다 (이름 없이)."""
+    if data_dir == DATA_DIR:
+        others = sum(1 for d in DATA_DIR.glob("*") if d.is_dir() and _has_records(d))
+        if others:
+            print(
+                f"다른 프로필 {others}곳에 기록이 있습니다. "
+                "서버를 켤 때 쓴 --profile 이름을 붙여 다시 실행하세요."
+            )
+    elif _has_records(DATA_DIR):
+        print(
+            "--profile 없이 켠 서버의 기록이 있습니다. 그 기록이면 --profile 없이 다시 실행하세요."
+        )
+
+
 def clear_records(data_dir: Path, what: str) -> int:
     """기록을 지우고 개수만 찍는다. 경로는 화면에 내지 않는다."""
     db_path = data_dir / DB_NAME
@@ -326,6 +345,7 @@ def clear_records(data_dir: Path, what: str) -> int:
         if what == "cache":
             if not db_path.is_file():
                 print("0 cached answers deleted")
+                _elsewhere_hint(data_dir)
                 return 0
             with closing(sqlite3.connect(db_path)) as db, db:
                 count = db.execute("DELETE FROM cache").rowcount
@@ -338,6 +358,8 @@ def clear_records(data_dir: Path, what: str) -> int:
         print("지우지 못했습니다: 서버를 끈 뒤 다시 실행하세요.", file=sys.stderr)
         return 1
     print(f"{len(files)} files deleted")
+    if not files:
+        _elsewhere_hint(data_dir)
     return 0
 
 
