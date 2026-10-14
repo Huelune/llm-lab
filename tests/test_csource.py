@@ -1,14 +1,24 @@
 from llm_lab.csource import (
+    CALLER_CONTEXT,
+    MAX_CALLER_LINES,
+    MAX_CALLERS,
     MAX_DEFINITION_LINES,
     MAX_DEFINITION_TOTAL_LINES,
     MAX_DEFINITIONS,
+    MAX_STORED_CALLERS,
     Definition,
     blank_comments,
+    callers_for,
+    enclosing_function,
+    find_call_sites,
     find_definitions,
+    function_blocks,
     identifiers,
     macro_target,
+    pick_callers,
     pick_definitions,
     scan_folder,
+    scan_project,
     split_lines,
     top_level_blocks,
     used_definitions,
@@ -505,3 +515,132 @@ def test_pick_puts_the_implementation_right_after_its_alias():
     picked = pick_definitions(definitions, "src/use.c", text, 1, 4, [3])
 
     assert [d.name for d in picked] == ["api_read", "drv_read", "BUF_LEN"]
+
+
+CALLEE = "int divide(int a, int b)\n{\n    return a / b;\n}\n"
+CALLER_TEXT = (
+    '#include "calc.h"\n'
+    "int update(int sum)\n"
+    "{\n"
+    "    int n = read_count();\n"
+    "    /* divide(sum, 0) in a comment */\n"
+    "    return divide(sum, n);\n"
+    "}\n"
+    "int twice(int x)\n"
+    "{\n"
+    "    return DIV(x, 2) + divide(x, 3);\n"
+    "}\n"
+)
+NAMES = {"divide": "divide", "DIV": "divide"}
+
+
+def spans(definitions):
+    return [(d.name, d.kind, d.file, d.first, d.last) for d in definitions]
+
+
+def test_function_blocks_and_enclosing_function():
+    assert function_blocks(CALLER_TEXT) == [("update", 2, 7), ("twice", 8, 11)]
+    assert enclosing_function(CALLEE, 3) == "divide"
+    assert enclosing_function(CALLEE, 1) == "divide"  # 서명 줄도 그 함수다
+    assert enclosing_function("int g;\nint f(void)\n{\n}\n", 1) is None
+    assert enclosing_function("struct s {\n    int a;\n};\n", 2) is None
+
+
+def test_call_sites_skip_comments_and_merge_per_function():
+    sites = find_call_sites("app/main.c", CALLER_TEXT, NAMES)
+
+    assert spans(sites) == [
+        ("divide", "caller", "app/main.c", 2, 7),
+        ("divide", "caller", "app/main.c", 8, 11),
+    ]
+    assert sites[0].text.startswith("int update(int sum)\n{")
+
+
+def test_recursion_is_not_a_call_site():
+    text = "int divide(int a, int b)\n{\n    return b ? divide(a, b - 1) : a;\n}\n"
+
+    assert find_call_sites("calc.c", text, {"divide": "divide"}) == []
+
+
+def test_window_is_cut_to_the_function_and_long_bodies_split():
+    body = "\n".join(f"    v = divide(v, {i});" for i in range(100))
+    text = f"int run(int v)\n{{\n{body}\n    return v;\n}}\n"
+
+    sites = find_call_sites("run.c", text, {"divide": "divide"})
+
+    assert sites[0].first == 1
+    assert sites[-1].last == 104
+    assert all(d.last - d.first + 1 <= 80 for d in sites)
+    assert all(a.last < b.first for a, b in zip(sites, sites[1:], strict=False))
+
+
+def test_callers_for_follows_alias_macros_and_keeps_the_home_file_first():
+    found = [Definition("DIV", "macro", "app/calc.h", 1, 1, "#define DIV(a, b) divide(a, b)")]
+    texts = {
+        "app/calc.c": CALLEE + "int half(int v)\n{\n    return divide(v, 2);\n}\n",
+        "app/calc.h": "#define DIV(a, b) divide(a, b)\n",
+        "app/main.c": CALLER_TEXT,
+        "app/zz.c": "int other(int v)\n{\n    return v;\n}\n",
+    }
+
+    kept = callers_for(found, texts, {"divide": "app/calc.c"})
+
+    assert [(d.file, d.first) for d in kept] == [
+        ("app/calc.c", 5),
+        ("app/main.c", 2),
+        ("app/main.c", 8),
+    ]
+
+
+def test_callers_for_stores_at_most_the_cap_per_function():
+    many = "".join(
+        f"int c{i}(int v)\n{{\n    return divide(v, {i});\n}}\n"
+        for i in range(MAX_STORED_CALLERS + 5)
+    )
+
+    kept = callers_for([], {"many.c": many}, {"divide": "calc.c"})
+
+    assert len(kept) == MAX_STORED_CALLERS
+
+
+def test_pick_callers_caps_count_and_lines_and_counts_the_rest():
+    def caller(file, first, size):
+        return Definition("divide", "caller", file, first, first + size - 1, "x")
+
+    callers = [caller("b.c", 1, 10), caller("calc.c", 50, 10), caller("a.c", 1, 10)]
+    callers += [caller("c.c", 10 * i, 10) for i in range(1, 5)]
+    callers.append(Definition("other", "caller", "a.c", 1, 5, "x"))
+
+    picked, hidden = pick_callers(callers, "divide", "calc.c")
+
+    assert [(d.file, d.first) for d in picked] == [
+        ("calc.c", 50),
+        ("a.c", 1),
+        ("b.c", 1),
+        ("c.c", 10),
+    ]
+    assert len(picked) == MAX_CALLERS and hidden == 3
+
+    big = [caller("a.c", 1, MAX_CALLER_LINES - 5), caller("b.c", 1, 10)]
+    picked, hidden = pick_callers(big, "divide", "calc.c")
+    assert [d.file for d in picked] == ["a.c"] and hidden == 1
+
+    picked, _ = pick_callers(callers, "divide", "calc.c", available={"a.c"})
+    assert [d.file for d in picked] == ["a.c"]
+
+
+def test_pick_definitions_never_picks_caller_fragments():
+    fragment = Definition("divide", "caller", "main.c", 2, 7, "int update(int sum)")
+    text = "int divide(int a, int b)\n{\n    return a / b;\n}\n"
+
+    assert pick_definitions([fragment], "calc.c", text, 1, 4, [3]) == []
+
+
+def test_scan_project_returns_texts(tmp_path):
+    (tmp_path / "a.c").write_bytes(b"int f(void)\n{\n    return 0;\n}\n")
+
+    definitions, unreadable, texts = scan_project(tmp_path)
+
+    assert [d.name for d in definitions] == ["f"]
+    assert unreadable == 0 and texts == {"a.c": "int f(void)\n{\n    return 0;\n}\n"}
+    assert CALLER_CONTEXT == 10

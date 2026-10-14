@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Container, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -292,12 +292,74 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
         add(words[-1], "variable", first, last)
 
 
+def function_blocks(text: str) -> list[tuple[str, int, int]]:
+    """파일의 함수 정의: (이름, 서명 첫 줄, 닫는 중괄호 줄). find_definitions와 같은 규칙."""
+    code = split_lines(blank_comments(text))
+    found: list[tuple[str, int, int]] = []
+    for start, end in top_level_blocks(text):
+        first = _head_start(code, start)
+        head = ATTRIBUTE.sub(" ", " ".join(code[first - 1 : start]).split("{", 1)[0]).strip()
+        if TYPE_KEYWORD.match(head) and "(" not in head and "=" not in head:
+            continue
+        if "=" in head or "(" not in head:
+            continue
+        name = _function_name(head)
+        if name:
+            found.append((name, first, end))
+    return found
+
+
+def enclosing_function(text: str, line: int) -> str | None:
+    """그 줄을 품은 함수의 이름 (서명 줄 포함). 함수 밖이면 None."""
+    for name, first, end in function_blocks(text):
+        if first <= line <= end:
+            return name
+    return None
+
+
+def find_call_sites(file: str, text: str, names: Mapping[str, str]) -> list[Definition]:
+    """names의 이름을 부르는 줄마다 위아래 CALLER_CONTEXT 줄을 그 함수 범위 안에서 잘라 조각으로.
+
+    조각의 name은 부른 이름이 가리키는 검사 함수다. 검사 함수 자신 안의 호출(재귀)은 뺀다.
+    한 함수 안에서 겹치거나 붙은 창은 합치되 MAX_DEFINITION_LINES를 넘지 않게 나눈다.
+    """
+    lines = split_lines(text)
+    code = split_lines(blank_comments(text))
+    sites: list[Definition] = []
+    for caller, first, end in function_blocks(text):
+        windows: dict[str, list[list[int]]] = {}
+        for number in range(first, end + 1):
+            for match in CALLED.finditer(code[number - 1]):
+                target = names.get(match.group(1))
+                if target is None or target == caller:
+                    continue
+                lo = max(first, number - CALLER_CONTEXT)
+                hi = min(end, number + CALLER_CONTEXT)
+                spans = windows.setdefault(target, [])
+                if (
+                    spans
+                    and lo <= spans[-1][1] + 1
+                    and max(hi, spans[-1][1]) - spans[-1][0] < MAX_DEFINITION_LINES
+                ):
+                    spans[-1][1] = max(spans[-1][1], hi)
+                elif spans and lo <= spans[-1][1]:
+                    spans.append([spans[-1][1] + 1, hi])
+                else:
+                    spans.append([lo, hi])
+        for target, spans in windows.items():
+            for lo, hi in spans:
+                text_part = "\n".join(lines[lo - 1 : hi])
+                sites.append(Definition(target, "caller", file, lo, hi, text_part))
+    return sites
+
+
 SOURCE_SUFFIXES = {".c", ".h"}
 
 
-def scan_folder(root: Path) -> tuple[list[Definition], int]:
-    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다."""
+def scan_project(root: Path) -> tuple[list[Definition], int, dict[str, str]]:
+    """root 아래 모든 .c·.h의 정의, 못 읽은 파일 수, 파일 이름 → 원문. 점 폴더는 건너뛴다."""
     definitions: list[Definition] = []
+    texts: dict[str, str] = {}
     unreadable = 0
     for folder, dirs, files in os.walk(root):
         dirs[:] = sorted(name for name in dirs if not name.startswith("."))
@@ -311,7 +373,14 @@ def scan_folder(root: Path) -> tuple[list[Definition], int]:
             except DecodeError, OSError:
                 unreadable += 1
                 continue
+            texts[relative] = source.text
             definitions.extend(find_definitions(relative, source.text))
+    return definitions, unreadable, texts
+
+
+def scan_folder(root: Path) -> tuple[list[Definition], int]:
+    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수."""
+    definitions, unreadable, _ = scan_project(root)
     return definitions, unreadable
 
 
@@ -379,10 +448,70 @@ def macro_target(definition: Definition) -> str | None:
     return target
 
 
+CALLER_CONTEXT = 10  # 호출 줄 위아래로 이만큼을 호출자 조각으로 보낸다
+MAX_CALLERS = 4  # 요청 하나에 붙이는 호출자 조각 수
+MAX_CALLER_LINES = 120  # 요청 하나에 붙이는 호출자 조각 줄 수 합계
+MAX_STORED_CALLERS = 20  # 검사 함수 하나에 저장하는 호출자 조각 수
 MAX_DEFINITIONS = 12  # 요청 하나에 붙이는 정의 수
 MAX_DEFINITION_TOTAL_LINES = 400  # 요청 하나에 붙이는 정의 줄 수 합계
 NEAR_LINES = 2  # 검사 줄 위아래로 이만큼 안의 이름을 먼저 고른다
 PER_NAME = 2  # 같은 이름의 정의는 요청 하나에 이만큼
+
+
+def callers_for(
+    definitions: Iterable[Definition], texts: Mapping[str, str], targets: Mapping[str, str]
+) -> list[Definition]:
+    """검사 함수(targets: 이름 → 그 함수가 든 파일)를 부르는 조각. 별칭 매크로를 통한 호출도 센다.
+
+    함수마다 같은 파일 먼저, 그다음 파일 이름·시작 줄 순서로 MAX_STORED_CALLERS개까지.
+    """
+    names = {name: name for name in targets}
+    for definition in definitions:
+        target = macro_target(definition)
+        if target in targets and definition.name not in names:
+            names[definition.name] = target
+    sites = [
+        site for file, text in sorted(texts.items()) for site in find_call_sites(file, text, names)
+    ]
+    kept: list[Definition] = []
+    for target, home in sorted(targets.items()):
+        mine = sorted(
+            (site for site in sites if site.name == target),
+            key=lambda site: (site.file != home, site.file, site.first),
+        )
+        kept.extend(mine[:MAX_STORED_CALLERS])
+    return kept
+
+
+def pick_callers(
+    definitions: Iterable[Definition],
+    function: str,
+    source_name: str,
+    available: Container[str] | None = None,
+) -> tuple[list[Definition], int]:
+    """function을 부르는 조각을 요청 상한 안에서 고른다: (고른 것, 고르지 못한 수).
+
+    available을 주면 그 파일의 조각만 본다(원문이 작업에 있는 파일).
+    """
+    mine = sorted(
+        (
+            d
+            for d in definitions
+            if d.kind == "caller"
+            and d.name == function
+            and (available is None or d.file in available)
+        ),
+        key=lambda d: (d.file != source_name, d.file, d.first),
+    )
+    picked: list[Definition] = []
+    total = 0
+    for definition in mine:
+        size = definition.last - definition.first + 1
+        if len(picked) >= MAX_CALLERS or total + size > MAX_CALLER_LINES:
+            break
+        picked.append(definition)
+        total += size
+    return picked, len(mine) - len(picked)
 
 
 def _rank(definition: Definition, source_name: str) -> int:
@@ -419,6 +548,8 @@ def pick_definitions(
 
     by_name: dict[str, list[Definition]] = {}
     for definition in definitions:
+        if definition.kind == "caller":
+            continue  # 호출자 조각은 pick_callers가 따로 고른다
         if definition.file == source_name and first <= definition.first and definition.last <= last:
             continue  # 이미 보내는 코드 안에 있다
         by_name.setdefault(definition.name, []).append(definition)
