@@ -1,8 +1,9 @@
 """llm-fix-server 대화 기록(private/llm-logs)에서 작업 하나의 판단과 "직접 수정" 행을 센다.
+되묻기(LLM이 정의를 더 달라고 한 것)도 센다.
 
     uv run python scripts/peek_logs.py [파일 이름 패턴] [--job 작업 번호] [--profile 이름]
 
---job을 빼면 가장 최근 작업을 본다. 패턴(예: rte)을 주면 고칠 수 있게 보낸 정의 가운데 파일
+--job을 빼면 가장 최근 작업을 본다. 패턴(예: rte)을 주면 다른 파일을 고친 수정 행 가운데 파일
 이름에 그 글자가 든 것을 따로 센다(대소문자 무시).
 
 화면은 캡처해서 회사 밖(Claude)으로 보낸다. 그래서 개수와 정해 둔 글만 찍는다. 파일·함수 이름, 경로,
@@ -25,6 +26,15 @@ from functools import partial
 from pathlib import Path
 
 from llm_lab.csource import MAX_DEFINITIONS, SOURCE_SUFFIXES, Definition, identifiers
+from llm_lab.followups import (
+    AGAIN_LINE,
+    LAST_LINE,
+    LATER_LINE,
+    MISSING_LINE,
+    SHOWN_LINE,
+    UNAVAILABLE_LINE,
+    need_names,
+)
 from llm_lab.sources import DecodeError, decode_source
 from llm_lab.store import Job, Store
 
@@ -78,6 +88,84 @@ def read_log_files(folder: Path, job: int) -> list[tuple[Path, str, dict]]:
 
 REUSED = "이전 결과 재사용 - LLM을 부르지 않음"  # worker가 저장된 답을 다시 쓸 때 남기는 결과 줄
 
+TALK_HEAD = re.compile(r"^### (?:보낸 내용: (\w+)|받은 내용)[^\n]*\n", re.M)
+
+
+def _conversation(text: str) -> list[tuple[str, str]]:
+    """기록 파일의 마지막 요청에서 (역할, 내용) 차례. 받은 답은 assistant로 끝에 붙는다."""
+    last = text.split("\n## 요청 ")[-1]
+    found = []
+    for match in TALK_HEAD.finditer(last):
+        content = _first_fence(last[match.end() :])
+        if content is not None:
+            found.append((match.group(1) or "assistant", content))
+    return found
+
+
+def _json(text: str) -> dict:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _listed(message: str, prefix: str) -> int:
+    """되묻기 메시지에서 prefix로 시작하는 줄의 이름 수."""
+    for line in message.splitlines():
+        if line.startswith(prefix):
+            return len([name for name in line[len(prefix) :].rstrip(".").split(", ") if name])
+    return 0
+
+
+def _decided(answer: dict) -> dict[object, object]:
+    items = answer.get("findings") if isinstance(answer.get("findings"), list) else []
+    return {item.get("number"): item.get("decision") for item in items if isinstance(item, dict)}
+
+
+def follow_up_counts(folder: Path, job: int) -> dict[str, int]:
+    """작업의 되묻기를 센다: 되물은 묶음, 횟수별 묶음, 요청한 이름의 처리, 판단이 바뀐 행."""
+    counts: Counter[str] = Counter()
+    for path in sorted(folder.glob(f"*_job{job}_row*.md")):
+        if not LOG_NAME.search(path.name):
+            continue
+        talk = _conversation(path.read_text(encoding="utf-8", errors="replace"))
+        rounds = 0
+        first_answer: dict | None = None
+        for index, (role, content) in enumerate(talk):
+            if role != "user" or not (AGAIN_LINE in content or LAST_LINE in content):
+                continue
+            rounds += 1
+            previous = _json(talk[index - 1][1]) if index else {}
+            first_answer = previous if first_answer is None else first_answer
+            names = len(need_names(previous))
+            counts["asked"] += names
+            counts["missing"] += _listed(content, MISSING_LINE)
+            counts["shown"] += _listed(content, SHOWN_LINE)
+            counts["later"] += _listed(content, LATER_LINE)
+            if UNAVAILABLE_LINE in content:
+                counts["unavailable"] += names
+        if not rounds:
+            continue
+        counts["groups"] += 1
+        counts[f"round_{min(rounds, 3)}"] += 1
+        before = _decided(first_answer or {})
+        after = _decided(_json(talk[-1][1]))
+        counts["changed"] += sum(
+            1 for number, decision in after.items() if before.get(number) != decision
+        )
+    counts["sent"] = max(
+        0,
+        counts["asked"]
+        - counts["missing"]
+        - counts["shown"]
+        - counts["later"]
+        - counts["unavailable"],
+    )
+    keys = ("groups", "round_1", "round_2", "round_3", "asked", "sent", "missing", "shown")
+    keys += ("later", "unavailable", "changed")
+    return {key: counts[key] for key in keys}
+
 
 def reused_count(folder: Path, job: int) -> int:
     """저장된 답을 다시 써서 LLM을 부르지 않은 묶음의 기록 수 (보낸 내용이 없다)."""
@@ -108,35 +196,6 @@ def _blocks(user: str) -> list[tuple[str, str]]:
 
 def _matches(file: str, pattern: str | None) -> bool:
     return bool(pattern) and pattern.casefold() in file.rsplit("/", 1)[-1].casefold()
-
-
-def manual_counts(
-    logs: list[tuple[str, dict]], pattern: str | None = None
-) -> list[tuple[str, int]]:
-    """직접 수정 행마다, 그 묶음에 무엇이 붙어 갔는지 센다. 한 행이 여러 칸에 들 수 있다."""
-    counts: Counter[str] = Counter()
-    for user, answer in logs:
-        manual = sum(1 for decision in _decisions(answer) if decision == "manual")
-        if not manual:
-            continue
-        blocks = _blocks(user)
-        kinds = {kind for kind, _ in blocks}
-        if "editable" in kinds:
-            counts["editable"] += manual
-        if any(kind == "editable" and _matches(file, pattern) for kind, file in blocks):
-            counts["editable_pattern"] += manual
-        if "caller" in kinds:
-            counts["caller"] += manual
-        if kinds == {"reference"}:
-            counts["reference_only"] += manual
-        if not blocks:
-            counts["none"] += manual
-        if "more lines, not editable" in user:
-            counts["clipped"] += manual
-        if sum(1 for kind, _ in blocks if kind != "caller") >= MAX_DEFINITIONS:
-            counts["capped"] += manual
-    keys = ("editable", "editable_pattern", "caller", "reference_only", "none", "clipped", "capped")
-    return [(key, counts[key]) for key in keys]
 
 
 def other_file_fixes(logs: list[tuple[str, dict]], pattern: str | None = None) -> tuple[int, int]:
@@ -428,17 +487,6 @@ def manual_checks(logs: list[tuple[str, dict]]) -> list[tuple[str, int]]:
     return ranked + ([("그 밖", other)] if other else [])
 
 
-LABELS = {
-    "editable": "고칠 수 있는 정의가 붙음",
-    "editable_pattern": "  그중 패턴에 맞는 파일의 정의",
-    "caller": "고칠 수 있는 호출자가 붙음",
-    "reference_only": "참고만 하는 정의만 붙음",
-    "none": "붙은 정의·호출자 없음",
-    "clipped": "80줄에서 잘린 정의가 있음",
-    "capped": f"정의가 상한({MAX_DEFINITIONS}개)까지 붙음",
-}
-
-
 def newest_db_job(db: Path | None) -> int | None:
     """작업 DB의 가장 최근 작업 번호. DB가 없거나 못 읽으면 None."""
     if db is None or not db.is_file():
@@ -524,18 +572,19 @@ def summarize(
         if sum(1 for kind, _ in _blocks(user) if kind != "caller") >= MAX_DEFINITIONS
     )
     manual_groups = sum(1 for _, answer in logs if "manual" in _decisions(answer))
+    follow = follow_up_counts(folder, job)
     lines = [
         f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준), 저장된 답 재사용 묶음 {reused}개",
         "판단 행: " + " / ".join(f"{label} {decided[key]}" for key, label in DECISIONS),
         f"정의가 상한({MAX_DEFINITIONS}개)까지 붙은 묶음: {capped} / {len(logs)}, "
         f"직접 수정이 나온 묶음: {manual_groups}",
-        "",
-        "직접 수정 행이 받은 것 (한 행이 여러 줄에 들 수 있음):",
+        f"되묻기: 되물은 묶음 {follow['groups']} / {len(logs)} "
+        f"(1번 {follow['round_1']}, 2번 {follow['round_2']}, 3번 {follow['round_3']})",
+        f"  요청한 이름 {follow['asked']}: 보냄 {follow['sent']}, "
+        f"프로젝트에 없음 {follow['missing']}, 이미 보냄 {follow['shown']}, "
+        f"상한으로 못 보냄 {follow['later']}, 찾을 수 없었음 {follow['unavailable']}",
+        f"  되묻기 뒤 판단이 바뀐 행: {follow['changed']}",
     ]
-    for key, count in manual_counts(logs, pattern):
-        if key == "editable_pattern" and not pattern:
-            continue
-        lines.append(f"  {LABELS[key]:<28}{count:>6}")
     lines += ["", "직접 수정 이유가 짚은 이름 (한 행이 여러 줄에 들 수 있음):"]
     stored = Store(db).job(job) if db is not None and db.is_file() else None
     if stored is None:

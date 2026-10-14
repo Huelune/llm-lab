@@ -97,17 +97,6 @@ def test_counts_manual_rows_by_what_was_sent(tmp_path):
 
     assert "작업 3: 묶음 7개" in screen
     assert "수정 1 / 수정 불필요 1 / 직접 수정 5" in screen
-    assert "고칠 수 있는 정의가 붙음" in screen
-    counts = dict(peek.manual_counts(peek.read_logs(tmp_path, 3), pattern="rte"))
-    assert counts == {
-        "editable": 2,
-        "editable_pattern": 2,
-        "caller": 1,
-        "reference_only": 1,
-        "none": 1,
-        "clipped": 1,
-        "capped": 0,
-    }
     assert peek.other_file_fixes(peek.read_logs(tmp_path, 3), pattern="rte") == (1, 1)
 
 
@@ -281,3 +270,72 @@ def test_counts_check_kinds_of_manual_rows_with_standard_names_only(tmp_path):
     assert "직접 수정 행의 검사 종류:" in screen
     assert "  Red Non-terminating call" in screen
     assert "secret" not in screen.casefold()
+
+
+def test_counts_follow_ups_without_showing_names(tmp_path):
+    from llm_lab.followups import ASKED_EDITABLE, LAST_LINE, MISSING_LINE, SHOWN_LINE
+
+    provisional = json.dumps(
+        {
+            "findings": [{"number": 1, "decision": "manual", "reason": "secret why"}],
+            "edits": [],
+            "need": ["secret_a", "secret_b", "secret_c"],
+        }
+    )
+    follow_up = (
+        ASKED_EDITABLE
+        + "\n\n```c\n// editable: gen/secret.c lines 1-2\n    1| int secret_a;\n```\n\n"
+        + MISSING_LINE
+        + "secret_b.\n\n"
+        + SHOWN_LINE
+        + "secret_c.\n\n"
+        + LAST_LINE
+    )
+    exchange = Exchange(
+        [
+            {"role": "system", "content": "secret system"},
+            {"role": "user", "content": HEAD + CODE},
+            {"role": "assistant", "content": provisional},
+            {"role": "user", "content": follow_up},
+        ],
+        raw={"secret": "raw"},
+        content=answer("fix"),
+        finish_reason="stop",
+    )
+    text = render_log(
+        job_id=4,
+        kind="RTE",
+        findings=[finding(row=2, file=r"C:\secret_dir\secret_file.c")],
+        source_name="secret_file.c",
+        model="secret-model",
+        endpoint="https://secret.example/v1/chat/completions",
+        extra_body={},
+        exchanges=[exchange],
+        outcomes=["정의 되묻기 1번", "secret outcome"],
+    )
+    write_log(tmp_path, 4, 2, text)
+    log(tmp_path, 4, 3, HEAD + CODE, answer("no_fix"))
+
+    counts = peek.follow_up_counts(tmp_path, 4)
+
+    assert counts == {
+        "groups": 1,
+        "round_1": 1,
+        "round_2": 0,
+        "round_3": 0,
+        "asked": 3,
+        "sent": 1,
+        "missing": 1,
+        "shown": 1,
+        "later": 0,
+        "unavailable": 0,
+        "changed": 1,
+    }
+    screen = "\n".join(peek.summarize(tmp_path, job=4))
+    assert "되묻기: 되물은 묶음 1 / 2 (1번 1, 2번 0, 3번 0)" in screen
+    assert "요청한 이름 3: 보냄 1, 프로젝트에 없음 1, 이미 보냄 1, 상한으로 못 보냄 0" in screen
+    assert "되묻기 뒤 판단이 바뀐 행: 1" in screen
+    assert "판단 행: 수정 1 / 수정 불필요 1 / 직접 수정 0" in screen
+    assert "secret" not in screen.casefold()
+    assert len(screen.splitlines()) <= 40
+    assert max(len(line) for line in screen.splitlines()) <= 118
