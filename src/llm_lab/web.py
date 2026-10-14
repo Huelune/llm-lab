@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
 import socket
 import sys
 import threading
@@ -56,7 +55,6 @@ def _job_note(
     definitions: int = 0,
     unreadable: int = 0,
     mode_label: str = "",
-    references: int = 0,
 ) -> str:
     """작업 메모 한 줄: 처리 방식, 종류가 읽은 메모, 뺀 행의 이유별 개수, 참고 정의 수."""
     parts = [mode_label] if mode_label else []
@@ -65,8 +63,6 @@ def _job_note(
     if sheet.skipped:
         skipped = ", ".join(f"{reason} {count}" for reason, count in sheet.skipped.items())
         parts.append(f"제외: {skipped}")
-    if references:
-        parts.append(f"참고 폴더 {references}개")
     if definitions:
         parts.append(f"참고 정의 {definitions}개")
     if unreadable:
@@ -84,15 +80,6 @@ def _source_root(text: str) -> Path | None:
     """화면에 붙여넣은 소스 폴더 경로. 탐색기 '경로로 복사'의 따옴표는 뗀다."""
     cleaned = text.strip().strip('"').strip()
     return Path(cleaned).absolute() if cleaned else None
-
-
-def _reference_prefix(folder: Path, root: Path) -> str:
-    """참고 폴더 파일 이름 앞에 붙일 말: 소스 폴더 기준 상대 경로(../common/), 안 되면 폴더 이름."""
-    try:
-        relative = Path(os.path.relpath(folder, root)).as_posix()
-    except ValueError:  # Windows에서 드라이브가 다르면 상대 경로가 없다
-        relative = folder.name
-    return "" if relative == "." else f"{relative}/"
 
 
 def _row_json(row: Row) -> dict[str, Any]:
@@ -159,7 +146,6 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     def create_job(
         excel: Annotated[UploadFile, File()],
         source_dir: Annotated[str, Form()] = "",
-        ref_dirs: Annotated[str, Form()] = "",
         kind: Annotated[str, Form()] = "rte",
         choice: Annotated[list[str] | None, Form()] = None,
         mode: Annotated[list[str] | None, Form()] = None,
@@ -181,12 +167,6 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
                 f"{root} 폴더가 없습니다." if root else "소스 폴더 경로를 입력하세요."
             ) + " 탐색기 주소창의 경로를 그대로 붙여넣으면 됩니다."
             return HTMLResponse(error_page("소스 폴더를 찾을 수 없음", message), status_code=400)
-        # 참고 폴더: 정의만 찾는 폴더, 한 줄에 하나. 수정과 패치는 소스 폴더에서만 한다
-        references = [folder for line in ref_dirs.splitlines() if (folder := _source_root(line))]
-        missing = [str(folder) for folder in references if not folder.is_dir()]
-        if missing:
-            message = "참고 폴더가 없습니다: " + ", ".join(missing)
-            return HTMLResponse(error_page("참고 폴더를 찾을 수 없음", message), status_code=400)
         try:
             sheet = read_sheet(io.BytesIO(excel.file.read()), sheet_kind, selected)
         except SheetError as exc:
@@ -201,13 +181,6 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         definitions, unreadable = [], 0
         if sheet_kind.uses_definitions:
             found, unreadable = scan_folder(root)
-            for folder in references:
-                if folder.resolve() == root.resolve():
-                    continue
-                prefix = _reference_prefix(folder, root)
-                more, bad = scan_folder(folder, skip=root, prefix=prefix)
-                found += more
-                unreadable += bad
             definitions = used_definitions(found, [source.text for source in files])
         data = sheet.prepared.data
         # 처리 방식 라디오 값은 "종류:방식"이다. 고른 종류의 것이 없으면 첫 방식이 기본값이다
@@ -232,7 +205,6 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
                 len({(d.file, d.first) for d in definitions}),
                 unreadable,
                 mode_label,
-                len(references),
             ),
             definitions=definitions,
             context="" if data is None else json.dumps(data, ensure_ascii=False),

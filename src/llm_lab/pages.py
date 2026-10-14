@@ -479,19 +479,14 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         '<div class="step"><div class="num">1</div><div><h3>Polyspace 결과 엑셀</h3>'
         '<p class="hint">이름이 _Result로 끝나는 결과 시트가 있는 .xlsx 파일 하나</p>'
         '<input type="file" name="excel" accept=".xlsx" required></div></div>'
-        '<div class="step"><div class="num">2</div><div><h3>소스 폴더</h3>'
-        '<p class="hint">소스 코드가 들어 있는 최상위 폴더. "폴더 찾기…"로 고르거나 경로를 '
-        "붙여넣습니다. 엑셀에 나온 파일을 이 폴더 안에서 찾고, 패치도 이 폴더 기준으로 "
-        "만듭니다.</p>"
+        '<div class="step"><div class="num">2</div><div><h3>소스 폴더 (프로젝트 전체)</h3>'
+        '<p class="hint">부르는 함수와 헤더까지 모두 들어 있는 프로젝트 최상위 폴더. '
+        '"폴더 찾기…"로 고르거나 경로를 붙여넣습니다. 엑셀에 나온 파일을 이 폴더 안에서 '
+        "찾고, 패치도 이 폴더 기준으로 만듭니다.</p>"
         '<div class="pickrow"><input type="text" name="source_dir" list="recent-dirs" required '
         r'placeholder="예: C:\work\brake\src" autocomplete="off">'
         '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
         '<p class="hint" id="pick-note"></p>'
-        '<p class="hint">참고 폴더 (선택): 부르는 함수나 헤더가 소스 폴더 밖(상위·옆 폴더)에 '
-        "있으면 한 줄에 하나씩 적습니다. 정의를 찾는 데만 쓰고, 수정과 패치는 위 소스 "
-        "폴더에서만 합니다.</p>"
-        '<textarea name="ref_dirs" rows="2" autocomplete="off" '
-        r'placeholder="예: C:\work\brake\common"></textarea>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
         + _kind_step()
         + '<div class="step"><div class="num">4</div><div><h3>분석 시작</h3>'

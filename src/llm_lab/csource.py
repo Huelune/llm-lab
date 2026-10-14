@@ -295,27 +295,17 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
 SOURCE_SUFFIXES = {".c", ".h"}
 
 
-def scan_folder(
-    root: Path, skip: Path | None = None, prefix: str = ""
-) -> tuple[list[Definition], int]:
-    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다.
-
-    skip 폴더(참고 폴더 안에 든 소스 폴더)는 건너뛰고, 파일 이름 앞에 prefix를 붙인다.
-    """
+def scan_folder(root: Path) -> tuple[list[Definition], int]:
+    """root 아래 모든 .c·.h의 정의와 못 읽은 파일 수. 점으로 시작하는 폴더는 건너뛴다."""
     definitions: list[Definition] = []
     unreadable = 0
-    skipped = skip.resolve() if skip is not None else None
     for folder, dirs, files in os.walk(root):
-        dirs[:] = sorted(
-            name
-            for name in dirs
-            if not name.startswith(".") and Path(folder, name).resolve() != skipped
-        )
+        dirs[:] = sorted(name for name in dirs if not name.startswith("."))
         for name in sorted(files):
             if Path(name).suffix.casefold() not in SOURCE_SUFFIXES:
                 continue
             path = Path(folder, name)
-            relative = prefix + path.relative_to(root).as_posix()
+            relative = path.relative_to(root).as_posix()
             try:
                 source = decode_source(relative, path.read_bytes())
             except DecodeError, OSError:

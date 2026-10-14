@@ -505,15 +505,3 @@ def test_pick_puts_the_implementation_right_after_its_alias():
     picked = pick_definitions(definitions, "src/use.c", text, 1, 4, [3])
 
     assert [d.name for d in picked] == ["api_read", "drv_read", "BUF_LEN"]
-
-
-def test_scan_folder_can_prefix_names_and_skip_the_source_folder(tmp_path):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "common").mkdir()
-    (tmp_path / "src" / "use.c").write_bytes(b"int use_it(void)\n{\n    return 0;\n}\n")
-    (tmp_path / "common" / "impl.c").write_bytes(b"int drv_read(int x)\n{\n    return x;\n}\n")
-
-    definitions, unreadable = scan_folder(tmp_path, skip=tmp_path / "src", prefix="../")
-
-    assert [(d.name, d.file) for d in definitions] == [("drv_read", "../common/impl.c")]
-    assert unreadable == 0

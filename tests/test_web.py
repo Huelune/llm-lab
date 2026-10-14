@@ -60,12 +60,9 @@ def upload(
     kind="rte",
     choices=("rte:Red", "rte:Orange"),
     mode=None,
-    ref_dirs=None,
 ):
     files = [("excel", ("rte.xlsx", excel))]
     data = {"source_dir": str(folder), "kind": kind, "choice": list(choices)}
-    if ref_dirs:
-        data["ref_dirs"] = ref_dirs
     if mode:
         data["mode"] = [mode]
     return client.post("/results", files=files, data=data, follow_redirects=False)
@@ -829,34 +826,26 @@ def project_with_shared_code(tmp_path) -> tuple[Path, Path]:
     return app, top
 
 
-def test_reference_folders_supply_definitions_outside_the_source_folder(tmp_path):
+def test_project_folder_supplies_definitions_from_sibling_folders(tmp_path):
     client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
     app, top = project_with_shared_code(tmp_path)
     excel = rte_excel(rte_row("Orange Check", line=4))
 
-    response = upload(client, excel, app, ref_dirs=f'"{top}"\n')
+    response = upload(client, excel, top)
 
     assert response.status_code == 303
     content = sent[0]["messages"][1]["content"]
-    assert "// ../common/api.h line 1\n#define api_scale(v) drv_scale(v)" in content
-    assert "// ../common/drv.c lines 1-4\nint drv_scale(int v)" in content
-    # 위 폴더를 참고 폴더로 줘도 소스 폴더 안의 정의는 두 번 저장되지 않는다
-    assert [d.file for d in store.definitions(1) if d.name == "divide"] == ["src/calc.c"]
-    assert "참고 폴더 1개" in store.job(1).note
+    assert "#define api_scale(v) drv_scale(v)" in content
+    assert "int drv_scale(int v)" in content
+    assert "common/drv.c" in content and "../" not in content
+    assert store.rows(1)[0].file_name == "app/src/calc.c"
+    assert "참고 폴더" not in store.job(1).note
 
 
-def test_missing_reference_folder_is_rejected(tmp_path):
+def test_home_asks_for_the_whole_project_folder(tmp_path):
     client, _, _ = make_service(tmp_path)
 
-    response = upload(
-        client, rte_excel(rte_row()), source_folder(tmp_path), ref_dirs=str(tmp_path / "nope")
-    )
+    page = client.get("/").text
 
-    assert response.status_code == 400
-    assert "참고 폴더" in response.text
-
-
-def test_home_has_a_reference_folder_box(tmp_path):
-    client, _, _ = make_service(tmp_path)
-
-    assert 'name="ref_dirs"' in client.get("/").text
+    assert 'name="ref_dirs"' not in page
+    assert "프로젝트 최상위 폴더" in page
