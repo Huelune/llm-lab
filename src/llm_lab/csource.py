@@ -106,16 +106,18 @@ def blank_comments(text: str) -> str:
     return "".join(out)
 
 
-def top_level_blocks(text: str) -> list[tuple[int, int]]:
+def top_level_blocks(text: str, code: str | None = None) -> list[tuple[int, int]]:
     """최상위 { … } 블록의 (시작 줄, 끝 줄) 목록. 주석·문자열·문자 상수 안의 중괄호는 무시한다.
 
     `extern "C" {`의 중괄호는 블록으로 세지 않는다 (짝인 `}`는 깊이 0이라 저절로 무시된다).
+    code에 이미 주석을 지운 글을 주면 다시 지우지 않는다.
     """
     blocks: list[tuple[int, int]] = []
     depth = 0
     line = 1
     start = 0
-    code = blank_comments(text)
+    if code is None:
+        code = blank_comments(text)
     for index, ch in enumerate(code):
         if ch == "\n":
             line += 1
@@ -292,11 +294,15 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
         add(words[-1], "variable", first, last)
 
 
-def function_blocks(text: str) -> list[tuple[str, int, int]]:
-    """파일의 함수 정의: (이름, 서명 첫 줄, 닫는 중괄호 줄). find_definitions와 같은 규칙."""
-    code = split_lines(blank_comments(text))
+def function_blocks(text: str, code: list[str] | None = None) -> list[tuple[str, int, int]]:
+    """파일의 함수 정의: (이름, 서명 첫 줄, 닫는 중괄호 줄). find_definitions와 같은 규칙.
+
+    code에 주석을 지운 줄 목록(split_lines(blank_comments(text)))을 주면 다시 지우지 않는다.
+    """
+    if code is None:
+        code = split_lines(blank_comments(text))
     found: list[tuple[str, int, int]] = []
-    for start, end in top_level_blocks(text):
+    for start, end in top_level_blocks(text, "\n".join(code)):
         first = _head_start(code, start)
         head = ATTRIBUTE.sub(" ", " ".join(code[first - 1 : start]).split("{", 1)[0]).strip()
         if TYPE_KEYWORD.match(head) and "(" not in head and "=" not in head:
@@ -317,16 +323,20 @@ def enclosing_function(text: str, line: int) -> str | None:
     return None
 
 
-def find_call_sites(file: str, text: str, names: Mapping[str, str]) -> list[Definition]:
+def find_call_sites(
+    file: str, text: str, names: Mapping[str, str], code: list[str] | None = None
+) -> list[Definition]:
     """names의 이름을 부르는 줄마다 위아래 CALLER_CONTEXT 줄을 그 함수 범위 안에서 잘라 조각으로.
 
     조각의 name은 부른 이름이 가리키는 검사 함수다. 검사 함수 자신 안의 호출(재귀)은 뺀다.
     한 함수 안에서 겹치거나 붙은 창은 합치되 MAX_DEFINITION_LINES를 넘지 않게 나눈다.
+    code는 function_blocks와 같다.
     """
     lines = split_lines(text)
-    code = split_lines(blank_comments(text))
+    if code is None:
+        code = split_lines(blank_comments(text))
     sites: list[Definition] = []
-    for caller, first, end in function_blocks(text):
+    for caller, first, end in function_blocks(text, code):
         windows: dict[str, list[list[int]]] = {}
         for number in range(first, end + 1):
             for match in CALLED.finditer(code[number - 1]):
@@ -458,28 +468,76 @@ NEAR_LINES = 2  # 검사 줄 위아래로 이만큼 안의 이름을 먼저 고�
 PER_NAME = 2  # 같은 이름의 정의는 요청 하나에 이만큼
 
 
+STATIC = re.compile(r"\bstatic\b")
+HEAD_END = re.compile(r"[{(]")
+
+
+def _is_static(definition: Definition) -> bool:
+    """함수 정의의 서명 머리(첫 `{`·`(` 앞)에 static이 있는지."""
+    return bool(STATIC.search(HEAD_END.split(blank_comments(definition.text), maxsplit=1)[0]))
+
+
+def _uses_without_call(names: Iterable[str]) -> re.Pattern[str]:
+    """이름 뒤에 `(`가 없는 쓰임(`&f`, 표의 `f,`). 멤버(`.f`, `->f`)는 뺀다."""
+    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(rf"(?<![\w.])(?<!->)({alternatives})(?!\w)(?!\s*\()")
+
+
 def callers_for(
     definitions: Iterable[Definition], texts: Mapping[str, str], targets: Mapping[str, str]
 ) -> list[Definition]:
     """검사 함수(targets: 이름 → 그 함수가 든 파일)를 부르는 조각. 별칭 매크로를 통한 호출도 센다.
 
-    함수마다 같은 파일 먼저, 그다음 파일 이름·시작 줄 순서로 MAX_STORED_CALLERS개까지.
+    함수마다 같은 파일의 조각 MAX_STORED_CALLERS개와 다른 파일의 조각 MAX_STORED_CALLERS개까지,
+    같은 파일 먼저, 그다음 파일 이름·시작 줄 순서로. static 함수이거나 같은 이름의 함수가 여러
+    파일에 정의돼 있으면 이름으로는 다른 파일의 호출을 가릴 수 없어 같은 파일의 조각만 둔다.
+    이름이 호출 없이 쓰인 곳(함수 포인터일 수 있다)이 있으면 그 수를
+    Definition(이름, "caller_ref", "", 0, 0, 수)로 하나 더한다. 이름이 없는 파일은 읽지 않는다.
     """
+    if not targets:
+        return []
     names = {name: name for name in targets}
+    defined_in: dict[str, set[str]] = {}
+    local: set[str] = set()  # 같은 파일 안에서만 찾는 함수
     for definition in definitions:
         target = macro_target(definition)
         if target in targets and definition.name not in names:
             names[definition.name] = target
-    sites = [
-        site for file, text in sorted(texts.items()) for site in find_call_sites(file, text, names)
-    ]
+        if definition.kind == "function" and definition.name in targets:
+            defined_in.setdefault(definition.name, set()).add(definition.file)
+            if definition.file == targets[definition.name] and _is_static(definition):
+                local.add(definition.name)
+    local |= {name for name, files in defined_in.items() if len(files) > 1}
+
+    def wanted(target: str, file: str) -> bool:
+        return target not in local or file == targets[target]
+
+    uses = _uses_without_call(names)
+    sites: list[Definition] = []
+    refs: dict[str, int] = {}
+    for file, text in sorted(texts.items()):
+        if not any(name in text for name in names):
+            continue
+        code = split_lines(blank_comments(text))
+        sites.extend(
+            site for site in find_call_sites(file, text, names, code) if wanted(site.name, file)
+        )
+        for line in code:
+            if line.lstrip().startswith("#"):
+                continue  # 별칭 매크로의 본문은 호출 없는 쓰임으로 세지 않는다
+            for match in uses.finditer(line):
+                target = names[match.group(1)]
+                if wanted(target, file):
+                    refs[target] = refs.get(target, 0) + 1
     kept: list[Definition] = []
     for target, home in sorted(targets.items()):
         mine = sorted(
-            (site for site in sites if site.name == target),
-            key=lambda site: (site.file != home, site.file, site.first),
+            (site for site in sites if site.name == target), key=lambda d: (d.file, d.first)
         )
-        kept.extend(mine[:MAX_STORED_CALLERS])
+        kept.extend([site for site in mine if site.file == home][:MAX_STORED_CALLERS])
+        kept.extend([site for site in mine if site.file != home][:MAX_STORED_CALLERS])
+        if refs.get(target):
+            kept.append(Definition(target, "caller_ref", "", 0, 0, str(refs[target])))
     return kept
 
 
@@ -488,11 +546,20 @@ def pick_callers(
     function: str,
     source_name: str,
     available: Container[str] | None = None,
+    first: int | None = None,
+    last: int | None = None,
 ) -> tuple[list[Definition], int]:
     """function을 부르는 조각을 요청 상한 안에서 고른다: (고른 것, 고르지 못한 수).
 
-    available을 주면 그 파일의 조각만 본다(원문이 작업에 있는 파일).
+    available을 주면 그 파일의 조각만 본다(원문이 작업에 있는 파일). first~last(보내는 범위)를
+    주면 source_name 파일에서 그 안에 든 조각은 이미 보이므로 고르지도 세지도 않는다.
     """
+
+    def shown(d: Definition) -> bool:
+        if first is None or last is None:
+            return False
+        return d.file == source_name and first <= d.first and d.last <= last
+
     mine = sorted(
         (
             d
@@ -500,6 +567,7 @@ def pick_callers(
             if d.kind == "caller"
             and d.name == function
             and (available is None or d.file in available)
+            and not shown(d)
         ),
         key=lambda d: (d.file != source_name, d.file, d.first),
     )
@@ -548,8 +616,8 @@ def pick_definitions(
 
     by_name: dict[str, list[Definition]] = {}
     for definition in definitions:
-        if definition.kind == "caller":
-            continue  # 호출자 조각은 pick_callers가 따로 고른다
+        if definition.kind in ("caller", "caller_ref"):
+            continue  # 호출자 조각과 그 수는 pick_callers·make_request가 따로 쓴다
         if definition.file == source_name and first <= definition.first and definition.last <= last:
             continue  # 이미 보내는 코드 안에 있다
         by_name.setdefault(definition.name, []).append(definition)

@@ -74,10 +74,13 @@ Set "file" to "" for edits in the numbered code of the findings.
 
 _CALLERS = """\
 Callers of the function may follow the definitions. Use them to see which values really reach \
-its parameters. If callers are shown, every one guarantees safety and \
+its parameters. Callers are found by name: the function may also be called through \
+function pointers or from code outside the shown files. \
+For an Orange check, if callers are shown, every one guarantees safety and \
 none are said to be not shown, answer no_fix and name the caller lines. \
-If a caller passes an unsafe value, \
-you may fix it in that caller, where the value is produced, and set "file" to that path.
+If a caller passes an unsafe value and every call site is shown, \
+you may fix it in that caller, where the value is produced, and set "file" to that path. \
+When call sites are not shown, check the value where it enters the function instead.
 """
 
 _DEFINITIONS_GUARD = """\

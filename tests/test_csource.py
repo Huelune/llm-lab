@@ -1,3 +1,4 @@
+from llm_lab import csource
 from llm_lab.csource import (
     CALLER_CONTEXT,
     MAX_CALLER_LINES,
@@ -644,3 +645,117 @@ def test_scan_project_returns_texts(tmp_path):
     assert [d.name for d in definitions] == ["f"]
     assert unreadable == 0 and texts == {"a.c": "int f(void)\n{\n    return 0;\n}\n"}
     assert CALLER_CONTEXT == 10
+
+
+def calls_divide(name: str, number: int) -> str:
+    return f"int {name}(int v)\n{{\n    return divide(v, {number});\n}}\n"
+
+
+def fragments(kept):
+    return [(d.file, d.first) for d in kept if d.kind == "caller"]
+
+
+def test_pick_callers_skips_home_fragments_inside_the_sent_code():
+    home = [Definition("divide", "caller", "calc.c", 10 * i, 10 * i + 5, "x") for i in (1, 2, 3, 4)]
+    other = Definition("divide", "caller", "main.c", 1, 5, "x")
+
+    picked, hidden = pick_callers([*home, other], "divide", "calc.c", first=1, last=60)
+    assert picked == [other] and hidden == 0
+
+    picked, hidden = pick_callers([*home, other], "divide", "calc.c", first=1, last=25)
+    assert fragments(picked) == [("calc.c", 30), ("calc.c", 40), ("main.c", 1)]
+    assert hidden == 0
+
+
+def test_callers_for_keeps_other_files_when_the_home_file_is_busy():
+    busy = "".join(calls_divide(f"c{i}", i) for i in range(MAX_STORED_CALLERS + 5))
+    texts = {"calc.c": CALLEE + busy, "main.c": CALLER_TEXT}
+
+    kept = fragments(callers_for([], texts, {"divide": "calc.c"}))
+
+    assert [file for file, _ in kept].count("calc.c") == MAX_STORED_CALLERS
+    assert ("main.c", 2) in kept and ("main.c", 8) in kept
+
+
+def scale(word: str, factor: int) -> str:
+    return f"{word}int scale(int v)\n{{\n    return v * {factor};\n}}\n"
+
+
+RUN_SCALE = "int run(int v)\n{\n    return scale(v);\n}\n"
+
+
+def callers_of_scale(texts):
+    found = [d for file, text in texts.items() for d in find_definitions(file, text)]
+    return fragments(callers_for(found, texts, {"scale": "a.c"}))
+
+
+def test_static_function_callers_stay_in_their_file():
+    texts = {"a.c": scale("static ", 2) + RUN_SCALE, "b.c": scale("static ", 3) + RUN_SCALE}
+    assert callers_of_scale(texts) == [("a.c", 5)]
+
+    texts = {"a.c": scale("static ", 2) + RUN_SCALE, "b.c": RUN_SCALE}
+    assert callers_of_scale(texts) == [("a.c", 5)]
+
+
+def test_unique_function_keeps_callers_in_other_files():
+    texts = {"a.c": scale("", 2) + RUN_SCALE, "b.c": RUN_SCALE}
+
+    assert callers_of_scale(texts) == [("a.c", 5), ("b.c", 1)]
+
+
+def test_function_defined_in_two_files_keeps_only_home_callers():
+    texts = {"a.c": scale("", 2) + RUN_SCALE, "b.c": scale("", 3), "c.c": RUN_SCALE}
+
+    assert callers_of_scale(texts) == [("a.c", 5)]
+
+
+def test_call_sites_accept_blanked_code():
+    code = split_lines(blank_comments(CALLER_TEXT))
+
+    assert function_blocks(CALLER_TEXT, code) == function_blocks(CALLER_TEXT)
+    assert find_call_sites("m.c", CALLER_TEXT, NAMES, code) == find_call_sites(
+        "m.c", CALLER_TEXT, NAMES
+    )
+
+
+def test_callers_for_skips_files_without_the_names(monkeypatch):
+    scanned = []
+    real = csource.find_call_sites
+
+    def record(file, text, names, code=None):
+        scanned.append(file)
+        return real(file, text, names, code)
+
+    monkeypatch.setattr(csource, "find_call_sites", record)
+    texts = {"calc.c": CALLEE, "main.c": CALLER_TEXT, "zz.c": "int other(int v)\n{\n}\n"}
+
+    callers_for([], texts, {"divide": "calc.c"})
+
+    assert scanned == ["calc.c", "main.c"]
+
+
+def test_callers_for_counts_the_name_used_without_a_call():
+    table = (
+        "#define DIVIDE_FN divide\n"
+        "op_t ops[] = { divide, 0 };\n"
+        "int pick(void)\n"
+        "{\n"
+        "    op_t f = &divide; /* divide */\n"
+        "    return f(1, 1) + s.divide + p->divide;\n"
+        "}\n"
+    )
+    texts = {"calc.c": CALLEE, "main.c": CALLER_TEXT, "ops.c": table}
+
+    kept = callers_for([], texts, {"divide": "calc.c"})
+
+    count = Definition("divide", "caller_ref", "", 0, 0, "2")
+    assert [d for d in kept if d.kind == "caller_ref"] == [count]
+    plain = callers_for([], {"main.c": CALLER_TEXT}, {"divide": "calc.c"})
+    assert [d.kind for d in plain] == ["caller", "caller"]
+
+
+def test_pick_ignores_caller_name_counts():
+    count = Definition("divide", "caller_ref", "", 0, 0, "2")
+
+    assert pick_definitions([count], "calc.c", CALLEE, 1, 4, [3]) == []
+    assert pick_callers([count], "divide", "calc.c") == ([], 0)

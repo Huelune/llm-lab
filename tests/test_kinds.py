@@ -348,10 +348,21 @@ def test_rte_prompts_explain_callers():
         assert "Callers of the function may follow" in prompt
         assert "which values really reach its parameters" in prompt
         assert (
-            "If callers are shown, every one guarantees safety and none are said to be not shown"
+            "For an Orange check, if callers are shown, every one guarantees safety and "
+            "none are said to be not shown, answer no_fix" in prompt
+        )
+        assert (
+            "Callers are found by name: the function may also be called through function "
+            "pointers or from code outside the shown files." in prompt
+        )
+        assert (
+            "If a caller passes an unsafe value and every call site is shown, "
+            "you may fix it in that caller, where the value is produced" in prompt
+        )
+        assert (
+            "When call sites are not shown, check the value where it enters the function instead."
             in prompt
         )
-        assert "you may fix it in that caller, where the value is produced" in prompt
     guard = RTE.prompt({"mode": "guard"})
     assert "changing an editable caller or definition would be risky" in guard
     root = RTE.prompt({"mode": "root_cause"})

@@ -67,7 +67,7 @@ def _job_note(
     if definitions:
         parts.append(f"참고 정의 {definitions}개")
     if callers:
-        parts.append(f"호출 지점 {callers}곳")
+        parts.append(f"호출자 조각 {callers}개")
     if unreadable:
         parts.append(f"못 읽은 파일 {unreadable}개")
     return " · ".join(parts)
@@ -193,15 +193,17 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
                     source = by_name.get(new_row.file_name or "")
                     if source is None or new_row.finding.line is None:
                         continue
+                    # 요청(make_request)과 같은 규칙: 검사 줄이 함수 밖이면 호출자를 찾지 않는다
                     name = enclosing_function(source.text, new_row.finding.line)
-                    name = name or new_row.finding.function.removesuffix("()").strip()
                     if name:
                         targets.setdefault(name, source.name)
                 callers = callers_for(found, texts, targets)
             if sheet_kind.edits_definitions:
                 # 고칠 수 있게 보낼 정의·호출자가 든 파일의 원문도 작업에 저장한다
                 known = {source.name for source in files}
-                for name in sorted({d.file for d in [*definitions, *callers]} - known):
+                # caller_ref(호출 없이 쓰인 곳의 수)는 파일이 없다
+                shown = {d.file for d in [*definitions, *callers] if d.file}
+                for name in sorted(shown - known):
                     try:
                         files.append(decode_source(name, (root / name).read_bytes()))
                     except DecodeError, OSError:
@@ -229,7 +231,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
                 len({(d.file, d.first) for d in definitions}),
                 unreadable,
                 mode_label,
-                len(callers),
+                sum(d.kind == "caller" for d in callers),
             ),
             definitions=[*definitions, *callers],
             context="" if data is None else json.dumps(data, ensure_ascii=False),

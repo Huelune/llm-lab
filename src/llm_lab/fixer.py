@@ -18,6 +18,7 @@ from openai import OpenAI
 
 from llm_lab.csource import (
     MAX_DEFINITION_LINES,
+    MAX_STORED_CALLERS,
     Definition,
     enclosing_function,
     pick_callers,
@@ -375,7 +376,7 @@ class Request:
     context: Any  # 작업 정보 (polyspace.Prepared.data)
     messages: list[dict[str, str]]
     definitions: tuple[Definition, ...] = ()  # 코드 뒤에 붙인 다른 곳의 정의
-    # 고칠 수 있게 보낸 정의의 파일 (이름 → 원문). 비었으면 정의는 참고만이다
+    # 고칠 수 있게 보낸 정의·호출자 조각의 파일 (이름 → 원문). 비었으면 정의는 참고만이다
     files: Mapping[str, SourceFile] = field(default_factory=dict)
     callers: tuple[Definition, ...] = ()  # 붙인 호출자 조각 (고칠 수 있음)
 
@@ -428,12 +429,28 @@ def definitions_block(
 
 
 def callers_block(
-    function: str, callers: tuple[Definition, ...], hidden: int, files: Mapping[str, SourceFile]
+    function: str,
+    callers: tuple[Definition, ...],
+    hidden: int,
+    files: Mapping[str, SourceFile],
+    capped: bool = False,
+    uses: int = 0,
 ) -> str:
-    """검사 함수를 부르는 곳의 절. 조각마다 원래 줄 번호를 붙여 고칠 수 있게 보낸다."""
+    """검사 함수를 부르는 곳의 절. 조각마다 원래 줄 번호를 붙여 고칠 수 있게 보낸다.
+
+    capped: 저장 상한에 닿아 저장하지 못한 호출도 있을 수 있다. uses: 이름이 호출 없이 쓰인 곳 수.
+    """
     if not callers:
         return ""
-    more = f" {hidden} more call sites are not shown." if hidden else ""
+    more = ""
+    if hidden:
+        more = f" {'At least ' if capped else ''}{hidden} more call sites are not shown."
+    if uses:
+        places = "place" if uses == 1 else "places"
+        more += (
+            f" Its name also appears without a call in {uses} {places} "
+            "(possibly function pointers)."
+        )
     parts = []
     for caller in callers:
         source = files[caller.file]
@@ -525,10 +542,18 @@ def make_request(
         line = next((f.line for f in findings if f.line is not None), None)
         function = enclosing_function(source.text, line) if line is not None else None
         if function:
-            found, hidden = pick_callers(definitions, function, source.name, files)
+            found, hidden = pick_callers(definitions, function, source.name, files, first, last)
             callers = tuple(found)
             editable = {**editable, **{c.file: files[c.file] for c in callers}}
-            callers_text = callers_block(function, callers, hidden, files)
+            stored = [d for d in definitions if d.kind == "caller" and d.name == function]
+            home = sum(d.file == source.name for d in stored)
+            capped = MAX_STORED_CALLERS <= max(home, len(stored) - home)
+            uses = sum(
+                int(d.text)
+                for d in definitions
+                if d.kind == "caller_ref" and d.name == function and d.text.isdigit()
+            )
+            callers_text = callers_block(function, callers, hidden, files, capped, uses)
     messages = [
         {"role": "system", "content": kind.prompt(context)},
         {

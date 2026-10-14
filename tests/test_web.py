@@ -961,7 +961,7 @@ def test_rte_job_sends_callers_and_notes_the_count(tmp_path):
     assert "Callers of divide()" in content
     assert "// editable caller: app/src/main.c lines 1-5 (in update())" in content
     assert "app/src/main.c" in store.sources(1)
-    assert "호출 지점 1곳" in store.job(1).note
+    assert "호출자 조각 1개" in store.job(1).note
 
 
 def test_job_without_callers_keeps_its_note(tmp_path):
@@ -969,5 +969,32 @@ def test_job_without_callers_keeps_its_note(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    assert "호출 지점" not in store.job(1).note
+    assert "호출자 조각" not in store.job(1).note
     assert "Callers of" not in sent[0]["messages"][1]["content"]
+
+
+def test_line_outside_a_function_stores_no_callers(tmp_path):
+    top = project_with_a_caller(tmp_path)
+    (top / "app" / "src" / "calc.c").write_bytes(b"int limit = 4;\n" + CALC_C)
+    client, store, _ = make_service(tmp_path, fix_answer("no_fix"))
+
+    upload(client, rte_excel(rte_row("Orange Check", line=1)), top)
+
+    assert [d for d in store.definitions(1) if d.kind.startswith("caller")] == []
+    assert "호출자 조각" not in store.job(1).note
+
+
+def test_name_used_without_a_call_is_stored_but_not_counted_as_a_fragment(tmp_path):
+    top = project_with_a_caller(tmp_path)
+    (top / "app" / "src" / "ops.c").write_bytes(b"op_t ops[] = { divide, 0 };\n")
+    client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
+
+    upload(client, rte_excel(rte_row("Orange Check")), top)
+
+    refs = [d for d in store.definitions(1) if d.kind == "caller_ref"]
+    assert [(d.name, d.file, d.text) for d in refs] == [("divide", "", "1")]
+    assert "호출자 조각 1개" in store.job(1).note and "못 읽은 파일" not in store.job(1).note
+    assert (
+        "without a call in 1 place (possibly function pointers)"
+        in (sent[0]["messages"][1]["content"])
+    )

@@ -6,7 +6,7 @@ from fake_llm import MODEL, completion, error, make_client, scripted
 from misra_fixtures import misra_finding
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
-from llm_lab.csource import MAX_DEFINITION_LINES, Definition
+from llm_lab.csource import MAX_DEFINITION_LINES, MAX_STORED_CALLERS, Definition
 from llm_lab.fixer import (
     FIX_SCHEMA_WITH_FILE,
     MISMATCH_SUMMARIES,
@@ -678,6 +678,9 @@ UPDATE = Definition("divide", "caller", "app/main.c", 1, 5, MAIN.text.rstrip("\n
 FILES = {"app/calc.c": CALC, "app/main.c": MAIN}
 
 
+NAME_COUNT = Definition("divide", "caller_ref", "", 0, 0, "3")
+
+
 def caller_request(kind=RTE, definitions=(UPDATE,), files=FILES):
     return make_request(kind, [finding(line=3)], CALC, None, definitions, files)
 
@@ -706,6 +709,7 @@ def test_no_caller_section_without_fragments_files_or_for_misra():
         assert "Callers of" not in request.messages[1]["content"]
         assert request.callers == ()
     assert caller_request(definitions=()).messages == plain.messages
+    assert caller_request(definitions=(NAME_COUNT,)).messages == plain.messages
 
 
 def test_caller_section_says_how_many_call_sites_are_hidden():
@@ -717,6 +721,7 @@ def test_caller_section_says_how_many_call_sites_are_hidden():
     request = caller_request(definitions=many, files=files)
 
     assert "2 more call sites are not shown." in request.messages[1]["content"]
+    assert "At least" not in request.messages[1]["content"]
     assert len(request.callers) == 4
 
 
@@ -750,3 +755,39 @@ def test_fix_in_a_caller_file_outside_its_fragment_is_asked_again():
 
     assert len(sent) == 2
     assert "n ? n : 1" in result.diff
+
+
+def test_caller_section_says_at_least_when_the_stored_callers_hit_the_cap():
+    names = [f"app/m{i}.c" for i in range(MAX_STORED_CALLERS)]
+    stored = tuple(Definition("divide", "caller", name, 1, 5, "x") for name in names)
+    files = {**FILES, **{name: replace(MAIN, name=name) for name in names}}
+
+    request = caller_request(definitions=stored, files=files)
+
+    hidden = MAX_STORED_CALLERS - 4
+    assert f"At least {hidden} more call sites are not shown." in request.messages[1]["content"]
+
+
+def test_caller_section_counts_the_name_used_without_a_call():
+    request = caller_request(definitions=(UPDATE, NAME_COUNT))
+
+    content = request.messages[1]["content"]
+    assert "Its name also appears without a call in 3 places (possibly function pointers)." in (
+        content
+    )
+    assert request.callers == (UPDATE,) and request.definitions == ()
+
+
+def test_callers_already_in_the_sent_code_are_not_repeated():
+    calc = decode_source(
+        "app/calc.c",
+        b"int divide(int a, int b)\n{\n    return a / b;\n}\n"
+        b"int half(int v)\n{\n    return divide(v, 2);\n}\n",
+    )
+    home = tuple(Definition("divide", "caller", "app/calc.c", n, 8, "x") for n in (5, 6, 7, 8))
+    files = {**FILES, "app/calc.c": calc}
+
+    request = make_request(RTE, [finding(line=3)], calc, None, (*home, UPDATE), files)
+
+    assert request.callers == (UPDATE,)
+    assert "not shown" not in request.messages[1]["content"]
