@@ -119,7 +119,8 @@ def test_find_definitions_in_a_header():
     assert ("SLOT_A", "type", 13, 13) in found and ("SLOT_COUNT", "type", 13, 13) in found
     assert ("bare_tag", "type", 14, 14) in found
     assert ("shared_buf", "variable", 15, 15) in found
-    assert not any(name == "read_value" for name, _, _, _ in found)  # 원형은 정의가 아니다
+    # 원형은 몸체가 아니라 선언이다
+    assert {kind for name, kind, _, _ in found if name == "read_value"} == {"declaration"}
 
 
 def test_find_definitions_in_a_source_file():
@@ -443,7 +444,9 @@ def test_macro_style_signatures_use_the_name_nearest_the_body():
     assert ("g_val", "variable", 5, 5) in found  # VAR(...) 전역은 원형이 아니다
     assert ("g_other", "variable", 6, 6) in found
     assert ("get_h", "function", 9, 12) in found  # 함수 포인터를 돌려주는 함수
-    assert not any(name in ("FUNC", "VAR", "Drv_Stop", "read_value") for name, _, _, _ in found)
+    assert not any(name in ("FUNC", "VAR") for name, _, _, _ in found)
+    assert ("Drv_Stop", "declaration", 7, 7) in found  # 원형은 선언으로만
+    assert ("read_value", "declaration", 8, 8) in found
 
 
 def test_function_pointer_parameter_type_does_not_rename_the_function():
@@ -790,3 +793,22 @@ def test_pick_places_function_bodies_before_types_and_plain_macros(monkeypatch):
 def test_definition_caps_leave_room_for_rte_heavy_code():
     assert MAX_DEFINITIONS == 40
     assert MAX_DEFINITION_TOTAL_LINES == 1500
+
+
+def test_function_declarations_are_found_as_declarations():
+    # MISRA 8.5처럼 다른 파일의 선언을 보아야 하는 규칙을 위해 함수 원형도 모은다
+    text = (
+        "extern int secret_f(int a);\n"
+        "int secret_g(void);\n"
+        "FUNC(void, CODE) secret_h(uint8 x);\n"
+        "extern uint8 secret_var;\n"
+        "int secret_f(int a)\n{\n    return a;\n}\n"
+    )
+
+    found = [(d.name, d.kind, d.first) for d in find_definitions("x.h", text)]
+
+    assert ("secret_f", "declaration", 1) in found
+    assert ("secret_g", "declaration", 2) in found
+    assert ("secret_h", "declaration", 3) in found
+    assert ("secret_var", "variable", 4) in found
+    assert ("secret_f", "function", 5) in found

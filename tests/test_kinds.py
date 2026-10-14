@@ -271,7 +271,7 @@ def test_rte_and_misra_prompts_offer_the_manual_decision():
     # 답 처리가 바뀌었으므로(판단 값 추가) prompt_version도 올라간다
     assert "manual" in RTE.system_prompt and RTE.prompt_version == 5  # 가드 허용도 manual을 둔다
     assert "answer manual" in RTE.prompt({"mode": "root_cause"})
-    assert "answer manual" in MISRA.system_prompt and MISRA.prompt_version == 2
+    assert "answer manual" in MISRA.system_prompt and MISRA.prompt_version == 3
     assert "manual" not in KINDS["codemetrics"].system_prompt  # CodeMetrics는 그대로
 
 
@@ -305,11 +305,12 @@ def test_misra_prompt_sends_fixes_that_live_elsewhere_to_manual():
 
 def test_rte_and_misra_prompts_explain_the_definitions_section():
     sentence = "Definitions of functions, macros, variables and types"
-    assert sentence in RTE.system_prompt and sentence in MISRA.system_prompt
-    assert "Edits must stay in the numbered code;" in MISRA.system_prompt
+    assert sentence in RTE.system_prompt
+    assert "Definitions and declarations of functions, macros" in MISRA.system_prompt
+    assert "Definitions marked reference only cannot be changed" in MISRA.system_prompt
     assert "answer manual and name that file and function" in RTE.prompt({"mode": "root_cause"})
     assert "Definitions of" not in CODEMETRICS.system_prompt
-    assert RTE.prompt_version == 5 and MISRA.prompt_version == 2  # 답 처리는 그대로
+    assert RTE.prompt_version == 5 and MISRA.prompt_version == 3  # MISRA는 edits[].file을 받는다
 
 
 def test_rte_modes_default_to_guard_and_pick_the_prompt():
@@ -339,7 +340,8 @@ def test_rte_prompts_let_the_model_fix_editable_definitions():
         "the cause is in a caller that is not shown or in a definition marked reference only"
         in root
     )
-    assert "editable" not in MISRA.system_prompt
+    # MISRA도 붙인 정의를 고칠 수 있다 (8.5처럼 고칠 곳이 다른 헤더일 때)
+    assert 'set "file" to that path' in MISRA.system_prompt
 
 
 def test_rte_prompts_explain_callers():

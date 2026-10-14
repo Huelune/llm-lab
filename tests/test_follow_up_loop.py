@@ -1,6 +1,7 @@
 """정의 되묻기 대화: propose_fixes가 need를 받아 다음 메시지를 보내고 다시 판단을 받는다."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from fake_llm import MODEL, completion, make_client, scripted
@@ -8,7 +9,7 @@ from misra_fixtures import misra_finding
 from rte_fixtures import REASON, finding
 
 from llm_lab.csource import Definition
-from llm_lab.fixer import FixError, make_request, propose_fixes
+from llm_lab.fixer import FIX_SCHEMA, FixError, make_request, propose_fixes
 from llm_lab.followups import (
     ASKED_EDITABLE,
     ASKED_REFERENCE,
@@ -21,6 +22,9 @@ from llm_lab.followups import (
 )
 from llm_lab.kinds import MISRA, RTE
 from llm_lab.sources import decode_source
+
+# 받은 정의를 참고만 하는 종류 (MISRA도 이제 고칠 수 있으므로 따로 만든다)
+REFERENCE_ONLY = replace(MISRA, edits_definitions=False, answer_schema=FIX_SCHEMA)
 
 USE = decode_source(
     "src/calc.c", b"int divide(int a, int b)\n{\n    return a / deep_scale(b);\n}\n"
@@ -149,11 +153,11 @@ def test_without_ask_need_is_ignored():
     assert len(sent) == 1 and result.decision == "no_fix"
 
 
-def test_misra_gets_asked_definitions_for_reference_only():
+def test_reference_only_kind_gets_asked_definitions_for_reference_only():
     handler, sent = scripted(
         reply(("manual", REASON), need=["deep_scale"]), reply(("manual", REASON))
     )
-    request = make_request(MISRA, [misra_finding(line=3)], USE, None, (), {}, follow_ups=1)
+    request = make_request(REFERENCE_ONLY, [misra_finding(line=3)], USE, None, (), {}, follow_ups=1)
 
     propose_fixes(
         make_client(handler),
@@ -168,13 +172,13 @@ def test_misra_gets_asked_definitions_for_reference_only():
     assert "    1|" not in follow_up
 
 
-def test_misra_cannot_edit_asked_files_even_if_a_caller_passes_them():
+def test_reference_only_kind_cannot_edit_asked_files_even_if_a_caller_passes_them():
     handler, _ = scripted(
         reply(("manual", REASON), need=["deep_scale"]),
         reply(("fix", REASON), edits=[{**DEEP_FIX, "replacement": "x"}]),
         reply(("fix", REASON), edits=[{**DEEP_FIX, "replacement": "x"}]),
     )
-    request = make_request(MISRA, [misra_finding(line=3)], USE, None, (), {}, follow_ups=1)
+    request = make_request(REFERENCE_ONLY, [misra_finding(line=3)], USE, None, (), {}, follow_ups=1)
 
     with pytest.raises(FixError):
         propose_fixes(

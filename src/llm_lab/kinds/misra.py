@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from llm_lab.fixer import FIX_SCHEMA_WITH_FILE
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import (
     Finding,
@@ -59,11 +60,16 @@ For example, do not cast a composite expression (Rule 10.8); cast its operands.
 without the line-number prefix. "replacement" is the new text for those lines.
 - Keep each edit small: "original" holds only the lines you change. \
 Add one unchanged neighbouring line only when the changed line appears more than once.
-Definitions of functions, macros, variables and types that this code uses but that live \
-elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
-return values and the real types behind typedefs. Edits must stay in the numbered code; \
-if the right change is in one of those definitions or in a caller, \
-answer manual and name that file and function in reason.
+Definitions and declarations of functions, macros, variables and types that this code uses \
+but that live elsewhere may follow the code. Use them to judge value ranges, array sizes, \
+return values and the real types behind typedefs, and to find other declarations of the \
+same name (for example for Rule 8.5). Those marked editable may be changed: when the right \
+change is there (for example a duplicate or incompatible declaration in another file), \
+fix it there and set "file" to that path. Every file that uses it sees the change, \
+so keep the behavior. Definitions marked reference only cannot be changed; \
+if the right change is in one of those or in a caller, \
+answer manual and name that file and function in reason. \
+Set "file" to "" for edits in the numbered code of the findings.
 Do not guess definitions (macros, types, other functions) that are not shown. \
 If they matter, say so in reason.
 Write each "reason" in Korean, one to three sentences that a reviewer can paste \
@@ -222,10 +228,15 @@ MISRA = Kind(
     colors={"Mandatory": "red", "Required": "orange", "Advisory": "gray"},
     system_prompt=SYSTEM_PROMPT,
     heading="Polyspace MISRA C:2012 results",
-    # 2: 판단 값 manual (직접 수정) 추가
-    prompt_version=2,
+    # 2: 판단 값 manual (직접 수정) 추가 / 3: 다른 파일 수정 (edits[].file)
+    prompt_version=3,
     prepare=read_conditions,
     group_key=same_line,
     facts=facts,
     asks_definitions=True,
+    # 8.5처럼 고칠 곳이 다른 헤더일 수 있다.
+    # 다른 파일 수정은 "다른 파일 수정" 칩이 붙고 자동 선택에서 빠진다
+    edits_definitions=True,
+    sends_declarations=True,
+    answer_schema=FIX_SCHEMA_WITH_FILE,
 )

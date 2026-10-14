@@ -222,7 +222,13 @@ def find_asked(
         added = False
         candidates = sorted(
             index.definitions.get(name, ()),
-            key=lambda d: (definition_rank(d, source_name), d.file, d.first),
+            # 같은 이름이면 몸체를 원형(declaration)보다 먼저
+            key=lambda d: (
+                d.kind == "declaration",
+                definition_rank(d, source_name),
+                d.file,
+                d.first,
+            ),
         )
         for definition in candidates[:PER_NAME]:
             key = (definition.file, definition.first)

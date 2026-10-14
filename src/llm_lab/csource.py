@@ -286,8 +286,15 @@ def _add_statement(add, code: list[str], numbers: list[int]) -> None:
             add(words[-1], "type", first, last)
         return
     declared = text.split("=", 1)[0].strip()  # ')' 검사는 '=' 앞에서만. 값의 괄호는 상관없다
-    if declared.endswith(")") or BARE_TAG.fullmatch(declared):
-        return  # 함수 원형(끝이 ')'), 전방 선언. VAR(type, class) name은 변수다
+    if declared.endswith(")"):
+        # 함수 원형(끝이 ')'). VAR(type, class) name은 변수다.
+        # 함수 포인터 변수는 이름을 못 읽어 뺀다
+        name = _function_name(declared)
+        if name:
+            add(name, "declaration", first, last)
+        return
+    if BARE_TAG.fullmatch(declared):
+        return  # 전방 선언
     flat = SUBSCRIPT.sub("", declared)
     words = [name for name in IDENTIFIER.findall(flat) if name not in C_KEYWORDS]
     if words:
@@ -598,6 +605,7 @@ def pick_definitions(
     first: int,
     last: int,
     lines: Iterable[int],
+    declarations: bool = False,
 ) -> list[Definition]:
     """보내는 범위(first~last)가 쓰는 이름의 정의 가운데 범위 밖의 것을, 상한 안에서 고른다.
 
@@ -619,6 +627,8 @@ def pick_definitions(
 
     by_name: dict[str, list[Definition]] = {}
     for definition in definitions:
+        if definition.kind == "declaration" and not declarations:
+            continue  # 함수 원형은 쓰는 종류(MISRA)만 붙인다
         if definition.kind in ("caller", "caller_ref"):
             continue  # 호출자 조각과 그 수는 pick_callers·make_request가 따로 쓴다
         if definition.file == source_name and first <= definition.first and definition.last <= last:

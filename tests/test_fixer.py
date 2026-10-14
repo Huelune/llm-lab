@@ -465,14 +465,50 @@ def test_reference_only_label_appears_only_next_to_an_editable_definition():
     assert "// editable: lib/drv.c lines 1-4" in content
 
 
-def test_misra_never_marks_definitions_editable():
+def test_misra_marks_stored_definitions_editable_like_rte():
+    # MISRA 8.5처럼 고칠 곳이 다른 파일(헤더)일 수 있어 RTE와 같이 고칠 수 있게 보낸다
     request = make_request(
         MISRA, [misra_finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": DRV}
     )
 
     content = request.messages[1]["content"]
-    assert "editable" not in content
-    assert "for reference only" in content
+    assert "// editable: lib/drv.c lines 1-4" in content
+    assert MISRA.answer_schema is FIX_SCHEMA_WITH_FILE
+    assert 'set "file" to that path' in MISRA.prompt(None)
+
+
+HEADER = decode_source(
+    "inc/secret_a.h", b"#ifndef A_H\n#define A_H\nextern int secret_f(int a);\n#endif\n"
+)
+OTHER = decode_source("inc/secret_b.h", b"extern int secret_f(int a);\n")
+OTHER_DECL = Definition("secret_f", "declaration", "inc/secret_b.h", 1, 1, OTHER.text.strip())
+
+
+def test_misra_sends_declarations_in_other_files_and_rte_does_not():
+    finding = misra_finding(line=3, file="inc/secret_a.h")
+    files = {"inc/secret_b.h": OTHER}
+
+    misra = make_request(MISRA, [finding], HEADER, None, [OTHER_DECL], files)
+    rte = make_request(RTE, [finding], HEADER, None, [OTHER_DECL], files)
+
+    assert "// editable: inc/secret_b.h line 1" in misra.messages[1]["content"]
+    assert "secret_b.h" not in rte.messages[1]["content"]
+
+
+def test_misra_fix_in_another_header_is_accepted():
+    finding = misra_finding(line=3, file="inc/secret_a.h")
+    request = make_request(MISRA, [finding], HEADER, None, [OTHER_DECL], {"inc/secret_b.h": OTHER})
+    remove = {
+        "file": "inc/secret_b.h",
+        "original": "extern int secret_f(int a);",
+        "replacement": "",
+    }
+    handler, _ = scripted(answer(("fix", REASON), edits=[remove]))
+
+    (result,) = propose_fixes(make_client(handler), MODEL, request)
+
+    assert result.decision == "fix"
+    assert result.edits[0].file == "inc/secret_b.h"
 
 
 def test_fix_in_another_file_is_located_there_and_shown_in_the_diff():

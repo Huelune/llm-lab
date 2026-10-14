@@ -977,7 +977,7 @@ def test_rte_job_stores_definition_files_and_sends_them_editable(tmp_path):
     assert [edit.file for edit in row.result.edits] == ["common/drv.c"]
 
 
-def test_misra_job_does_not_store_extra_files(tmp_path):
+def test_misra_job_stores_definition_files_like_rte(tmp_path):
     client, store, _ = make_service(tmp_path, fix_answer("no_fix"))
     app, top = project_with_shared_code(tmp_path)
     excel = workbook_bytes(
@@ -992,7 +992,8 @@ def test_misra_job_does_not_store_extra_files(tmp_path):
         choices=("misra:Mandatory", "misra:Required", "misra:Advisory"),
     )
 
-    assert set(store.sources(1)) == {"app/src/calc.c"}
+    # MISRA도 붙인 정의를 고칠 수 있으므로 그 파일 원문을 작업에 저장한다
+    assert {"app/src/calc.c", "common/drv.c"} <= set(store.sources(1))
 
 
 @needs_git

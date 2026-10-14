@@ -603,7 +603,17 @@ def make_request(
     picked: tuple[Definition, ...] = ()
     if kind.uses_definitions:
         lines = [finding.line for finding in findings if finding.line is not None]
-        picked = tuple(pick_definitions(definitions, source.name, source.text, first, last, lines))
+        picked = tuple(
+            pick_definitions(
+                definitions,
+                source.name,
+                source.text,
+                first,
+                last,
+                lines,
+                declarations=kind.sends_declarations,
+            )
+        )
     editable: dict[str, SourceFile] = {}
     if kind.edits_definitions and files:
         editable = {d.file: files[d.file] for d in picked if d.file in files}

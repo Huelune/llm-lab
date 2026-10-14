@@ -86,6 +86,8 @@ class Kind:
     edits_definitions: bool = False
     # 검사 함수를 부르는 곳(호출자 조각)을 요청에 붙일지
     sends_callers: bool = False
+    # 다른 파일의 함수 원형(declaration)도 첫 요청에 붙일지 (MISRA 8.5처럼 선언을 보는 규칙)
+    sends_declarations: bool = False
     # 답의 need로 보이지 않는 정의를 되물을 수 있는지 (LLM_FOLLOW_UPS번까지)
     asks_definitions: bool = False
     # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값. 비어 있으면 고를 것이 없다
