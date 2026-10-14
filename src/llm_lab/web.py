@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import webbrowser
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -235,12 +235,14 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         by_file: dict[str, FilePatch] = {}
         for r in chosen:
             assert r.file_name is not None and r.result is not None
-            if r.file_name not in by_file:
-                source = store.source(job_id, r.file_name)
-                # 폴더에서 읽은 소스는 이름이 곧 폴더 기준 상대 경로다
-                path = source.name if job.source_root else relative_path(r.finding.file, base)
-                by_file[r.file_name] = FilePatch(path, source, [])
-            by_file[r.file_name].edits.extend((r.finding.row, edit) for edit in r.result.edits)
+            for edit in r.result.edits:
+                target = edit.file or r.file_name
+                if target not in by_file:
+                    source = store.source(job_id, target)
+                    # 폴더에서 읽은 소스는 이름이 곧 폴더 기준 상대 경로다
+                    path = source.name if job.source_root else relative_path(r.finding.file, base)
+                    by_file[target] = FilePatch(path, source, [])
+                by_file[target].edits.append((r.finding.row, replace(edit, file="")))
         try:
             data = build_patch(list(by_file.values()))
         except PatchError as exc:

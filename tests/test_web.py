@@ -849,3 +849,32 @@ def test_home_asks_for_the_whole_project_folder(tmp_path):
 
     assert 'name="ref_dirs"' not in page
     assert "프로젝트 최상위 폴더" in page
+
+
+DRV_C = b"int drv_scale(int v)\n{\n    return v + 1;\n}\n"
+
+
+def test_patch_carries_edits_in_other_files(tmp_path):
+    client, store, _ = make_service(tmp_path)
+    calc = decode_source("src/calc.c", CALC_C)
+    drv = decode_source("lib/drv.c", DRV_C)
+    job_id = store.create_job(
+        "rte.xlsx",
+        "RTE_Result",
+        0,
+        [calc, drv],
+        [NewRow(finding(), "src/calc.c", "pending")],
+        source_root=str(tmp_path),
+    )
+    (row,) = store.rows(job_id)
+    local = Edit(CALC_C.index(b"a / b"), CALC_C.index(b"a / b") + 5, "a / (b ? b : 1)")
+    start = DRV_C.index(b"v + 1")
+    other = Edit(start, start + 5, "v + 2", file="lib/drv.c")
+    store.set_row(row.id, "done", FixResult("fix", "r", (local, other), "diff"))
+
+    response = client.post(f"/results/{job_id}/fixes.patch", data={"row": [str(row.id)]})
+
+    assert response.status_code == 200
+    assert b"--- a/lib/drv.c\n+++ b/lib/drv.c\n" in response.content
+    assert b"+    return v + 2;\n" in response.content
+    assert b"--- a/src/calc.c\n+++ b/src/calc.c\n" in response.content

@@ -82,6 +82,8 @@ class Edit:
     start: int  # 원본 텍스트(\n 통일) 안의 문자 위치
     end: int
     replacement: str
+    # 고치는 파일. 빈 글이면 행의 파일(검사 파일), 아니면 작업 파일 이름(소스 폴더 기준 경로)
+    file: str = ""
 
 
 @dataclass(frozen=True)

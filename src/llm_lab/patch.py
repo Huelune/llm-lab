@@ -5,7 +5,7 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from llm_lab.fixer import Edit, apply_edits
 from llm_lab.sources import SourceFile, base_name
@@ -125,12 +125,23 @@ def _conflict(a: Edit, b: Edit) -> bool:
 
 
 def find_conflicts(rows: Mapping[int, tuple[str, Sequence[Edit]]]) -> dict[int, set[int]]:
-    """행 → 함께 고를 수 없는 행들. rows는 행 → (파일, 그 행의 수정들)."""
+    """행 → 함께 고를 수 없는 행들. rows는 행 → (행의 파일, 그 행의 수정들).
+
+    수정마다 실제 파일(edit.file, 비었으면 행의 파일)을 보고 같은 파일에서 겹칠 때만 충돌이다.
+    """
+    resolved = {
+        row: [(edit.file or file, replace(edit, file="")) for edit in edits]
+        for row, (file, edits) in rows.items()
+    }
     conflicts: dict[int, set[int]] = {row: set() for row in rows}
-    items = list(rows.items())
-    for index, (row_a, (file_a, edits_a)) in enumerate(items):
-        for row_b, (file_b, edits_b) in items[index + 1 :]:
-            if file_a == file_b and any(_conflict(a, b) for a in edits_a for b in edits_b):
+    items = list(resolved.items())
+    for index, (row_a, edits_a) in enumerate(items):
+        for row_b, edits_b in items[index + 1 :]:
+            if any(
+                file_a == file_b and _conflict(a, b)
+                for file_a, a in edits_a
+                for file_b, b in edits_b
+            ):
                 conflicts[row_a].add(row_b)
                 conflicts[row_b].add(row_a)
     return conflicts

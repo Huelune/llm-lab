@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_lab.fixer import Edit, apply_edits, locate_edits
+from llm_lab.fixer import Edit, FixResult, apply_edits, locate_edits
 from llm_lab.patch import (
     APPLY_COMMAND,
     FilePatch,
@@ -226,3 +226,39 @@ def test_conflict_message_is_short_and_says_what_to_do():
 
     assert "행 0와 행 1, 행 1와 행 2, 행 2와 행 3 외 7쌍" in message
     assert "수정 모두 선택" in message
+
+
+def test_edits_in_other_files_conflict_only_in_the_same_file():
+    a = Edit(10, 20, "x", file="lib/drv.c")
+    b = Edit(15, 25, "y", file="lib/drv.c")
+    c = Edit(15, 25, "y", file="lib/other.c")
+
+    assert find_conflicts({1: ("calc.c", [a]), 2: ("main.c", [b])}) == {1: {2}, 2: {1}}
+    assert find_conflicts({1: ("calc.c", [a]), 2: ("main.c", [c])}) == {1: set(), 2: set()}
+    # 행의 파일로 정해지는 수정과 file이 적힌 수정도 같은 파일이면 비교한다
+    d = Edit(15, 25, "y")
+    assert find_conflicts({1: ("calc.c", [a]), 2: ("lib/drv.c", [d])}) == {1: {2}, 2: {1}}
+
+
+def test_same_change_written_with_and_without_file_is_not_a_conflict():
+    named = Edit(10, 20, "x", file="lib/drv.c")
+    local = Edit(10, 20, "x")
+
+    assert find_conflicts({1: ("calc.c", [named]), 2: ("lib/drv.c", [local])}) == {
+        1: set(),
+        2: set(),
+    }
+
+
+def test_old_results_without_file_still_load():
+    result = FixResult.from_dict(
+        {
+            "decision": "fix",
+            "reason": "r",
+            "edits": [{"start": 1, "end": 2, "replacement": "z"}],
+            "diff": "",
+        }
+    )
+
+    assert result.edits == (Edit(1, 2, "z"),)
+    assert result.edits[0].file == ""
