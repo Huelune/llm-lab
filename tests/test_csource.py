@@ -759,3 +759,34 @@ def test_pick_ignores_caller_name_counts():
 
     assert pick_definitions([count], "calc.c", CALLEE, 1, 4, [3]) == []
     assert pick_callers([count], "divide", "calc.c") == ([], 0)
+
+
+def test_pick_places_function_bodies_before_types_and_plain_macros(monkeypatch):
+    import llm_lab.csource as csource
+
+    monkeypatch.setattr(csource, "MAX_DEFINITIONS", 3)
+    definitions = [
+        Definition("sig_t", "type", "inc/types.h", 1, 1, "typedef int sig_t;"),
+        Definition("LIMIT", "macro", "inc/types.h", 2, 2, "#define LIMIT 4"),
+        Definition("api_get", "macro", "inc/api.h", 1, 1, "#define api_get(x) impl_get(x)"),
+        Definition("impl_get", "function", "gen/impl.c", 1, 3, "int impl_get(int x)\n{\n}"),
+        Definition("far_call", "function", "lib/far.c", 1, 3, "int far_call(void)\n{\n}"),
+    ]
+    text = (
+        "int f(sig_t v)\n"
+        "{\n"
+        "    int a = api_get(v) / LIMIT;\n"
+        "    a += far_call();\n"
+        "    return a;\n"
+        "}\n"
+    )
+
+    picked = pick_definitions(definitions, "src/use.c", text, 1, 6, [3])
+
+    # 검사 줄 근처의 함수(별칭 매크로와 그 구현)가 먼저, 그다음 멀리 있는 함수, 타입·매크로는 뒤
+    assert [d.name for d in picked] == ["api_get", "impl_get", "far_call"]
+
+
+def test_definition_caps_leave_room_for_rte_heavy_code():
+    assert MAX_DEFINITIONS == 40
+    assert MAX_DEFINITION_TOTAL_LINES == 1500

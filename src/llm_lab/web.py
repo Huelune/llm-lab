@@ -334,7 +334,7 @@ def clear_records(data_dir: Path, what: str) -> int:
         files = [*data_dir.glob(f"{DB_NAME}*"), *(data_dir / LOG_DIR_NAME).glob("*.md")]
         for path in files:
             path.unlink()
-    except (OSError, sqlite3.Error):
+    except OSError, sqlite3.Error:
         print("지우지 못했습니다: 서버를 끈 뒤 다시 실행하세요.", file=sys.stderr)
         return 1
     print(f"{len(files)} files deleted")

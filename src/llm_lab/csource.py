@@ -462,8 +462,10 @@ CALLER_CONTEXT = 10  # 호출 줄 위아래로 이만큼을 호출자 조각으�
 MAX_CALLERS = 4  # 요청 하나에 붙이는 호출자 조각 수
 MAX_CALLER_LINES = 120  # 요청 하나에 붙이는 호출자 조각 줄 수 합계
 MAX_STORED_CALLERS = 20  # 검사 함수 하나에 저장하는 호출자 조각 수
-MAX_DEFINITIONS = 12  # 요청 하나에 붙이는 정의 수
-MAX_DEFINITION_TOTAL_LINES = 400  # 요청 하나에 붙이는 정의 줄 수 합계
+# 요청 하나에 붙이는 정의 수와 줄 수 합계. RTE처럼 매크로·타입이 많은 코드도 필요한 함수 구현까지
+# 닿도록 넉넉히 둔다(1500줄은 대략 2만 토큰으로, 회사 모델의 컨텍스트에 여유가 크다)
+MAX_DEFINITIONS = 40
+MAX_DEFINITION_TOTAL_LINES = 1500
 NEAR_LINES = 2  # 검사 줄 위아래로 이만큼 안의 이름을 먼저 고른다
 PER_NAME = 2  # 같은 이름의 정의는 요청 하나에 이만큼
 
@@ -650,7 +652,14 @@ def pick_definitions(
                 return False
         return True
 
-    for name in wanted:
+    def is_code(name: str) -> bool:
+        """함수 구현이거나 다른 이름을 가리키는 별칭 매크로인지 (구현까지 따라간다)."""
+        return any(d.kind == "function" or macro_target(d) for d in by_name.get(name, ()))
+
+    # 함수 구현(과 그 별칭)을 먼저, 타입·상수 매크로·변수는 그 뒤에. 각각 검사 줄 근처 순서를 지킨다
+    ordered = [name for name in wanted if is_code(name)]
+    ordered += [name for name in wanted if not is_code(name)]
+    for name in ordered:
         if not place(name, 0):
             break
     return picked

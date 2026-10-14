@@ -20,10 +20,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from llm_lab.csource import MAX_DEFINITIONS
+
 LOG_NAME = re.compile(r"_job(\d+)_row\d+(?:-\d+)?\.md$")
 FENCE = re.compile(r"^(`{3,})[^\n`]*\n(.*?)\n\1$", re.S | re.M)
 BLOCK_HEAD = re.compile(r"^```c\n// (editable caller: |editable: |reference only: )?(\S+) ", re.M)
-MAX_DEFINITIONS = 12  # fixer가 요청 하나에 붙이는 정의 수 상한 (csource.MAX_DEFINITIONS)
 DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
@@ -144,7 +145,7 @@ LABELS = {
     "reference_only": "참고만 하는 정의만 붙음",
     "none": "붙은 정의·호출자 없음",
     "clipped": "80줄에서 잘린 정의가 있음",
-    "capped": "정의가 상한(12개)까지 붙음",
+    "capped": f"정의가 상한({MAX_DEFINITIONS}개)까지 붙음",
 }
 
 
