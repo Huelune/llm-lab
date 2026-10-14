@@ -47,7 +47,7 @@ uv sync
 | `uv run llm-fix-server --clear cache` | 저장된 LLM 답만(작업 목록은 남음) | `N cached answers deleted` |
 | `uv run llm-fix-server --profile 이름 --clear all` | 그 프로필의 기록만 | `N files deleted` |
 
-## 패치 적용
+## 패치 적용·되돌리기
 
 결과 화면의 "패치 적용 방법"에 나온 폴더에서, 확인을 먼저 하고 적용합니다.
 
@@ -57,6 +57,16 @@ git -c core.autocrlf=false apply --check fixes.patch
 
 ```bash
 git -c core.autocrlf=false apply fixes.patch
+```
+
+되돌릴 때는 적용한 것과 같은 fixes.patch로, 같은 폴더에서 `-R`을 붙여 확인한 뒤 실행합니다. 적용한 뒤 그 줄을 손으로 고쳤으면 확인 단계에서 멈춥니다.
+
+```bash
+git -c core.autocrlf=false apply -R --check fixes.patch
+```
+
+```bash
+git -c core.autocrlf=false apply -R fixes.patch
 ```
 
 ## 살펴보기 도구 (읽기만 함)

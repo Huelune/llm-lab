@@ -120,6 +120,8 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert 'data-kind="fix"' in page and 'data-kind="problem"' in page
     assert str(folder) in page  # git apply를 실행할 폴더 = 지정한 소스 폴더
     assert 'data-copy="git -c core.autocrlf=false apply --check fixes.patch"' in page
+    assert 'data-copy="git -c core.autocrlf=false apply -R --check fixes.patch"' in page
+    assert 'data-copy="git -c core.autocrlf=false apply -R fixes.patch"' in page
     assert 'action="/results/1/fixes.patch"' in page
     assert 'id="toggle-all"' in page  # 수정 모두 선택
     assert "data-refresh=" not in page

@@ -125,6 +125,7 @@ git -c core.autocrlf=false apply --check fixes.patch
 git -c core.autocrlf=false apply fixes.patch
 ```
 
+- 되돌리려면 적용한 것과 같은 fixes.patch로, 같은 폴더에서 `-R`을 붙여 실행합니다(`git -c core.autocrlf=false apply -R --check fixes.patch` 다음 `-R fixes.patch`). 결과 화면의 "패치 적용 방법" 아래에도 복사 단추와 함께 있습니다.
 - 소스는 UTF-8 또는 CP949여야 하고, 한 파일 안의 줄바꿈은 한 가지(CRLF 또는 LF)여야 합니다.
 - 작업과 결과는 `private/fixer.db`에 저장되며 커밋되지 않습니다. 같은 파일·같은 지적은 LLM을 다시 부르지 않습니다. 작업 목록·대화 기록까지 모두 지우려면 서버를 끈 상태에서 `uv run llm-fix-server --clear all`을, 저장된 LLM 답만 지우려면 `--clear cache`를 실행합니다. `--profile 이름`으로 켠 서버의 기록(`private/이름/`)은 같은 `--profile 이름`을 붙여 지웁니다.
 - LLM과 오간 대화는 묶음마다 `private/llm-logs/시각_job작업번호_row엑셀행.md`로 남습니다(엑셀 행은 묶음의 가장 작은 행). 보낸 메시지(코드 포함), 받은 응답, 응답 원문 JSON이 그대로 들어 있고 API 키는 없습니다. 이전 결과를 재사용해 LLM을 부르지 않은 행도 그렇다고 적힌 파일이 남습니다.

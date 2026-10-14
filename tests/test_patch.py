@@ -26,10 +26,11 @@ def replace(source, old: str, new: str) -> Edit:
     return Edit(start, start + len(old), new)
 
 
-def git_apply(folder: Path, patch: bytes) -> None:
-    """결과 화면이 안내하는 명령 그대로 적용한다."""
+def git_apply(folder: Path, patch: bytes, reverse: bool = False) -> None:
+    """결과 화면이 안내하는 명령 그대로 적용한다. reverse면 되돌리기 명령(-R)이다."""
     (folder / "fixes.patch").write_bytes(patch)
-    for args in (["--check"], []):
+    back = ["-R"] if reverse else []
+    for args in ([*back, "--check"], back):
         subprocess.run(
             [*APPLY_COMMAND.split(), *args, "fixes.patch"],
             cwd=folder,
@@ -119,6 +120,10 @@ def test_git_apply_reproduces_the_fix_byte_for_byte(tmp_path, original):
 
     expected = original.replace(b"int b;", "long b; /* 수정 */".encode(source.encoding))
     assert (tmp_path / "src" / "a.c").read_bytes() == expected
+
+    # 같은 패치 파일로 되돌리면 원본과 바이트까지 같다
+    git_apply(tmp_path, build_patch([item]), reverse=True)
+    assert (tmp_path / "src" / "a.c").read_bytes() == original
 
 
 def test_identical_edits_from_two_rows_are_applied_once():

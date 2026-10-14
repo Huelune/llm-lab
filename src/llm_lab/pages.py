@@ -846,15 +846,24 @@ def _howto(base: str | None) -> str:
         folder = "엑셀 File 경로가 시작되는 폴더"
     else:
         folder = base.replace("/", "\\")
-    steps = "".join(
-        f'<li><div class="cmd"><code>{escape(command)}</code>'
-        f'<button type="button" data-copy="{escape(command)}">복사</button></div></li>'
-        for command in (f"{APPLY_COMMAND} --check fixes.patch", f"{APPLY_COMMAND} fixes.patch")
-    )
+
+    def steps(flag: str) -> str:
+        return "".join(
+            f'<li><div class="cmd"><code>{escape(command)}</code>'
+            f'<button type="button" data-copy="{escape(command)}">복사</button></div></li>'
+            for command in (
+                f"{APPLY_COMMAND}{flag} --check fixes.patch",
+                f"{APPLY_COMMAND}{flag} fixes.patch",
+            )
+        )
+
     return (
         '<div class="howto"><b>패치 적용 방법</b> — 내려받은 fixes.patch를 아래 폴더에 두고 '
         f'차례로 실행하세요.<ol><li>폴더: <code class="folder">{escape(folder)}</code></li>'
-        f"{steps}</ol></div>"
+        f"{steps('')}</ol>"
+        "<b>되돌리기</b> — 적용한 것과 같은 fixes.patch로, 같은 폴더에서 차례로 실행하면 "
+        "패치 전으로 돌아갑니다. 적용한 뒤 그 줄을 손으로 고쳤으면 확인 단계에서 멈춥니다."
+        f"<ol>{steps(' -R')}</ol></div>"
     )
 
 
