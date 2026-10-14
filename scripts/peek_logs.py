@@ -60,6 +60,19 @@ def read_logs(folder: Path, job: int) -> list[tuple[str, dict]]:
     return found
 
 
+REUSED = "이전 결과 재사용 - LLM을 부르지 않음"  # worker가 저장된 답을 다시 쓸 때 남기는 결과 줄
+
+
+def reused_count(folder: Path, job: int) -> int:
+    """저장된 답을 다시 써서 LLM을 부르지 않은 묶음의 기록 수 (보낸 내용이 없다)."""
+    return sum(
+        1
+        for path in folder.glob(f"*_job{job}_row*.md")
+        if LOG_NAME.search(path.name)
+        and REUSED in path.read_text(encoding="utf-8", errors="replace")
+    )
+
+
 def _decisions(answer: dict) -> list[str]:
     items = answer.get("findings")
     return (
@@ -156,6 +169,12 @@ def summarize(
     if job is None:
         return ["대화 기록이 없습니다. 서버를 켠 프로젝트 폴더에서 실행하세요."]
     logs = read_logs(folder, job) if folder.is_dir() else []
+    reused = reused_count(folder, job) if folder.is_dir() else 0
+    if not logs and reused:
+        return [
+            f"작업 {job}: 묶음 {reused}개 모두 저장된 답을 다시 썼습니다(LLM을 부르지 않음).",
+            "처음 답을 만든 작업 번호를 --job으로 주거나, 저장된 답을 지우고 다시 돌리세요.",
+        ]
     if not logs:
         return [
             f"작업 {job}의 대화 기록이 없습니다.",
@@ -164,7 +183,7 @@ def summarize(
         ]
     decided = Counter(decision for _, answer in logs for decision in _decisions(answer))
     lines = [
-        f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준)",
+        f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준), 저장된 답 재사용 묶음 {reused}개",
         "판단 행: " + " / ".join(f"{label} {decided[key]}" for key, label in DECISIONS),
         "",
         "직접 수정 행이 받은 것 (한 행이 여러 줄에 들 수 있음):",

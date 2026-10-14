@@ -147,3 +147,26 @@ def test_default_job_comes_from_the_database_when_it_is_newer(tmp_path):
 
     assert "작업 4의 대화 기록이 없습니다" in screen
     assert "작업 3:" not in screen
+
+
+def test_jobs_that_reused_stored_answers_say_so(tmp_path):
+    # 저장된 답을 다시 쓴 묶음은 기록에 보낸 내용이 없다. 없다고 하지 말고 재사용이라고 말한다
+    text = render_log(
+        job_id=9,
+        kind="RTE",
+        findings=[finding(row=2, file=r"C:\secret_dir\secret_file.c")],
+        source_name="secret_file.c",
+        model="secret-model",
+        endpoint="https://secret.example/v1/chat/completions",
+        extra_body={},
+        exchanges=[],
+        outcomes=["이전 결과 재사용 - LLM을 부르지 않음"],
+    )
+    write_log(tmp_path, 9, 2, text)
+    write_log(tmp_path, 9, 3, text)
+
+    screen = "\n".join(peek.summarize(tmp_path, job=9))
+
+    assert "작업 9: 묶음 2개 모두 저장된 답을 다시 썼습니다" in screen
+    assert "secret" not in screen.casefold()
+    assert peek.reused_count(tmp_path, 9) == 2
