@@ -251,8 +251,10 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
 
     page = client.get("/results/1").text
 
-    # 새로 고침은 스크립트가 하고(location.reload), 보고 있던 탭은 주소의 #으로 남긴다
-    assert '<main data-refresh="5">' in page
+    # 새로 고침은 스크립트가 하고(location.reload), 보고 있던 탭은 주소의 #으로 남긴다.
+    # 내용 지문이 바뀔 때만 다시 읽고, 걸러 보기와 펼친 '자세히'도 기억한다
+    assert '<main data-refresh="5" data-version="' in page
+    assert "remember('filter'" in page and "remember('open'" in page
     assert 'http-equiv="refresh"' not in page
     assert '<span class="spinner"></span>1/2 처리 · 5초마다 새로 고칩니다' in page
     assert "location.reload()" in page
@@ -264,6 +266,8 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     assert '<div class="progress"><div style="width:50%"></div></div>' in page
     assert 'type="checkbox"' not in page
     assert len(queued) == 1
+    # 내용이 그대로면 지문도 같아 다시 읽지 않는다
+    assert client.get("/results/1").text == page
 
 
 def test_stopped_job_can_be_retried(tmp_path):

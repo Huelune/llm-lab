@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from html import escape
 from urllib.parse import quote
@@ -271,21 +272,41 @@ if (tabs.some(t => t.dataset.tab === wanted)) {
   history.replaceState(null, '', '#' + wanted);
   highlight(wantedCard);
 }
+// 다시 읽어도 화면이 그대로 남도록 이 탭의 sessionStorage에 페이지별로 적어 둔다
+function recall(name) {
+  try { return sessionStorage.getItem(name + ':' + location.pathname); } catch (e) { return null; }
+}
+function remember(name, value) {
+  try { sessionStorage.setItem(name + ':' + location.pathname, value); } catch (e) {}
+}
+function forget(name) {
+  try { sessionStorage.removeItem(name + ':' + location.pathname); } catch (e) {}
+}
+// 걸러 보기: 고른 종류를 기억했다가 다시 읽은 뒤에도 그 종류만 보인다
+const filters = [...document.querySelectorAll('[data-filter]')];
+function applyFilter(kind) {
+  filters.forEach(b => b.classList.toggle('on', b.dataset.filter === kind));
+  document.querySelectorAll('[data-kind]').forEach(item => {
+    item.hidden = kind !== 'all' && item.dataset.kind !== kind;
+  });
+}
+filters.forEach(button => button.addEventListener('click', () => {
+  applyFilter(button.dataset.filter);
+  remember('filter', button.dataset.filter);
+}));
+const savedFilter = recall('filter');
+if (savedFilter && filters.some(b => b.dataset.filter === savedFilter)) applyFilter(savedFilter);
+// 펼쳐 둔 '자세히'는 다시 읽은 뒤에도 펼친다
+const folds = [...document.querySelectorAll('details')];
+(recall('open') || '').split(' ').filter(Boolean).forEach(i => {
+  if (folds[Number(i)]) folds[Number(i)].open = true;
+});
+forget('open');
 // 스크롤: 다시 읽기 전에 저장해 둔 위치가 있으면 그리로, 없고 카드가 있으면 카드로
-const scrollKey = 'scroll:' + location.pathname;
-function savedScroll() {
-  try { return sessionStorage.getItem(scrollKey); } catch (e) { return null; }
-}
-function rememberScroll() {
-  try { sessionStorage.setItem(scrollKey, String(window.scrollY)); } catch (e) {}
-}
-function forgetScroll() {
-  try { sessionStorage.removeItem(scrollKey); } catch (e) {}
-}
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
-const scrollBack = savedScroll();
+const scrollBack = recall('scroll');
 if (scrollBack !== null) {
-  forgetScroll();
+  forget('scroll');
   window.scrollTo(0, Number(scrollBack));
 } else if (wantedCard) {
   wantedCard.scrollIntoView({block: 'start'});
@@ -298,19 +319,23 @@ if (analyze) analyze.addEventListener('submit', () => {
   button.disabled = true;
   button.innerHTML = '<span class="spinner"></span>엑셀을 읽는 중…';
 });
-// 처리 중인 작업 페이지는 스크립트로 다시 읽는다. meta refresh와 달리 주소의 #과 스크롤이 남는다
+// 처리 중인 작업 페이지는 정해진 간격마다 새 내용을 받아 보고, 바뀌었을 때만 다시 읽는다.
+// 다시 읽을 때는 주소의 #(탭·카드), 걸러 보기, 펼친 '자세히', 스크롤이 남는다
 const live = document.querySelector('main[data-refresh]');
-if (live) {
-  setTimeout(() => { rememberScroll(); location.reload(); }, Number(live.dataset.refresh) * 1000);
+async function poll() {
+  try {
+    const response = await fetch(location.pathname, {cache: 'no-store'});
+    const found = (await response.text()).match(/data-version="(\\w+)"/);
+    if (response.ok && (!found || found[1] !== live.dataset.version)) {
+      remember('scroll', String(window.scrollY));
+      remember('open', folds.map((f, i) => f.open ? i : '').filter(String).join(' '));
+      location.reload();
+      return;
+    }
+  } catch (e) {}
+  setTimeout(poll, Number(live.dataset.refresh) * 1000);
 }
-const filters = [...document.querySelectorAll('[data-filter]')];
-filters.forEach(button => button.addEventListener('click', () => {
-  filters.forEach(b => b.classList.toggle('on', b === button));
-  const kind = button.dataset.filter;
-  document.querySelectorAll('[data-kind]').forEach(item => {
-    item.hidden = kind !== 'all' && item.dataset.kind !== kind;
-  });
-}));
+if (live) setTimeout(poll, Number(live.dataset.refresh) * 1000);
 document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', () => {
   navigator.clipboard.writeText(button.dataset.copy).then(() => {
     button.textContent = '복사됨';
@@ -367,8 +392,11 @@ FAVICON_HREF = "data:image/svg+xml," + quote(FAVICON_SVG)
 
 
 def page(title: str, body: str, *, refresh: bool = False) -> str:
-    """refresh면 스크립트가 5초마다 페이지를 다시 읽는다 (보던 탭은 주소의 #으로 남는다)."""
-    main = '<main data-refresh="5">' if refresh else "<main>"
+    """refresh면 스크립트가 5초마다 내용 지문(data-version)을 확인해 바뀌었을 때만 다시 읽는다."""
+    main = "<main>"
+    if refresh:
+        version = hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
+        main = f'<main data-refresh="5" data-version="{version}">'
     return (
         f'<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
