@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
 from html import escape
 from urllib.parse import quote
 
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.patch import APPLY_COMMAND, find_conflicts, pick_without_conflicts
+from llm_lab.safe_text import safe
 from llm_lab.sources import base_name
 from llm_lab.store import USER_STOP, Job, Row
 
@@ -151,6 +153,9 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
   white-space: nowrap; }
 .box td.num, .box th.num { width: 40px; padding-left: 4px; padding-right: 4px; }
 .box th.num { white-space: normal; word-break: keep-all; line-height: 1.2; vertical-align: bottom; }
+/* 요약(캡처용)은 스크롤 없이 한 장에 다 보이고 머리글이 한 줄이다 */
+.summary-page .box { max-height: none; }
+.summary-page .box td.num, .summary-page .box th.num { width: 76px; white-space: nowrap; }
 .box h3 { font-size: 12px; margin: 0 6px 4px; color: var(--muted); }
 .list td.summary { color: var(--muted); max-width: 520px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
@@ -857,7 +862,7 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
         f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
-        + "</p>"
+        + f' · <a href="/results/{job.id}/summary">요약 (캡처용)</a></p>'
     )
     if job.note:
         body += f'<p class="sub">{escape(job.note)}</p>'
@@ -931,3 +936,97 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
 def _edits_other_files(row: Row) -> bool:
     """수정이 행의 파일 말고 다른 파일도 고치는지 (그 함수를 부르는 모든 곳에 영향)."""
     return row.result is not None and any(edit.file for edit in row.result.edits)
+
+
+# 요약 페이지: 회사 밖으로 캡처해 보내는 화면이라 숫자와 정해 둔 글, 표준 용어만 찍는다.
+# 엑셀·파일·함수 이름, 경로, 엑셀 칸의 글, LLM이 쓴 이유는 넣지 않는다
+NOTE_NUMBERS = ("참고 정의", "호출자 조각", "못 읽은 파일")
+OTHER_LABEL = "기타"
+OTHER_CHECK = "기타 검사"
+RULE_NUMBER = re.compile(r"(Rule|Dir)\s*\d+(\.\d+)*", re.I)
+MAX_CHECKS = 12  # 검사 종류 표의 줄 수 (나머지는 한 줄로 합친다)
+
+
+def _summary_check(check: str) -> str:
+    """검사 이름을 찍어도 되는 모양으로: 규칙 번호, 표준 용어로만 된 이름, 아니면 기타."""
+    found = RULE_NUMBER.match(check.strip())
+    if found:
+        return found.group(0)
+    shown = safe(check)
+    return shown if shown == check else OTHER_CHECK
+
+
+def _count_table(title: str, groups: dict[str, Counter], keys: list[str]) -> str:
+    head = "".join(f'<th class="num">{KIND_LABELS[key]}</th>' for key in keys)
+    lines = "".join(
+        f'<tr><td>{escape(name)}</td><td class="num">{counts["all"]}</td>'
+        + "".join(f'<td class="num">{counts[key]}</td>' for key in keys)
+        + "</tr>"
+        for name, counts in groups.items()
+    )
+    return (
+        f'<div class="box"><h3>{title}</h3><table><tr><th></th><th class="num">전체</th>'
+        f"{head}</tr>{lines}</table></div>"
+    )
+
+
+def summary_page(job: Job, rows: list[Row]) -> str:
+    kind = KINDS[job.kind]
+    finished = job.state != "running"
+    keys = [key for key in KIND_ORDER if key != "waiting" or any(_kind(r) == key for r in rows)]
+    by_label: dict[str, Counter] = {label: Counter() for label in kind.choices}
+    by_check: dict[str, Counter] = {}
+    for row in rows:
+        label = kind.label(row.finding)
+        decided = _kind(row)
+        for counts in (
+            by_label.setdefault(label if label in kind.choices else OTHER_LABEL, Counter()),
+            by_check.setdefault(_summary_check(row.finding.check), Counter()),
+        ):
+            counts["all"] += 1
+            counts[decided] += 1
+    total = sum(by_label.values(), Counter())
+    total["all"] = len(rows)
+    by_label["합계"] = total
+    checks = sorted(by_check.items(), key=lambda item: (-item[1]["all"], item[0]))
+    if len(checks) > MAX_CHECKS:
+        rest = sum((counts for _, counts in checks[MAX_CHECKS - 1 :]), Counter())
+        checks = [*checks[: MAX_CHECKS - 1], (f"그 밖 {len(checks) - MAX_CHECKS + 1}종", rest)]
+
+    facts = [("상태", JOB_STATES.get(job.state, job.state))]
+    if job.state == "running":
+        done, all_rows = _progress(rows)
+        facts.append(("처리", f"{done}/{all_rows}"))
+    mode = next((label for _, label, _ in kind.modes if job.note.startswith(label)), "")
+    if mode:
+        facts.append(("처리 방식", mode))
+    facts.append(("제외한 행", str(job.skipped)))
+    for name in NOTE_NUMBERS:
+        found = re.search(rf"{name} (\d+)개", job.note)
+        facts.append((name, found.group(1) if found else "0"))
+    problems = Counter(row.state for row in rows if _kind(row) == "problem")
+    facts += [(ROW_STATES[state], str(count)) for state, count in sorted(problems.items())]
+    if finished:
+        conflicts, picked, manual = _selection(kind, rows) if rows else ({}, set(), set())
+        fixes = [r for r in rows if r.result is not None and r.result.decision == "fix"]
+        facts += [
+            ("수정 모두 선택이 고르는 수정", str(len(picked))),
+            ("같은 줄 겹침으로 다음 차례", str(len(conflicts) - len(picked) - len(manual))),
+            ("직접 골라야 하는 수정", str(len(manual))),
+            ("다른 파일 수정", str(sum(_edits_other_files(r) for r in fixes))),
+        ]
+    fact_rows = "".join(
+        f'<tr><td>{escape(name)}</td><td class="num">{escape(value)}</td></tr>'
+        for name, value in facts
+    )
+    body = (
+        f'<div class="summary-page"><h1>작업 {job.id} 요약 · {escape(kind.title)}</h1>'
+        '<p class="sub">숫자와 표준 용어만 보입니다(엑셀·파일·함수 이름, 경로, 코드, 이유 없음). '
+        f'이 화면은 그대로 캡처해 보내도 됩니다. <a href="/results/{job.id}">결과 화면으로</a></p>'
+        '<div class="grid2">'
+        + _count_table("대상별 판단", by_label, keys)
+        + f'<div class="box"><h3>작업</h3><table>{fact_rows}</table></div></div>'
+        + _count_table("검사 종류별", dict(checks), keys)
+        + "</div>"
+    )
+    return page(f"작업 {job.id} 요약", body, refresh=not finished)
