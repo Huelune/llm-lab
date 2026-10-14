@@ -18,13 +18,18 @@ import re
 import sqlite3
 import sys
 from collections import Counter
+from functools import partial
 from pathlib import Path
 
-from llm_lab.csource import MAX_DEFINITIONS
+from llm_lab.csource import MAX_DEFINITIONS, Definition, identifiers
+from llm_lab.store import Store
 
 LOG_NAME = re.compile(r"_job(\d+)_row\d+(?:-\d+)?\.md$")
 FENCE = re.compile(r"^(`{3,})[^\n`]*\n(.*?)\n\1$", re.S | re.M)
 BLOCK_HEAD = re.compile(r"^```c\n// (editable caller: |editable: |reference only: )?(\S+) ", re.M)
+CODE_BLOCK = re.compile(r"^```c\n(.*?)\n```$", re.S | re.M)
+CODE_RANGE = re.compile(r"^Code \(lines (\d+)-(\d+) of (.+?)[;)]", re.M)
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # 한글이 붙은 이름(예: 이름을)에서도 이름만
 DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
@@ -138,6 +143,61 @@ def other_file_fixes(logs: list[tuple[str, dict]], pattern: str | None = None) -
     return rows, matched
 
 
+def _where(definition: Definition) -> str:
+    if definition.first == definition.last:
+        return f"line {definition.first}"
+    return f"lines {definition.first}-{definition.last}"
+
+
+def _sent(user: str, shown: re.Match[str] | None, definition: Definition) -> bool:
+    """정의가 요청에 실렸는지: 보낸 코드 범위 안이거나, 같은 파일·줄의 정의 블록이 있다."""
+    if shown and definition.file == shown.group(3):
+        if int(shown.group(1)) <= definition.first <= definition.last <= int(shown.group(2)):
+            return True
+    return f" {definition.file} {_where(definition)}\n" in user
+
+
+def reason_counts(
+    logs: list[tuple[str, dict]], definitions: list[Definition]
+) -> list[tuple[str, int]]:
+    """직접 수정 판단마다 이유가 짚은 코드 이름을 센다. 한 판단이 여러 칸에 들 수 있다.
+
+    cut: 작업에 정의가 저장됐지만 요청에 안 붙은 이름 / missing: 보낸 코드에 쓰였지만 저장된 정의가
+    없는 이름 / sent: 짚은 이름이 모두 요청에 있었다 / none: 코드 이름을 짚지 않았다.
+    """
+    stored: dict[str, list[Definition]] = {}
+    for definition in definitions:
+        if definition.kind not in ("caller", "caller_ref"):
+            stored.setdefault(definition.name, []).append(definition)
+    counts: Counter[str] = Counter()
+    for user, answer in logs:
+        items = answer.get("findings") if isinstance(answer.get("findings"), list) else []
+        code = set(identifiers("\n".join(CODE_BLOCK.findall(user))))
+        sent = partial(_sent, user, CODE_RANGE.search(user))
+
+        for item in items:
+            if not isinstance(item, dict) or item.get("decision") != "manual":
+                continue
+            reason = item.get("reason") if isinstance(item.get("reason"), str) else ""
+            named = {name for name in WORD.findall(reason) if name in stored or name in code}
+            if not named:
+                counts["none"] += 1
+                continue
+            unsent = {n for n in named if n in stored and not any(map(sent, stored[n]))}
+            counts["cut"] += bool(unsent)
+            counts["missing"] += any(name not in stored for name in named)
+            counts["sent"] += all(name in stored for name in named) and not unsent
+    return [(key, counts[key]) for key in ("cut", "missing", "sent", "none")]
+
+
+REASON_LABELS = {
+    "cut": "저장됐지만 요청에 안 붙은 정의",
+    "missing": "프로젝트에서 정의를 못 찾은 이름",
+    "sent": "짚은 이름이 모두 요청에 있었음",
+    "none": "코드 이름을 짚지 않음",
+}
+
+
 LABELS = {
     "editable": "고칠 수 있는 정의가 붙음",
     "editable_pattern": "  그중 패턴에 맞는 파일의 정의",
@@ -183,9 +243,17 @@ def summarize(
             "--profile을 붙이세요.",
         ]
     decided = Counter(decision for _, answer in logs for decision in _decisions(answer))
+    capped = sum(
+        1
+        for user, _ in logs
+        if sum(1 for kind, _ in _blocks(user) if kind != "caller") >= MAX_DEFINITIONS
+    )
+    manual_groups = sum(1 for _, answer in logs if "manual" in _decisions(answer))
     lines = [
         f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준), 저장된 답 재사용 묶음 {reused}개",
         "판단 행: " + " / ".join(f"{label} {decided[key]}" for key, label in DECISIONS),
+        f"정의가 상한({MAX_DEFINITIONS}개)까지 붙은 묶음: {capped} / {len(logs)}, "
+        f"직접 수정이 나온 묶음: {manual_groups}",
         "",
         "직접 수정 행이 받은 것 (한 행이 여러 줄에 들 수 있음):",
     ]
@@ -193,6 +261,14 @@ def summarize(
         if key == "editable_pattern" and not pattern:
             continue
         lines.append(f"  {LABELS[key]:<28}{count:>6}")
+    lines += ["", "직접 수정 이유가 짚은 이름 (한 행이 여러 줄에 들 수 있음):"]
+    if db is not None and db.is_file() and Store(db).job(job) is not None:
+        for key, count in reason_counts(logs, Store(db).definitions(job)):
+            lines.append(f"  {REASON_LABELS[key]:<28}{count:>6}")
+    else:
+        lines.append(
+            "  작업 DB에 이 작업이 없어 세지 않았습니다. 서버와 같은 --profile을 붙이세요."
+        )
     rows, matched = other_file_fixes(logs, pattern)
     lines += ["", f"다른 파일을 고친 수정 행: {rows}"]
     if pattern:

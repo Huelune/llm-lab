@@ -48,10 +48,10 @@ REFERENCE = (
 )
 
 
-def answer(decision: str, edits: list[dict] | None = None) -> str:
+def answer(decision: str, edits: list[dict] | None = None, reason: str = "secret reason") -> str:
     return json.dumps(
         {
-            "findings": [{"number": 1, "decision": decision, "reason": "secret reason text"}],
+            "findings": [{"number": 1, "decision": decision, "reason": reason}],
             "edits": edits or [],
         }
     )
@@ -170,3 +170,46 @@ def test_jobs_that_reused_stored_answers_say_so(tmp_path):
     assert "작업 9: 묶음 2개 모두 저장된 답을 다시 썼습니다" in screen
     assert "secret" not in screen.casefold()
     assert peek.reused_count(tmp_path, 9) == 2
+
+
+def test_counts_which_names_manual_reasons_point_at(tmp_path):
+    # 직접 수정 이유가 짚은 이름이 저장만 됐는지, 프로젝트에 없는지, 다 보냈는지 센다
+    from llm_lab.csource import Definition
+    from llm_lab.store import NewRow, Store
+
+    def defined(name: str, file: str, first: int, last: int) -> Definition:
+        return Definition(name, "function", file, first, last, "int x;")
+
+    store = Store(tmp_path / "fixer.db")
+    store.create_job(
+        "secret.xlsx",
+        "RTE_Result",
+        0,
+        [],
+        [NewRow(finding(), None, "no_source")],
+        kind="rte",
+        definitions=[
+            defined("secret_api", "gen/Rte_secret.c", 1, 4),  # EDITABLE로 보냄
+            defined("secret_deep", "gen/Rte_deep.c", 10, 20),  # 저장만 됨
+            defined("secret_func", "secret_file.c", 1, 4),  # 보낸 코드 안
+        ],
+    )
+    calls = CODE.replace("(void)", "(void) { return secret_missing(); }")
+    logs = tmp_path / "logs"
+    log(
+        logs, 1, 2, HEAD + CODE + EDITABLE, answer("manual", reason="secret_deep의 구현을 고칩니다")
+    )
+    log(logs, 1, 3, HEAD + calls, answer("manual", reason="secret_missing가 정해야 합니다"))
+    log(logs, 1, 4, HEAD + CODE + EDITABLE, answer("manual", reason="secret_api를 봐야 합니다"))
+    log(logs, 1, 5, HEAD + CODE, answer("manual", reason="secret_func 안의 값이 문제"))
+    log(logs, 1, 6, HEAD + CODE, answer("manual", reason="값을 정해야 합니다"))
+    log(logs, 1, 7, HEAD + CODE, answer("fix"))
+
+    found = dict(peek.reason_counts(peek.read_logs(logs, 1), store.definitions(1)))
+
+    assert found == {"cut": 1, "missing": 1, "sent": 2, "none": 1}
+    screen = "\n".join(peek.summarize(logs, db=tmp_path / "fixer.db"))
+    assert "저장됐지만 요청에 안 붙은 정의" in screen
+    assert "정의가 상한(40개)까지 붙은 묶음: 0 / 6, 직접 수정이 나온 묶음: 5" in screen
+    assert "secret" not in screen.casefold()
+    assert len(screen.splitlines()) <= 40
