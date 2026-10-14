@@ -756,7 +756,7 @@ def test_job_sends_definitions_from_other_files_and_notes_the_count(tmp_path):
 
     assert response.status_code == 303
     content = sent[0]["messages"][1]["content"]
-    assert "```c\n// inc/limits.h line 1\n#define LIMIT 4\n```" in content
+    assert "```c\n// editable: inc/limits.h line 1\n    1| #define LIMIT 4\n```" in content
     assert "UNUSED" not in content
     job = store.job(1)
     # calc.c 자신의 divide 정의도 저장된다(긴 파일에서 함수만 보낼 때 쓴다). 메모는 저장한 수다
@@ -878,3 +878,40 @@ def test_patch_carries_edits_in_other_files(tmp_path):
     assert b"--- a/lib/drv.c\n+++ b/lib/drv.c\n" in response.content
     assert b"+    return v + 2;\n" in response.content
     assert b"--- a/src/calc.c\n+++ b/src/calc.c\n" in response.content
+
+
+def test_rte_job_stores_definition_files_and_sends_them_editable(tmp_path):
+    drv_fix = {
+        "file": "common/drv.c",
+        "original": "    return v + 1;",
+        "replacement": "    return v + 2;",
+    }
+    client, store, sent = make_service(tmp_path, answer(("fix", REASON), edits=[drv_fix]))
+    app, top = project_with_shared_code(tmp_path)
+
+    upload(client, rte_excel(rte_row("Orange Check", line=4)), top)
+
+    assert "common/drv.c" in store.sources(1)
+    content = sent[0]["messages"][1]["content"]
+    assert "// editable: common/drv.c lines 1-4\n    1| int drv_scale(int v)" in content
+    (row,) = store.rows(1)
+    assert row.result.decision == "fix"
+    assert [edit.file for edit in row.result.edits] == ["common/drv.c"]
+
+
+def test_misra_job_does_not_store_extra_files(tmp_path):
+    client, store, _ = make_service(tmp_path, fix_answer("no_fix"))
+    app, top = project_with_shared_code(tmp_path)
+    excel = workbook_bytes(
+        {"MISRA_Result": [MISRA_HEADER, misra_row(file=r"C:\proj\app\src\calc.c", line=4)]}
+    )
+
+    upload(
+        client,
+        excel,
+        top,
+        kind="misra",
+        choices=("misra:Mandatory", "misra:Required", "misra:Advisory"),
+    )
+
+    assert set(store.sources(1)) == {"app/src/calc.c"}

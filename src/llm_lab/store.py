@@ -272,6 +272,22 @@ class Store:
             sha256=found["sha256"],
         )
 
+    def sources(self, job_id: int) -> dict[str, SourceFile]:
+        """작업에 저장한 모든 파일 (이름 → 원문)."""
+        with self._db() as db:
+            found = db.execute("SELECT * FROM files WHERE job_id = ?", (job_id,)).fetchall()
+        return {
+            record["name"]: SourceFile(
+                name=record["name"],
+                text=record["text"],
+                encoding=record["encoding"],
+                newline=record["newline"],
+                bom=bool(record["bom"]),
+                sha256=record["sha256"],
+            )
+            for record in found
+        }
+
     def definitions(self, job_id: int) -> list[Definition]:
         """작업에 저장한 다른 곳의 정의. 이름·파일·줄 순서."""
         with self._db() as db:

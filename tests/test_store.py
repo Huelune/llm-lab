@@ -307,3 +307,15 @@ def test_job_without_definitions_has_an_empty_list(tmp_path):
     job_id = make_job(store, "pending")
 
     assert store.definitions(job_id) == []
+
+
+def test_sources_returns_every_file_of_a_job(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    other = decode_source("lib/drv.c", b"int drv;\n")
+    job_id = store.create_job(
+        "rte.xlsx", "RTE_Result", 0, [SOURCE, other], [NewRow(FINDING, "calc.c", "pending")]
+    )
+
+    assert set(store.sources(job_id)) == {"calc.c", "lib/drv.c"}
+    assert store.sources(job_id)["lib/drv.c"] == other
+    assert store.sources(job_id + 1) == {}

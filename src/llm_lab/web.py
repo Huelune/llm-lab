@@ -27,7 +27,7 @@ from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, Sheet, SheetError, read_sheet
-from llm_lab.sources import Match, load_from_folder
+from llm_lab.sources import DecodeError, Match, decode_source, load_from_folder
 from llm_lab.store import Job, NewRow, Row, Store, StoreError
 from llm_lab.worker import Worker, daemon_pool
 
@@ -182,6 +182,14 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         if sheet_kind.uses_definitions:
             found, unreadable = scan_folder(root)
             definitions = used_definitions(found, [source.text for source in files])
+            if sheet_kind.edits_definitions:
+                # 고칠 수 있게 보낼 정의가 든 파일의 원문도 작업에 저장한다(패치에 들어갈 수 있다)
+                known = {source.name for source in files}
+                for name in sorted({d.file for d in definitions} - known):
+                    try:
+                        files.append(decode_source(name, (root / name).read_bytes()))
+                    except DecodeError, OSError:
+                        continue
         data = sheet.prepared.data
         # 처리 방식 라디오 값은 "종류:방식"이다. 고른 종류의 것이 없으면 첫 방식이 기본값이다
         mode_label = ""
