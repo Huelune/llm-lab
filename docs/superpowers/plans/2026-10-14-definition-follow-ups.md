@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> 실행 중 결정(2026-10-14): 되물은 정의는 작업에 저장하지 않는다(스펙 6절). 아래 Task 5·6의 `add_definitions` 부분은 구현되지 않았다.
+
 **Goal:** LLM이 답의 `need` 칸에 보이지 않는 정의 이름을 적으면, 서버가 프로젝트에서 찾아 다음 메시지로 보내고 다시 판단하게 한다(RTE·MISRA·CodeMetrics, 묶음당 `LLM_FOLLOW_UPS`번까지).
 
 **Architecture:** 새 모듈 `llm_lab/followups.py`가 되묻기 규칙 글, 답 형식의 `need`, 프로젝트 색인(`ProjectIndex`, `IndexCache`), 이름 찾기(`find_asked` → `Asked`)를 맡는다. `fixer.propose_fixes`는 `ask` 콜백을 받아 대화를 잇고, `worker`가 콜백을 만들어 색인에서 찾고 보낸 정의·파일을 작업에 남기며 저장된 답 재사용 때 그 파일을 되살린다. `peek_logs`는 되묻기를 개수로 센다.
