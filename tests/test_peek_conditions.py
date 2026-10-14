@@ -199,6 +199,13 @@ def test_open_error_shows_only_its_kind(
         ("Data Flow Analysis", "Data Flow Analysis"),
         ("123456", "<숫자 6자리>"),
         ("i2c_init", "<글 8자>"),
+        # 표준 낱말로만 된 이름·경로도 이름이므로 길이만 찍는다
+        ("MAX_STACK_SIZE", "<글 14자>"),
+        ("check.value", "<글 11자>"),
+        ("stack.c", "<글 7자>"),
+        ("data/file", "<글 9자>"),
+        (r"C:\file", "<글 7자>"),
+        ("N/A", "N/A"),
         ("A project shall not contain unreachable code", "<글 44자>"),
         ("", ""),
     ],

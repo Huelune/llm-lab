@@ -52,6 +52,10 @@ VOCAB = frozenset(
     """.split()
 )
 SPLIT = re.compile(r"[\s,;:/\\()\[\]{}|=<>≤≥+\-*'\"._%#~!?&]+")
+# 표준 낱말로만 이어 붙인 식별자·파일 이름·경로 (MAX_STACK_SIZE, data.value, file.c, src/check).
+# 낱말 하나하나는 VOCAB에 있어도 이름이므로 찍지 않는다. N/A 같은 짧은 약어는 둔다
+CODE_LIKE = re.compile(r"_|\\|->|::|[A-Za-z]\.[A-Za-z]|[A-Za-z]/[A-Za-z]{2}|[A-Za-z]{2}/[A-Za-z]")
+RESULT_TAIL = re.compile(r"_Result$", re.I)
 
 
 def is_number(value: str) -> bool:
@@ -81,6 +85,8 @@ def safe(value: str) -> str:
         digits = sum(ch.isdigit() for ch in value.split(".")[0])
         return value if digits <= MAX_DIGITS else f"<숫자 {digits}자리>"
     words = [word for word in SPLIT.split(value) if word]
-    if words and all(allowed(word) for word in words):
+    # 결과 시트 이름 꼬리 _Result는 Polyspace 보고서의 정해진 글이다
+    shape = RESULT_TAIL.sub("", value)
+    if words and not CODE_LIKE.search(shape) and all(allowed(word) for word in words):
         return value
     return f"<글 {len(value)}자>"

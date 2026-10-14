@@ -1082,6 +1082,8 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     excel = rte_excel(
         rte_row("Orange Check"),
         rte_row("Red Check", file=r"C:\proj\src\secret_missing.c", check="secret_check_name"),
+        # 표준 낱말로만 된 이름도 이름이다 (기타 검사로 묶인다)
+        rte_row("Red Check", file=r"C:\proj\src\c.c", check="MAX_STACK_SIZE"),
         rte_row("Red Check", file=r"C:\proj\src\b.c", check="Rule 10.4 secret_rule_text"),
         rte_row("Gray Check"),
     )
@@ -1093,9 +1095,9 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     assert '<a href="/results/1/summary">요약 (캡처용)</a>' in client.get("/results/1").text
     for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):
         assert secret not in page.split("<main>", 1)[1].split("<script>", 1)[0]
-    # 대상별 판단: Red 2(확인 필요 2), Orange 1(수정 1), 합계 3
-    assert '<tr><td>Red</td><td class="num">2</td>' in page
-    assert '<tr><td>합계</td><td class="num">3</td>' in page
+    # 대상별 판단: Red 3(확인 필요 3), Orange 1(수정 1), 합계 4
+    assert '<tr><td>Red</td><td class="num">3</td>' in page
+    assert '<tr><td>합계</td><td class="num">4</td>' in page
     # 검사 종류: 표준 용어, 규칙 번호, 나머지는 기타 검사
     assert "<td>Division by zero</td>" in page
     assert "<td>Rule 10.4</td>" in page
