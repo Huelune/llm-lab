@@ -1,19 +1,22 @@
 # 다른 파일까지 고치는 RTE 수정안 설계
 
 - 작성일: 2026-10-14
-- 상태: 사용자 검토 대기
+- 상태: 승인됨 (2026-10-14). 검토에서 참고 폴더를 없애고 소스 폴더에 프로젝트 전체를 고르게 함
 - 바탕: `2026-10-13-definitions-context-design.md`(참고 정의). 여기 적지 않은 것은 그대로 따른다.
 
 ## 1. 배경과 목표
 
 참고 정의와 참고 폴더를 넣은 뒤에도 회사 PC의 RTE 결과는 대부분 "직접 수정"이었다. 이유는 "이 파일이 아니라 부르는 함수 쪽을 고쳐야 한다"였다. 지금은 수정이 검사가 걸린 파일의 번호 붙은 코드 안에서만 나올 수 있고, 붙인 정의는 참고용이라 LLM이 그쪽을 고칠 방법이 없다.
 
-목표: RTE 요청에 붙인 정의 가운데 **소스 폴더 안에 있는 것**은 LLM이 고칠 수 있게 한다. 그 수정은 결과 화면의 diff와 내려받는 패치에 함께 들어간다.
+목표: RTE 요청에 붙인 정의를 LLM이 고칠 수 있게 한다. 그 수정은 결과 화면의 diff와 내려받는 패치에 함께 들어간다.
+
+이를 위해 소스 폴더는 **프로젝트 전체**(부르는 함수와 헤더가 모두 든 최상위 폴더)를 고르게 하고, 2026-10-14에 넣은 "참고 폴더" 입력은 없앤다. 그러면 붙는 정의가 모두 패치 기준 폴더 안에 있어 "고칠 수 있음/참고만"을 나눌 필요가 없다. 엑셀의 파일 경로는 지금처럼 끝부분이 가장 길게 겹치는 파일과 짝짓는다. 매크로 별칭 따라가기는 그대로 둔다.
 
 ### 범위
 
 포함:
-- 소스 폴더 안 정의를 줄 번호와 함께 "고칠 수 있는 정의"로 보내기
+- 참고 폴더 입력·검사·메모와 그 스캔 옵션(`scan_folder`의 skip·prefix, `_reference_prefix`)을 없애고, 홈 화면 안내를 "프로젝트 전체 폴더"로 바꾸기
+- 정의를 줄 번호와 함께 "고칠 수 있는 정의"로 보내기
 - 답의 수정마다 파일을 적게 하고, 그 파일 안의 보여 준 줄에서 찾아 적용하기
 - 고칠 수 있는 정의가 든 파일을 작업에 저장하기
 - 결과 화면 diff, 충돌 검사, 패치에 여러 파일 반영
@@ -21,14 +24,14 @@
 - RTE 두 처리 방식의 지시문
 
 제외:
-- 참고 폴더(소스 폴더 밖)의 정의 고치기. 패치 기준 폴더가 소스 폴더라서 그 밖은 패치에 넣을 수 없다. 지금처럼 참고만 한다.
+- 프로젝트 밖(설치된 SDK 등)의 코드. 필요해지면 다시 더한다.
 - 호출자 코드 보내기(이 함수를 부르는 쪽). 다음 차례로 둔다.
 - MISRA·CodeMetrics. MISRA 위반은 그 줄에서 고치는 것이 맞고, CodeMetrics는 함수 하나를 나누는 일이다.
 
 ## 2. 동작 개요
 
-1. 작업을 만들 때, 저장하는 정의 가운데 소스 폴더 안 파일(이름이 `../`로 시작하지 않는 것)의 원문을 작업의 파일 목록에 함께 저장한다. 분석 대상 파일은 이미 저장된다.
-2. RTE 요청의 정의 절에서 그런 정의는 "고칠 수 있음"으로 표시하고 원래 파일의 줄 번호를 붙여 보낸다. 참고 폴더의 정의는 지금처럼 번호 없이 "참고만"으로 보낸다.
+1. 작업을 만들 때, 저장하는 정의가 든 파일의 원문을 작업의 파일 목록에 함께 저장한다. 분석 대상 파일은 이미 저장된다.
+2. RTE 요청의 정의 절에서 정의마다 원래 파일의 줄 번호를 붙여 보낸다. 원문이 작업에 없는 정의(예전 작업)는 지금처럼 번호 없이 참고로만 보낸다.
 3. 답의 `edits` 항목마다 `file`을 받는다. `""`은 검사가 걸린 파일이고, 그 밖에는 고칠 수 있는 정의의 파일 이름이다.
 4. 다른 파일의 수정은 그 파일에서 **보여 준 정의의 줄 범위** 안에서만 찾는다. 범위 밖이거나 고칠 수 없는 파일을 적으면 지금처럼 LLM에 다시 묻는다.
 5. 결과의 diff는 파일마다 이어 붙이고, 패치는 파일마다 만든다.
@@ -43,7 +46,7 @@
 ## 4. 요청
 
 - `Kind.edits_definitions: bool = False`. RTE만 `True`다.
-- `make_request`는 `edits_definitions`인 종류에서 고른 정의 가운데 소스 폴더 안의 것을 "고칠 수 있음"으로 표시한다. 그 정의의 파일 원문이 작업에 없으면 참고만으로 보낸다.
+- `make_request`는 `edits_definitions`인 종류에서, 파일 원문이 작업에 있는 정의를 "고칠 수 있음"으로 표시한다. 원문이 없으면 참고만으로 보낸다(예전 작업).
 - 정의 절의 모양:
 
 ```text
@@ -57,7 +60,7 @@ Definitions from other places. Those marked editable may be changed; set "file" 
 ```
 
 ```c
-// reference only: ../common/api.h line 3
+// reference only: inc/api.h line 3
 #define api_read(x) drv_read(x)
 ```
 ```
@@ -75,7 +78,7 @@ Definitions from other places. Those marked editable may be changed; set "file" 
 
 공통으로 정의 단락을 바꾼다.
 
-> Definitions from other places may follow the code. Those marked editable are in this project's source folder: when the real cause is there (for example a called function can return a value the caller cannot handle), fix it there and set "file" to that path. A change there affects every caller, so keep the behavior for valid inputs. Definitions marked reference only cannot be changed.
+> Definitions from other places may follow the code. Those marked editable may be changed: when the real cause is there (for example a called function can return a value the caller cannot handle), fix it there and set "file" to that path. A change there affects every caller, so keep the behavior for valid inputs. Definitions marked reference only cannot be changed.
 
 - 가드 허용: 원인이 고칠 수 있는 정의에 있으면 그곳을 고치고, 그것이 위험하거나 원인이 참고만인 정의·호출자에 있으면 이 자리에 가드를 넣는다.
 - 근본 원인만: 원인이 고칠 수 있는 정의에 있으면 그곳을 고친다. 원인이 참고만인 정의나 호출자에 있을 때만 manual이다.
@@ -90,7 +93,8 @@ Definitions from other places. Those marked editable may be changed; set "file" 
 
 ## 8. 테스트
 
-- 고칠 수 있는 정의가 번호와 함께, 참고 폴더 정의는 번호 없이 보내지는지
+- 고칠 수 있는 정의가 번호와 함께, 원문이 없는 정의는 번호 없이 보내지는지
+- 홈 화면에 참고 폴더 칸이 없고, 안내가 프로젝트 전체 폴더를 말하는지
 - 다른 파일 수정이 그 파일의 보여 준 범위에서만 찾아지는지, 범위 밖·없는 파일은 다시 묻는지
 - diff에 두 파일이 다 나오는지, 패치에 두 파일이 다 들어가고 `git apply --check`가 통과하는지
 - 같은 함수를 두 행이 똑같이 고치면 하나로 합쳐지고, 다르게 고치면 충돌인지
