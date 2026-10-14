@@ -180,6 +180,9 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
     def defined(name: str, file: str, first: int, last: int) -> Definition:
         return Definition(name, "function", file, first, last, "int x;")
 
+    root = tmp_path / "secret_proj"
+    (root / "lib").mkdir(parents=True)
+    (root / "lib" / "secret_lib.h").write_text("#define SECRET_WRAP(x) secret_missing(x)\n")
     store = Store(tmp_path / "fixer.db")
     store.create_job(
         "secret.xlsx",
@@ -187,6 +190,7 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
         0,
         [],
         [NewRow(finding(), None, "no_source")],
+        source_root=str(root),
         kind="rte",
         definitions=[
             defined("secret_api", "gen/Rte_secret.c", 1, 4),  # EDITABLE로 보냄
@@ -194,7 +198,8 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
             defined("secret_func", "secret_file.c", 1, 4),  # 보낸 코드 안
         ],
     )
-    calls = CODE.replace("(void)", "(void) { return secret_missing(); }")
+    calls = CODE.replace("(void)", "(void) { return secret_missing() + secret_gone(); }")
+    local = CODE.replace("(void)", "(void) { int secret_local = 1; }")
     logs = tmp_path / "logs"
     log(
         logs, 1, 2, HEAD + CODE + EDITABLE, answer("manual", reason="secret_deep의 구현을 고칩니다")
@@ -203,13 +208,26 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
     log(logs, 1, 4, HEAD + CODE + EDITABLE, answer("manual", reason="secret_api를 봐야 합니다"))
     log(logs, 1, 5, HEAD + CODE, answer("manual", reason="secret_func 안의 값이 문제"))
     log(logs, 1, 6, HEAD + CODE, answer("manual", reason="값을 정해야 합니다"))
-    log(logs, 1, 7, HEAD + CODE, answer("fix"))
+    log(logs, 1, 7, HEAD + local, answer("manual", reason="secret_local이 0일 수 있습니다"))
+    log(logs, 1, 8, HEAD + calls, answer("manual", reason="secret_gone 구현이 없습니다"))
+    log(logs, 1, 9, HEAD + CODE, answer("fix"))
 
     found = dict(peek.reason_counts(peek.read_logs(logs, 1), store.definitions(1)))
 
-    assert found == {"cut": 1, "missing": 1, "sent": 2, "none": 1}
-    screen = "\n".join(peek.summarize(logs, db=tmp_path / "fixer.db"))
+    assert found == {"cut": 1, "missing_call": 2, "missing_other": 1, "sent": 2, "none": 1}
+    out = tmp_path / "out"
+    screen = "\n".join(peek.summarize(logs, db=tmp_path / "fixer.db", detail=out))
     assert "저장됐지만 요청에 안 붙은 정의" in screen
-    assert "정의가 상한(40개)까지 붙은 묶음: 0 / 6, 직접 수정이 나온 묶음: 5" in screen
+    assert "정의가 상한(40개)까지 붙은 묶음: 0 / 8, 직접 수정이 나온 묶음: 7" in screen
+    assert (
+        "정의를 못 찾은 호출 이름 2개: 다른 파일에 글자가 있음 1개, 프로젝트 어디에도 없음 1개"
+        in screen
+    )
+    assert "%TEMP%\\peek_logs_job1.txt" in screen
     assert "secret" not in screen.casefold()
     assert len(screen.splitlines()) <= 40
+    assert max(len(line) for line in screen.splitlines()) <= 118
+    # 자세한 목록은 회사 PC의 임시 폴더에만 쓴다: 이유 원문과 이름이 찾은 자리
+    detail = (out / "peek_logs_job1.txt").read_text(encoding="utf-8-sig")
+    assert "secret_gone 구현이 없습니다" in detail
+    assert "lib/secret_lib.h:1:" in detail

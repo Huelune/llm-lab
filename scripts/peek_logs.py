@@ -6,7 +6,8 @@
 이름에 그 글자가 든 것을 따로 센다(대소문자 무시).
 
 화면은 캡처해서 회사 밖(Claude)으로 보낸다. 그래서 개수와 정해 둔 글만 찍는다. 파일·함수 이름, 경로,
-코드, LLM이 쓴 이유, 패턴 글자, 오류 원문은 찍지 않는다. 임시 파일도 쓰지 않는다.
+코드, LLM이 쓴 이유, 패턴 글자, 오류 원문은 찍지 않는다. 직접 수정 이유의 원문과 이름이 나오는
+자리는 임시 폴더의 peek_logs_jobN.txt에만 쓴다. 그 파일은 회사 PC에서만 본다.
 """
 
 from __future__ import annotations
@@ -17,12 +18,15 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 from collections import Counter
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
-from llm_lab.csource import MAX_DEFINITIONS, Definition, identifiers
-from llm_lab.store import Store
+from llm_lab.csource import MAX_DEFINITIONS, SOURCE_SUFFIXES, Definition, identifiers
+from llm_lab.sources import DecodeError, decode_source
+from llm_lab.store import Job, Store
 
 LOG_NAME = re.compile(r"_job(\d+)_row\d+(?:-\d+)?\.md$")
 FENCE = re.compile(r"^(`{3,})[^\n`]*\n(.*?)\n\1$", re.S | re.M)
@@ -45,6 +49,11 @@ def _first_fence(text: str) -> str | None:
 
 def read_logs(folder: Path, job: int) -> list[tuple[str, dict]]:
     """작업의 묶음마다 (마지막으로 보낸 사용자 메시지, 받은 답 JSON). 못 읽은 기록은 뺀다."""
+    return [(user, answer) for _, user, answer in read_log_files(folder, job)]
+
+
+def read_log_files(folder: Path, job: int) -> list[tuple[Path, str, dict]]:
+    """read_logs와 같고, 기록 파일 경로를 앞에 붙인다."""
     found = []
     for path in sorted(folder.glob(f"*_job{job}_row*.md")):
         if not LOG_NAME.search(path.name):
@@ -62,7 +71,7 @@ def read_logs(folder: Path, job: int) -> list[tuple[str, dict]]:
         except json.JSONDecodeError:
             continue
         if user is not None and isinstance(answer, dict):
-            found.append((user, answer))
+            found.append((path, user, answer))
     return found
 
 
@@ -157,45 +166,137 @@ def _sent(user: str, shown: re.Match[str] | None, definition: Definition) -> boo
     return f" {definition.file} {_where(definition)}\n" in user
 
 
-def reason_counts(
-    logs: list[tuple[str, dict]], definitions: list[Definition]
-) -> list[tuple[str, int]]:
-    """직접 수정 판단마다 이유가 짚은 코드 이름을 센다. 한 판단이 여러 칸에 들 수 있다.
+@dataclass
+class Reason:
+    """직접 수정 판단 하나: 칸들과, 정의를 못 찾은 호출 이름."""
 
-    cut: 작업에 정의가 저장됐지만 요청에 안 붙은 이름 / missing: 보낸 코드에 쓰였지만 저장된 정의가
-    없는 이름 / sent: 짚은 이름이 모두 요청에 있었다 / none: 코드 이름을 짚지 않았다.
+    group: int  # logs 안의 순서
+    number: object  # 묶음 안 판단 번호
+    checked: str  # 검사 파일 (보낸 코드의 파일 이름)
+    text: str
+    kinds: set[str] = field(default_factory=set)
+    calls: set[str] = field(default_factory=set)
+
+
+def manual_reasons(logs: list[tuple[str, dict]], definitions: list[Definition]) -> list[Reason]:
+    """직접 수정 판단마다 이유가 짚은 코드 이름을 나눈다. 한 판단이 여러 칸에 들 수 있다.
+
+    cut: 작업에 정의가 저장됐지만 요청에 안 붙은 이름 / missing_call: 보낸 코드에서 불렀지만 저장된
+    정의가 없는 이름 / missing_other: 그 밖에 정의가 없는 이름(지역 변수·매개변수·멤버 등) /
+    sent: 짚은 이름이 모두 요청에 있었다 / none: 코드 이름을 짚지 않았다.
     """
     stored: dict[str, list[Definition]] = {}
     for definition in definitions:
         if definition.kind not in ("caller", "caller_ref"):
             stored.setdefault(definition.name, []).append(definition)
-    counts: Counter[str] = Counter()
-    for user, answer in logs:
+    found: list[Reason] = []
+    for group, (user, answer) in enumerate(logs):
         items = answer.get("findings") if isinstance(answer.get("findings"), list) else []
-        code = set(identifiers("\n".join(CODE_BLOCK.findall(user))))
-        sent = partial(_sent, user, CODE_RANGE.search(user))
-
+        code_text = "\n".join(CODE_BLOCK.findall(user))
+        code = set(identifiers(code_text))
+        shown = CODE_RANGE.search(user)
+        sent = partial(_sent, user, shown)
         for item in items:
             if not isinstance(item, dict) or item.get("decision") != "manual":
                 continue
-            reason = item.get("reason") if isinstance(item.get("reason"), str) else ""
-            named = {name for name in WORD.findall(reason) if name in stored or name in code}
+            text = item.get("reason") if isinstance(item.get("reason"), str) else ""
+            reason = Reason(group, item.get("number"), shown.group(3) if shown else "", text)
+            found.append(reason)
+            named = {name for name in WORD.findall(text) if name in stored or name in code}
             if not named:
-                counts["none"] += 1
+                reason.kinds.add("none")
                 continue
             unsent = {n for n in named if n in stored and not any(map(sent, stored[n]))}
-            counts["cut"] += bool(unsent)
-            counts["missing"] += any(name not in stored for name in named)
-            counts["sent"] += all(name in stored for name in named) and not unsent
-    return [(key, counts[key]) for key in ("cut", "missing", "sent", "none")]
+            missing = {name for name in named if name not in stored}
+            reason.calls = {
+                name for name in missing if re.search(rf"\b{re.escape(name)}\s*\(", code_text)
+            }
+            if unsent:
+                reason.kinds.add("cut")
+            if reason.calls:
+                reason.kinds.add("missing_call")
+            if missing - reason.calls:
+                reason.kinds.add("missing_other")
+            if not unsent and not missing:
+                reason.kinds.add("sent")
+    return found
 
 
 REASON_LABELS = {
     "cut": "저장됐지만 요청에 안 붙은 정의",
-    "missing": "프로젝트에서 정의를 못 찾은 이름",
+    "missing_call": "정의를 못 찾은 호출 함수",
+    "missing_other": "그 밖의 못 찾은 이름(변수 등)",
     "sent": "짚은 이름이 모두 요청에 있었음",
     "none": "코드 이름을 짚지 않음",
 }
+
+
+def reason_counts(
+    logs: list[tuple[str, dict]], definitions: list[Definition]
+) -> list[tuple[str, int]]:
+    counts = Counter(kind for reason in manual_reasons(logs, definitions) for kind in reason.kinds)
+    return [(key, counts[key]) for key in REASON_LABELS]
+
+
+def project_texts(root: Path) -> dict[str, str]:
+    """root 아래 읽히는 .c·.h의 원문 (소스 폴더 기준 상대 경로 → 글). 점 폴더는 건너뛴다."""
+    texts: dict[str, str] = {}
+    for folder, dirs, files in os.walk(root):
+        dirs[:] = sorted(name for name in dirs if not name.startswith("."))
+        for name in sorted(files):
+            if Path(name).suffix.casefold() not in SOURCE_SUFFIXES:
+                continue
+            path = Path(folder, name)
+            try:
+                source = decode_source(name, path.read_bytes())
+            except DecodeError, OSError:
+                continue
+            texts[path.relative_to(root).as_posix()] = source.text
+    return texts
+
+
+def places(name: str, texts: dict[str, str], checked: set[str]) -> list[str]:
+    """이름이 글자로 나오는 자리 "파일:줄: 원문", 검사 파일이 아닌 곳만, 3개까지."""
+    word = re.compile(rf"\b{re.escape(name)}\b")
+    found = []
+    for file, text in texts.items():
+        if file in checked:
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            if word.search(line):
+                found.append(f"{file}:{number}: {line.strip()[:160]}")
+                if len(found) >= 3:
+                    return found
+    return found
+
+
+def write_detail(
+    path: Path,
+    job: int,
+    logs: list[tuple[str, dict]],
+    names: list[str],
+    reasons: list[Reason],
+    texts: dict[str, str] | None,
+) -> None:
+    """직접 수정 판단의 이유 원문과, 정의를 못 찾은 호출 이름이 나오는 자리. 회사 PC에서만 본다."""
+    lines = [
+        f"작업 {job} 직접 수정 판단 {len(reasons)}개 - 회사 PC에서만 보고 밖으로 보내지 않습니다.",
+        "",
+    ]
+    for reason in reasons:
+        kinds = ", ".join(REASON_LABELS[k] for k in REASON_LABELS if k in reason.kinds)
+        lines += [
+            f"[{kinds}] {names[reason.group]} 판단 {reason.number}",
+            f"  이유: {reason.text}",
+        ]
+        for call in sorted(reason.calls):
+            lines.append(f"  정의를 못 찾은 호출: {call}")
+            if texts is not None:
+                spots = places(call, texts, {reason.checked})
+                lines += [f"    {spot}" for spot in spots] or ["    프로젝트 어디에도 없음"]
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8-sig")
 
 
 LABELS = {
@@ -221,8 +322,45 @@ def newest_db_job(db: Path | None) -> int | None:
     return found[0] if found and found[0] is not None else None
 
 
+def _reason_lines(
+    folder: Path,
+    job: int,
+    logs: list[tuple[str, dict]],
+    stored: Job,
+    store: Store,
+    detail: Path | None,
+) -> list[str]:
+    reasons = manual_reasons(logs, store.definitions(job))
+    counts = Counter(kind for reason in reasons for kind in reason.kinds)
+    lines = [f"  {REASON_LABELS[key]:<28}{counts[key]:>6}" for key in REASON_LABELS]
+    root = Path(stored.source_root) if stored.source_root else None
+    texts = project_texts(root) if root and root.is_dir() else None
+    calls: dict[str, set[str]] = {}
+    for reason in reasons:
+        for call in reason.calls:
+            calls.setdefault(call, set()).add(reason.checked)
+    if texts is None:
+        lines.append("소스 폴더를 찾지 못해 호출 이름을 프로젝트에서 찾지 않았습니다.")
+    else:
+        elsewhere = sum(1 for call, checked in calls.items() if places(call, texts, checked))
+        lines.append(
+            f"정의를 못 찾은 호출 이름 {len(calls)}개: 다른 파일에 글자가 있음 {elsewhere}개, "
+            f"프로젝트 어디에도 없음 {len(calls) - elsewhere}개"
+        )
+    if detail is not None and reasons:
+        name = f"peek_logs_job{job}.txt"
+        names = [path.name for path, _, _ in read_log_files(folder, job)]
+        write_detail(detail / name, job, logs, names, reasons, texts)
+        lines.append(f"자세한 목록(회사 PC에서만 보기): %TEMP%\\{name}")
+    return lines
+
+
 def summarize(
-    folder: Path, job: int | None = None, pattern: str | None = None, db: Path | None = None
+    folder: Path,
+    job: int | None = None,
+    pattern: str | None = None,
+    db: Path | None = None,
+    detail: Path | None = None,
 ) -> list[str]:
     if job is None:
         # 작업 DB의 최근 작업을 먼저 본다. 기록 파일만 보면 기록이 없는 최근 작업을 건너뛴다
@@ -262,13 +400,13 @@ def summarize(
             continue
         lines.append(f"  {LABELS[key]:<28}{count:>6}")
     lines += ["", "직접 수정 이유가 짚은 이름 (한 행이 여러 줄에 들 수 있음):"]
-    if db is not None and db.is_file() and Store(db).job(job) is not None:
-        for key, count in reason_counts(logs, Store(db).definitions(job)):
-            lines.append(f"  {REASON_LABELS[key]:<28}{count:>6}")
-    else:
+    stored = Store(db).job(job) if db is not None and db.is_file() else None
+    if stored is None:
         lines.append(
             "  작업 DB에 이 작업이 없어 세지 않았습니다. 서버와 같은 --profile을 붙이세요."
         )
+    else:
+        lines += _reason_lines(folder, job, logs, stored, Store(db), detail)
     rows, matched = other_file_fixes(logs, pattern)
     lines += ["", f"다른 파일을 고친 수정 행: {rows}"]
     if pattern:
@@ -290,7 +428,8 @@ def main() -> int:
     data = Path("private") / (args.profile or "")
     folder = data / "llm-logs"
     try:
-        screen = summarize(folder, args.job, args.pattern, data / "fixer.db")
+        temp = Path(os.environ.get("TEMP") or tempfile.gettempdir())
+        screen = summarize(folder, args.job, args.pattern, data / "fixer.db", temp)
     except Exception as exc:
         clear_screen()
         print(f"요약하지 못했습니다: {type(exc).__name__}")
