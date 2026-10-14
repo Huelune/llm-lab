@@ -26,7 +26,7 @@ from llm_lab.config import ConfigError, load_settings
 from llm_lab.csource import callers_for, enclosing_function, scan_project, used_definitions
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
-from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page
+from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page, summary_page
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, Sheet, SheetError, read_sheet
 from llm_lab.sources import DecodeError, Match, decode_source, load_from_folder
@@ -246,6 +246,10 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         return job_page(job, rows, _base(job, rows))
+
+    @app.get("/results/{job_id}/summary", response_class=HTMLResponse)
+    def job_summary(job_id: int) -> str:
+        return summary_page(job_or_404(job_id), store.rows(job_id))
 
     @app.post("/results/{job_id}/fixes.patch")
     def download_patch(job_id: int, row: Annotated[list[int] | None, Form()] = None) -> Response:

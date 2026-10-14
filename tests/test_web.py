@@ -1074,3 +1074,38 @@ def test_name_used_without_a_call_is_stored_but_not_counted_as_a_fragment(tmp_pa
         "without a call in 1 place (possibly function pointers)"
         in (sent[0]["messages"][1]["content"])
     )
+
+
+def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
+    # 회사 밖으로 캡처해 보내는 화면: 이름·경로·코드·이유 글 없이 숫자와 표준 용어만
+    client, _, _ = make_service(tmp_path, fix_answer())
+    excel = rte_excel(
+        rte_row("Orange Check"),
+        rte_row("Red Check", file=r"C:\proj\src\secret_missing.c", check="secret_check_name"),
+        rte_row("Red Check", file=r"C:\proj\src\b.c", check="Rule 10.4 secret_rule_text"),
+        rte_row("Gray Check"),
+    )
+    upload(client, excel, source_folder(tmp_path))
+
+    page = client.get("/results/1/summary").text
+
+    assert "<title>작업 1 요약 · Polyspace 수정 제안</title>" in page
+    assert '<a href="/results/1/summary">요약 (캡처용)</a>' in client.get("/results/1").text
+    for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):
+        assert secret not in page.split("<main>", 1)[1].split("<script>", 1)[0]
+    # 대상별 판단: Red 2(확인 필요 2), Orange 1(수정 1), 합계 3
+    assert '<tr><td>Red</td><td class="num">2</td>' in page
+    assert '<tr><td>합계</td><td class="num">3</td>' in page
+    # 검사 종류: 표준 용어, 규칙 번호, 나머지는 기타 검사
+    assert "<td>Division by zero</td>" in page
+    assert "<td>Rule 10.4</td>" in page
+    assert "<td>기타 검사</td>" in page
+    assert '<tr><td>제외한 행</td><td class="num">1</td></tr>' in page
+    assert '<tr><td>수정 모두 선택이 고르는 수정</td><td class="num">1</td></tr>' in page
+    assert "data-refresh=" not in page
+
+
+def test_summary_page_of_a_missing_job_is_404(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    assert client.get("/results/9/summary").status_code == 404
