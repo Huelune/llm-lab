@@ -439,10 +439,30 @@ def test_rte_sends_definitions_with_stored_files_as_editable_numbered_code():
 def test_definitions_without_a_stored_file_stay_reference_only():
     # 예전 작업: 정의 파일 원문이 작업에 없다
     request = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {})
+    unset = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], None)
 
     content = request.messages[1]["content"]
-    assert "// reference only: lib/drv.c lines 1-4\nint drv_scale(int v)" in content
-    assert "editable:" not in content and request.files == {}
+    assert "for reference only" in content
+    assert "```c\n// lib/drv.c lines 1-4\nint drv_scale(int v)" in content
+    assert "editable" not in content and "reference only:" not in content
+    assert request.files == {}
+    # 예전 작업은 files가 없어도 {}여도 같은 메시지와 같은 캐시 키다
+    assert request.messages == unset.messages
+    assert cache_key(MODEL, request) == cache_key(MODEL, unset)
+
+
+def test_reference_only_label_appears_only_next_to_an_editable_definition():
+    other = Definition("other_val", "variable", "lib/other.c", 1, 1, "int other_val;")
+    source = decode_source(
+        "src/calc.c", b"int divide(int a, int b)\n{\n    return a / drv_scale(other_val);\n}\n"
+    )
+    request = make_request(
+        RTE, [finding(line=3)], source, None, [DRV_DEF, other], {"lib/drv.c": DRV}
+    )
+
+    content = request.messages[1]["content"]
+    assert "// reference only: lib/other.c line 1\nint other_val;" in content
+    assert "// editable: lib/drv.c lines 1-4" in content
 
 
 def test_misra_never_marks_definitions_editable():
@@ -556,3 +576,58 @@ def test_editable_file_contents_are_part_of_the_cache_key():
     b = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": changed})
 
     assert cache_key(MODEL, a) != cache_key(MODEL, b)
+
+
+HELPER_TEXT = "int helper(int v)\n{\n    v = v - 1;\n    return v;\n}"
+HELPER = Definition("helper", "function", "src/calc.c", 1, 5, HELPER_TEXT)
+TAIL = "int divide(int a, int b)\n{\n    v = v - 1;\n    return a / helper(b);\n}\n"
+LONG_TEXT = HELPER_TEXT + "\n" + "\n" * 2100 + TAIL
+LONG_SOURCE = decode_source("src/calc.c", LONG_TEXT.encode())
+
+
+def ask_long(fix):
+    # 2000줄이 넘어 divide만 보내고, 같은 파일의 helper는 정의로 붙는다. 같은 줄이 양쪽에 있다
+    handler, _ = scripted(answer(("fix", REASON), edits=[fix]))
+    line = LONG_TEXT.count("\n", 0, LONG_TEXT.index("return a / helper")) + 1
+    files = {"src/calc.c": LONG_SOURCE}
+    request = make_request(RTE, [finding(line=line)], LONG_SOURCE, None, [HELPER], files)
+    assert (request.first, request.last) != (1, len(LONG_TEXT.split("\n")))
+    (result,) = propose_fixes(make_client(handler), MODEL, request)
+    return result
+
+
+def test_checked_file_edit_found_in_the_sent_function_does_not_go_to_its_definition():
+    fix = {"file": "", "original": "    v = v - 1;", "replacement": "    v = v - 2;"}
+
+    (edit,) = ask_long(fix).edits
+
+    assert edit.file == "" and edit.start == LONG_TEXT.rindex("    v = v - 1;")
+
+
+def test_checked_file_edit_only_in_its_definition_is_found_there():
+    fix = {"file": "src/calc.c", "original": "    return v;", "replacement": "    return v + 1;"}
+
+    (edit,) = ask_long(fix).edits
+
+    assert edit.file == "" and edit.start == LONG_TEXT.index("    return v;")
+
+
+def test_stored_copy_of_the_checked_file_does_not_replace_the_sent_source():
+    # 작업에 저장된 원문이 보낸 원문과 달라도 검사 파일은 보낸 원문 기준이다
+    stale = decode_source(
+        "src/calc.c", LONG_TEXT.replace(TAIL, TAIL.replace("v - 1", "v - 3")).encode()
+    )
+    handler, _ = scripted(
+        answer(
+            ("fix", REASON),
+            edits=[{"file": "", "original": "    v = v - 1;", "replacement": "    v = 0;"}],
+        )
+    )
+    line = LONG_TEXT.count("\n", 0, LONG_TEXT.index("return a / helper")) + 1
+    request = make_request(
+        RTE, [finding(line=line)], LONG_SOURCE, None, [HELPER], {"src/calc.c": stale}
+    )
+
+    (result,) = propose_fixes(make_client(handler), MODEL, request)
+
+    assert result.edits[0].start == LONG_TEXT.rindex("    v = v - 1;")

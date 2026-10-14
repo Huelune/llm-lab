@@ -388,13 +388,12 @@ def definitions_block(
     """코드 뒤에 붙이는 다른 곳의 정의 절.
 
     editable에 원문이 있는 파일의 정의는 줄 번호를 붙여 고칠 수 있게 보내고, 나머지는 번호 없이
-    참고로만 보낸다 (editable을 준 종류는 "reference only" 라벨을 붙인다). None이면 모두 라벨 없이
-    참고만이다.
+    참고로만 보낸다. 고칠 수 있는 정의가 하나도 없으면 예전과 같은 참고용 절이다 (라벨 없음).
     """
     if not definitions:
         return ""
-    labelled = editable is not None
     editable = editable or {}
+    labelled = any(definition.file in editable for definition in definitions)
     parts = []
     for definition in definitions:
         where = (
@@ -412,7 +411,7 @@ def definitions_block(
         if last < definition.last:
             body += f"\n... ({definition.last - last} more lines, not editable)"
         parts.append(f"```c\n// editable: {definition.file} {where}\n{body}\n```")
-    if not any(definition.file in editable for definition in definitions):
+    if not labelled:
         heading = (
             "\n\nDefinitions from other places, for reference only. "
             "Edits must stay in the numbered code above.\n\n"
@@ -489,13 +488,11 @@ def make_request(
     editable: dict[str, SourceFile] = {}
     if kind.edits_definitions and files:
         editable = {d.file: files[d.file] for d in picked if d.file in files}
-    # 고칠 수 없는 종류나 files를 주지 않은 호출은 None: 정의를 라벨 없이 참고로만 붙인다
-    shown = editable if kind.edits_definitions and files is not None else None
     messages = [
         {"role": "system", "content": kind.prompt(context)},
         {
             "role": "user",
-            "content": build_prompt(kind, findings, source, first, last, context, picked, shown),
+            "content": build_prompt(kind, findings, source, first, last, context, picked, editable),
         },
     ]
     return Request(kind, list(findings), source, first, last, context, messages, picked, editable)
@@ -631,38 +628,45 @@ def edits_results(data: dict[str, Any], request: Request) -> list[FixResult]:
     return share(decisions, edits, diff)
 
 
-def _ranges(request: Request, target: str) -> list[tuple[int, int]]:
-    """target 파일에서 수정을 찾을 줄 범위들: 검사 파일은 보낸 범위, 그리고 고칠 수 있는 정의."""
-    ranges = [(request.first, request.last)] if target == request.source.name else []
+def _ranges(request: Request, target: str) -> list[list[tuple[int, int]]]:
+    """target 파일에서 수정을 찾을 줄 범위를 먼저 볼 순서대로 묶은 것.
+
+    검사 파일은 보낸 범위를 먼저 보고, 거기 없을 때만 고칠 수 있게 보낸 같은 파일의 정의를 본다.
+    """
+    tiers = [[(request.first, request.last)]] if target == request.source.name else []
     if target in request.files:
-        ranges += [(d.first, _shown_last(d)) for d in request.definitions if d.file == target]
-    return ranges
+        tiers.append([(d.first, _shown_last(d)) for d in request.definitions if d.file == target])
+    return tiers
 
 
 def _locate_one(
     text: str,
-    ranges: list[tuple[int, int]],
+    tiers: list[list[tuple[int, int]]],
     raw: dict[str, str],
     line: int | None,
     number: int,
     name: str,
 ) -> tuple[Edit, ...]:
-    """수정 하나를 범위들 가운데 정확히 한 곳에서 찾는다."""
-    found: list[tuple[Edit, ...]] = []
+    """수정 하나를 앞선 묶음부터 찾아, 처음 찾은 묶음의 정확히 한 곳에서 고른다."""
     errors: list[EditMismatch] = []
-    for first, last in ranges:
-        try:
-            found.append(locate_edits(text, first, last, [raw], line))
-        except EditMismatch as exc:
-            errors.append(exc)
-    unique = list(dict.fromkeys(found))
-    if len(unique) == 1:
-        return unique[0]
-    if not unique and len(ranges) == 1:
+    for ranges in tiers:
+        found: list[tuple[Edit, ...]] = []
+        for first, last in ranges:
+            try:
+                found.append(locate_edits(text, first, last, [raw], line))
+            except EditMismatch as exc:
+                errors.append(exc)
+        unique = list(dict.fromkeys(found))
+        if len(unique) == 1:
+            return unique[0]
+        if unique:
+            raise EditMismatch(
+                f"edits[{number}].original을 {name}의 보여 준 코드에서 여러 곳에 나옴"
+            )
+    if len(errors) == 1:
         # 범위가 하나면 찾는 쪽의 설명을 그대로 쓴다 (번호만 이 수정의 번호로)
         raise EditMismatch(str(errors[0]).replace("edits[1]", f"edits[{number}]", 1))
-    where = "찾을 수 없음" if not unique else "여러 곳에 나옴"
-    raise EditMismatch(f"edits[{number}].original을 {name}의 보여 준 코드에서 {where}")
+    raise EditMismatch(f"edits[{number}].original을 {name}의 보여 준 코드에서 찾을 수 없음")
 
 
 def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
@@ -679,7 +683,7 @@ def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], 
         )
     ):
         raise EditMismatch("fix인데 edits가 비었거나 형식이 다름", "format")
-    texts = {source.name: source, **request.files}
+    texts = {**request.files, source.name: source}
     by_target: dict[str, list[Edit]] = {}
     for number, raw in enumerate(raw_edits, start=1):
         target = raw.get("file") or source.name
