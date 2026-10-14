@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
 from llm_lab.csource import callers_for, enclosing_function, scan_project, used_definitions
+from llm_lab.export import export_workbook
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page, summary_page
@@ -246,6 +247,15 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         return job_page(job, rows, _base(job, rows))
+
+    @app.get("/results/{job_id}/results.xlsx")
+    def export_excel(job_id: int) -> Response:
+        job = job_or_404(job_id)
+        return Response(
+            export_workbook(job, store.rows(job_id)),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="job{job_id}-results.xlsx"'},
+        )
 
     @app.get("/results/{job_id}/summary", response_class=HTMLResponse)
     def job_summary(job_id: int) -> str:

@@ -875,7 +875,8 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
         f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
-        + f' · <a href="/results/{job.id}/summary">요약 (캡처용)</a></p>'
+        + f' · <a href="/results/{job.id}/summary">요약 (캡처용)</a>'
+        f' · <a href="/results/{job.id}/results.xlsx">엑셀로 내보내기</a></p>'
     )
     if job.note:
         body += f'<p class="sub">{escape(job.note)}</p>'

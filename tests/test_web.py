@@ -1,3 +1,4 @@
+import io
 import json
 import socket
 import sqlite3
@@ -9,6 +10,7 @@ from pathlib import Path
 from fake_llm import MODEL, error, make_client, scripted
 from fastapi.testclient import TestClient
 from misra_fixtures import CONDITION_ROWS, MISRA_HEADER, misra_row
+from openpyxl import load_workbook
 from rte_fixtures import (
     CALC_C,
     DIVIDE_FIX,
@@ -1114,3 +1116,37 @@ def test_summary_page_of_a_missing_job_is_404(tmp_path):
     client, _, _ = make_service(tmp_path)
 
     assert client.get("/results/9/summary").status_code == 404
+
+
+def test_results_export_to_excel_one_line_per_row(tmp_path):
+    client, _, _ = make_service(tmp_path, fix_answer())
+    upload(client, EXCEL, source_folder(tmp_path))
+
+    assert 'href="/results/1/results.xlsx">엑셀로 내보내기' in client.get("/results/1").text
+    response = client.get("/results/1/results.xlsx")
+
+    assert response.status_code == 200
+    assert 'filename="job1-results.xlsx"' in response.headers["content-disposition"]
+    sheet = load_workbook(io.BytesIO(response.content)).active
+    rows = [[cell.value for cell in line] for line in sheet.iter_rows()]
+    assert rows[0][:3] == ["엑셀 행", "대상", "검사"] and rows[0][-1] == "diff"
+    by_row = {line[0]: line for line in rows[1:]}
+    fixed, missing = by_row[2], by_row[3]
+    assert fixed[1:7] == ["Orange", "Division by zero", r"C:\proj\src\calc.c", 3, "divide", "수정"]
+    assert fixed[8] == REASON
+    assert "+    return (b != 0) ? a / b : 0;" in fixed[9]
+    assert missing[6] == "확인 필요" and "할 일:" in missing[8]
+    assert len(rows) == 3  # Gray는 대상이 아니다
+
+
+def test_export_keeps_formula_like_text_as_text(tmp_path):
+    # LLM 이유나 diff가 =, +, -로 시작해도 엑셀이 수식으로 읽지 않는다
+    client, _, _ = make_service(tmp_path, answer(("fix", "=1+1 \x01 이유"), edits=[DIVIDE_FIX]))
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+
+    data = client.get("/results/1/results.xlsx").content
+
+    sheet = load_workbook(io.BytesIO(data)).active
+    assert sheet.cell(2, 9).value == "=1+1  이유"
+    assert sheet.cell(2, 9).data_type == "s"
+    assert sheet.cell(2, 10).data_type == "s"
