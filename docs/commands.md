@@ -79,6 +79,7 @@ git -c core.autocrlf=false apply -R fixes.patch
 | `uv run python scripts/peek_metrics.py "엑셀.xlsx"` | CodeMetrics 시트의 지표별 행 수 |
 | `uv run python scripts/peek_job.py [패턴] [--job 번호] [--profile 이름]` | 작업 하나가 정의·호출자를 왜 못 붙였는지 개수로 셈 |
 | `uv run python scripts/peek_logs.py [패턴] [--job 번호] [--profile 이름]` | 작업 하나의 판단과 "직접 수정" 행, 그 이유가 짚은 이름이 요청에 붙었는지, 정의 되묻기 수를 대화 기록에서 셈 |
+| `uv run python scripts/peek_misra.py "엑셀.xlsx"` | MISRA 결과 행을 규칙 장별로, 조건 시트에서 꺼짐·분류별로 셈 (장 번호와 개수만) |
 
 `--job`을 빼면 가장 최근 작업을 봅니다.
 
