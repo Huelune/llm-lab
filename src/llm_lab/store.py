@@ -298,6 +298,25 @@ class Store:
             ).fetchall()
         return [Definition(**dict(record)) for record in found]
 
+    def add_definitions(self, job_id: int, definitions: Iterable[Definition]) -> None:
+        """되묻기로 보낸 정의를 작업에 더한다. 이미 있는 정의는 그대로."""
+        with self._write() as db:
+            db.executemany(
+                "INSERT OR IGNORE INTO definitions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(job_id, d.name, d.kind, d.file, d.first, d.last, d.text) for d in definitions],
+            )
+
+    def add_files(self, job_id: int, files: Iterable[SourceFile]) -> None:
+        """작업에 없는 파일만 더한다. 있는 파일은 분석 당시 원문을 지킨다."""
+        with self._write() as db:
+            db.executemany(
+                "INSERT OR IGNORE INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (job_id, f.name, f.text, f.encoding, f.newline, int(f.bom), f.sha256)
+                    for f in files
+                ],
+            )
+
     def set_row(
         self, row_id: int, state: str, result: FixResult | None = None, error: str = ""
     ) -> None:
@@ -370,16 +389,40 @@ class Store:
             found = db.execute("SELECT id FROM jobs WHERE state = 'running' ORDER BY id")
             return [row["id"] for row in found.fetchall()]
 
-    def cache_get(self, key: str) -> list[FixResult] | None:
-        """묶음의 행별 결과 (행 순서대로). 묶음 처리 전의 예전 값(결과 하나)은 없는 것으로 본다."""
+    def cache_entry(self, key: str) -> tuple[list[FixResult], list[tuple[str, str]]] | None:
+        """(행별 결과, 되묻기로 고칠 수 있게 보낸 파일의 (이름, sha256) 목록).
+
+        예전 값(결과 목록만)은 파일 목록이 빈 것으로 읽는다. 묶음 처리 전의 값(결과 하나)은 없음.
+        """
         with self._db() as db:
             found = db.execute("SELECT result FROM cache WHERE key = ?", (key,)).fetchone()
         data = json.loads(found["result"]) if found else None
+        files: list[tuple[str, str]] = []
+        if isinstance(data, dict):
+            files = [
+                (item["name"], item["sha256"])
+                for item in data.get("files", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and isinstance(item.get("sha256"), str)
+            ]
+            data = data.get("results")
         if not isinstance(data, list):
             return None
-        return [FixResult.from_dict(item) for item in data]
+        return [FixResult.from_dict(item) for item in data], files
 
-    def cache_put(self, key: str, results: list[FixResult]) -> None:
-        text = json.dumps([asdict(result) for result in results], ensure_ascii=False)
+    def cache_get(self, key: str) -> list[FixResult] | None:
+        """묶음의 행별 결과 (행 순서대로). 묶음 처리 전의 예전 값(결과 하나)은 없는 것으로 본다."""
+        entry = self.cache_entry(key)
+        return entry[0] if entry else None
+
+    def cache_put(
+        self, key: str, results: list[FixResult], files: Iterable[tuple[str, str]] = ()
+    ) -> None:
+        """결과를 저장한다. files가 있으면 결과와 함께 (예전 서버는 이 값을 없는 것으로 본다)."""
+        items = [asdict(result) for result in results]
+        listed = [{"name": name, "sha256": sha256} for name, sha256 in files]
+        data: object = {"results": items, "files": listed} if listed else items
+        text = json.dumps(data, ensure_ascii=False)
         with self._write() as db:
             db.execute("INSERT OR REPLACE INTO cache VALUES (?, ?, ?)", (key, text, _now()))

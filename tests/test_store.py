@@ -2,6 +2,7 @@ import sqlite3
 from contextlib import closing
 
 import pytest
+from rte_fixtures import CALC_C, finding
 
 from llm_lab.csource import Definition
 from llm_lab.fixer import Edit, FixResult
@@ -319,3 +320,34 @@ def test_sources_returns_every_file_of_a_job(tmp_path):
     assert set(store.sources(job_id)) == {"calc.c", "lib/drv.c"}
     assert store.sources(job_id)["lib/drv.c"] == other
     assert store.sources(job_id + 1) == {}
+
+
+def test_add_files_and_definitions_keep_what_the_job_already_has(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    source = decode_source("calc.c", CALC_C)
+    job = store.create_job(
+        "x.xlsx", "RTE_Result", 0, [source], [NewRow(finding(), "calc.c", "pending")]
+    )
+    changed = decode_source("calc.c", b"int other;\n")
+    extra = decode_source("lib/deep.c", b"int deep(void);\n")
+
+    store.add_files(job, [changed, extra])
+    deep = Definition("deep", "function", "lib/deep.c", 1, 1, "int deep(void);")
+    store.add_definitions(job, [deep, deep])
+
+    assert store.sources(job)["calc.c"].text == source.text
+    assert store.sources(job)["lib/deep.c"].text == extra.text
+    assert store.definitions(job) == [deep]
+
+
+def test_cache_keeps_the_files_an_answer_relied_on(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    result = FixResult("no_fix", "이유", (), "")
+
+    store.cache_put("plain", [result])
+    store.cache_put("asked", [result], files=[("lib/deep.c", "abc")])
+
+    assert store.cache_entry("plain") == ([result], [])
+    assert store.cache_entry("asked") == ([result], [("lib/deep.c", "abc")])
+    assert store.cache_get("asked") == [result]
+    assert store.cache_entry("none") is None
