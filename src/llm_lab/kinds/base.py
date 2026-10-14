@@ -86,6 +86,8 @@ class Kind:
     edits_definitions: bool = False
     # 검사 함수를 부르는 곳(호출자 조각)을 요청에 붙일지
     sends_callers: bool = False
+    # 답의 need로 보이지 않는 정의를 되물을 수 있는지 (LLM_FOLLOW_UPS번까지)
+    asks_definitions: bool = False
     # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값. 비어 있으면 고를 것이 없다
     modes: tuple[tuple[str, str, str], ...] = ()
     # 작업 정보(context)로 시스템 지시문을 고른다. None이면 system_prompt 하나뿐이다

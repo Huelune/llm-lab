@@ -493,4 +493,5 @@ CODEMETRICS = Kind(
     timeout=TIMEOUT,
     uses_definitions=False,  # 함수 하나를 나누는 일이라 정의가 필요 없다
     auto_select=not_middle,
+    asks_definitions=True,
 )

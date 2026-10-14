@@ -227,4 +227,5 @@ MISRA = Kind(
     prepare=read_conditions,
     group_key=same_line,
     facts=facts,
+    asks_definitions=True,
 )

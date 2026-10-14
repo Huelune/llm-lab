@@ -199,5 +199,6 @@ RTE = Kind(
     region=region,
     edits_definitions=True,
     sends_callers=True,
+    asks_definitions=True,
     answer_schema=FIX_SCHEMA_WITH_FILE,
 )

@@ -26,6 +26,7 @@ from llm_lab.csource import (
     split_lines,
     top_level_blocks,
 )
+from llm_lab.followups import with_follow_ups, with_need
 from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
@@ -379,6 +380,17 @@ class Request:
     # 고칠 수 있게 보낸 정의·호출자 조각의 파일 (이름 → 원문). 비었으면 정의는 참고만이다
     files: Mapping[str, SourceFile] = field(default_factory=dict)
     callers: tuple[Definition, ...] = ()  # 붙인 호출자 조각 (고칠 수 있음)
+    follow_ups: int = 0  # 되물을 수 있는 횟수 (0이면 되묻지 않음, 지시문·답 형식도 예전 그대로)
+    asked: tuple[
+        Definition, ...
+    ] = ()  # 되묻기로 보낸 정의 (보낸 순서). 고칠 수 있는 범위의 마지막 순서
+
+    @property
+    def schema(self) -> Mapping[str, Any]:
+        """보낼 답 형식. 되물을 수 있으면 need가 더해진다."""
+        if self.follow_ups:
+            return with_need(self.kind.answer_schema)
+        return self.kind.answer_schema
 
 
 def _shown_last(definition: Definition) -> int:
@@ -505,8 +517,12 @@ def make_request(
     context: Any = None,
     definitions: Iterable[Definition] = (),
     files: Mapping[str, SourceFile] | None = None,
+    follow_ups: int = 0,
 ) -> Request:
-    """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError."""
+    """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError.
+
+    follow_ups: 종류가 되묻기를 쓰면 지시문에 규칙을 붙이고 답 형식에 need를 더한다.
+    """
     definitions = list(definitions)
     line_count = len(split_lines(source.text))
     for finding in findings:
@@ -554,8 +570,9 @@ def make_request(
                 if d.kind == "caller_ref" and d.name == function and d.text.isdigit()
             )
             callers_text = callers_block(function, callers, hidden, files, capped, uses)
+    rounds = follow_ups if kind.asks_definitions else 0
     messages = [
-        {"role": "system", "content": kind.prompt(context)},
+        {"role": "system", "content": with_follow_ups(kind.prompt(context), rounds)},
         {
             "role": "user",
             "content": build_prompt(
@@ -564,7 +581,17 @@ def make_request(
         },
     ]
     return Request(
-        kind, list(findings), source, first, last, context, messages, picked, editable, callers
+        kind,
+        list(findings),
+        source,
+        first,
+        last,
+        context,
+        messages,
+        picked,
+        editable,
+        callers,
+        follow_ups=rounds,
     )
 
 
@@ -833,7 +860,7 @@ def propose_fixes(
     messages = list(request.messages)
     problem, summary = "", MISMATCH_SUMMARIES["locate"]
     for _ in range(2):
-        content, finish_reason = _ask(client, model, messages, kind.answer_schema, transcript)
+        content, finish_reason = _ask(client, model, messages, request.schema, transcript)
         try:
             return _to_results(content, finish_reason, request)
         except EditMismatch as exc:
