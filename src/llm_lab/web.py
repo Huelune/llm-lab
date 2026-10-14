@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
-from llm_lab.csource import scan_folder, used_definitions
+from llm_lab.csource import callers_for, enclosing_function, scan_project, used_definitions
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page
@@ -55,6 +55,7 @@ def _job_note(
     definitions: int = 0,
     unreadable: int = 0,
     mode_label: str = "",
+    callers: int = 0,
 ) -> str:
     """작업 메모 한 줄: 처리 방식, 종류가 읽은 메모, 뺀 행의 이유별 개수, 참고 정의 수."""
     parts = [mode_label] if mode_label else []
@@ -65,6 +66,8 @@ def _job_note(
         parts.append(f"제외: {skipped}")
     if definitions:
         parts.append(f"참고 정의 {definitions}개")
+    if callers:
+        parts.append(f"호출 지점 {callers}곳")
     if unreadable:
         parts.append(f"못 읽은 파일 {unreadable}개")
     return " · ".join(parts)
@@ -178,14 +181,27 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         used = {row.file_name for row in rows if row.file_name}
         files = [source for source in files if source.name in used]
         # 소스 폴더 전체의 정의 가운데 분석 대상 파일이 쓰는 것만 작업에 저장한다
-        definitions, unreadable = [], 0
+        definitions, unreadable, callers = [], 0, []
         if sheet_kind.uses_definitions:
-            found, unreadable = scan_folder(root)
+            found, unreadable, texts = scan_project(root)
             definitions = used_definitions(found, [source.text for source in files])
+            if sheet_kind.sends_callers:
+                # 행마다 검사 줄을 품은 함수를 정하고, 프로젝트 전체에서 그 함수의 호출부를 찾는다
+                by_name = {source.name: source for source in files}
+                targets: dict[str, str] = {}
+                for new_row in rows:
+                    source = by_name.get(new_row.file_name or "")
+                    if source is None or new_row.finding.line is None:
+                        continue
+                    name = enclosing_function(source.text, new_row.finding.line)
+                    name = name or new_row.finding.function.removesuffix("()").strip()
+                    if name:
+                        targets.setdefault(name, source.name)
+                callers = callers_for(found, texts, targets)
             if sheet_kind.edits_definitions:
-                # 고칠 수 있게 보낼 정의가 든 파일의 원문도 작업에 저장한다(패치에 들어갈 수 있다)
+                # 고칠 수 있게 보낼 정의·호출자가 든 파일의 원문도 작업에 저장한다
                 known = {source.name for source in files}
-                for name in sorted({d.file for d in definitions} - known):
+                for name in sorted({d.file for d in [*definitions, *callers]} - known):
                     try:
                         files.append(decode_source(name, (root / name).read_bytes()))
                     except DecodeError, OSError:
@@ -213,8 +229,9 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
                 len({(d.file, d.first) for d in definitions}),
                 unreadable,
                 mode_label,
+                len(callers),
             ),
-            definitions=definitions,
+            definitions=[*definitions, *callers],
             context="" if data is None else json.dumps(data, ensure_ascii=False),
         )
         worker.start(job_id)

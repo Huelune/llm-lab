@@ -939,3 +939,35 @@ def test_other_file_fix_is_not_auto_picked_shows_a_chip_and_patches_the_project(
     assert b"--- a/common/drv.c\n+++ b/common/drv.c\n" in patch
     git_apply(top, patch)
     assert b"return v + 2;" in (top / "common" / "drv.c").read_bytes()
+
+
+def project_with_a_caller(tmp_path) -> Path:
+    """app/src/calc.c의 divide를 app/src/main.c의 update가 부르는 프로젝트 폴더."""
+    top = tmp_path / "proj"
+    (top / "app" / "src").mkdir(parents=True)
+    (top / "app" / "src" / "calc.c").write_bytes(CALC_C)
+    (top / "app" / "src" / "main.c").write_bytes(
+        b"int update(int sum)\n{\n    int n = read_count();\n    return divide(sum, n);\n}\n"
+    )
+    return top
+
+
+def test_rte_job_sends_callers_and_notes_the_count(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer("no_fix"))
+
+    upload(client, rte_excel(rte_row("Orange Check")), project_with_a_caller(tmp_path))
+
+    content = sent[0]["messages"][1]["content"]
+    assert "Callers of divide()" in content
+    assert "// editable caller: app/src/main.c lines 1-5 (in update())" in content
+    assert "app/src/main.c" in store.sources(1)
+    assert "호출 지점 1곳" in store.job(1).note
+
+
+def test_job_without_callers_keeps_its_note(tmp_path):
+    client, store, sent = make_service(tmp_path, fix_answer())
+
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+
+    assert "호출 지점" not in store.job(1).note
+    assert "Callers of" not in sent[0]["messages"][1]["content"]
