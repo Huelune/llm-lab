@@ -18,7 +18,7 @@
 - `LLM_FOLLOW_UPS`: 0~3의 정수, 기본 2.
 - 받은 정의를 고칠 수 있는 것은 `edits_definitions`인 종류(RTE)뿐. MISRA·CodeMetrics는 참고만.
 - 점검 도구 화면에는 개수와 정해 둔 글만. 파일·함수 이름, 경로, 코드, LLM 이유는 찍지 않는다(테스트는 `secret`이 든 이름으로 확인). 한 화면 40줄, 한 줄 118자 안.
-- 줄 길이 100(ruff). 한글이 많은 줄은 나눈다. 검사: `uv run ruff format .`, `uv run ruff check .`, `uv run pytest -q`.
+- 줄 길이 100(ruff). 한글이 많은 줄은 나눈다. 검사: `uv run ruff format src tests scripts`, `uv run ruff check .`, `uv run pytest -q`.
 - 커밋 메시지는 영어 한 줄 + 빈 줄 + `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
@@ -1820,7 +1820,7 @@ uv run python scripts/peek_logs.py rte --profile b
 
 - [ ] **Step 4: 전체 검사**
 
-Run: `uv run ruff format . ; uv run ruff check . ; uv run pytest -q`
+Run: `uv run ruff format src tests scripts ; uv run ruff check . ; uv run pytest -q`
 Expected: ruff 통과, 모든 테스트 PASS
 
 - [ ] **Step 5: 커밋**
