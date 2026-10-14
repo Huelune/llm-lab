@@ -42,15 +42,16 @@ uv run llm-probe
 2. 소스를 패치 전 원본으로 되돌리고, 원본 폴더를 따로 복사해 둡니다.
 3. Polyspace를 돌리고 결과 엑셀을 만듭니다.
 4. 서버를 끈 상태에서 저장해 둔 작업 목록, LLM 답, 대화 기록을 모두 지웁니다. `N files deleted`가 나오면 됩니다.
+   서버를 `--profile 이름`으로 켰다면 지울 때도 같은 `--profile 이름`을 붙입니다(그 프로필의 기록만 지웁니다).
 
    ```bash
-   uv run python -c "from pathlib import Path; n=[p.unlink() for p in [*Path('private').glob('fixer.db*'), *Path('private/llm-logs').glob('*.md')]]; print(len(n), 'files deleted')"
+   uv run llm-fix-server --clear all
    ```
 
    LLM 답만 지우고 작업 목록은 남기려면 대신 이것을 씁니다. `N cached answers deleted`가 나옵니다.
 
    ```bash
-   uv run python -c "import sqlite3; db=sqlite3.connect('private/fixer.db'); n=db.execute('DELETE FROM cache').rowcount; db.commit(); print(n, 'cached answers deleted')"
+   uv run llm-fix-server --clear cache
    ```
 
 5. 서버를 켜고 ① 3의 엑셀 ② 2의 소스 폴더 대신 프로젝트 최상위 폴더 ③ 처리 방식은 기본값(가드 허용) 그대로 두고 "분석 시작"을 누릅니다. 끝나면 "다른 파일 수정" 칩이 붙은 행은 diff를 보고 괜찮은 것만 직접 체크한 뒤

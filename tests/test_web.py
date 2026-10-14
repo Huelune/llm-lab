@@ -730,6 +730,27 @@ def test_main_profile_uses_its_env_file_and_data_folder(tmp_path, monkeypatch):
     assert not (tmp_path / "private" / "fixer.db").exists()
 
 
+def test_main_clear_removes_only_the_profile_records(tmp_path, monkeypatch, capsys):
+    # 프로필 서버의 기록은 private/NAME에 있으므로 --profile과 함께 지운다. .env 없이도 돈다
+    monkeypatch.chdir(tmp_path)
+    secret = tmp_path / "private" / "secret"
+    for folder in (tmp_path / "private", secret):
+        (folder / "llm-logs").mkdir(parents=True)
+        Store(folder / "fixer.db")
+        (folder / "llm-logs" / "secret_job1_row2.md").write_text("x", encoding="utf-8")
+    with closing(sqlite3.connect(secret / "fixer.db")) as db, db:
+        db.execute("INSERT INTO cache VALUES ('k', 'v', 't')")
+
+    assert web.main(["--profile", "secret", "--clear", "cache"]) == 0
+    assert web.main(["--profile", "secret", "--clear", "all"]) == 0
+
+    out = capsys.readouterr().out
+    assert out == "1 cached answers deleted\n2 files deleted\n"
+    assert not list(secret.rglob("*.*"))
+    assert (tmp_path / "private" / "fixer.db").is_file()
+    assert (tmp_path / "private" / "llm-logs" / "secret_job1_row2.md").is_file()
+
+
 def test_main_names_the_missing_profile_file(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")

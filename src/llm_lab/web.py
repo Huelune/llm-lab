@@ -6,10 +6,12 @@ import argparse
 import io
 import json
 import socket
+import sqlite3
 import sys
 import threading
 import time
 import webbrowser
+from contextlib import closing
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated, Any
@@ -317,6 +319,28 @@ def open_when_ready(url: str, port: int, timeout: float = 15.0) -> None:
     webbrowser.open(url)
 
 
+def clear_records(data_dir: Path, what: str) -> int:
+    """기록을 지우고 개수만 찍는다. 경로는 화면에 내지 않는다."""
+    db_path = data_dir / DB_NAME
+    try:
+        if what == "cache":
+            if not db_path.is_file():
+                print("0 cached answers deleted")
+                return 0
+            with closing(sqlite3.connect(db_path)) as db, db:
+                count = db.execute("DELETE FROM cache").rowcount
+            print(f"{count} cached answers deleted")
+            return 0
+        files = [*data_dir.glob(f"{DB_NAME}*"), *(data_dir / LOG_DIR_NAME).glob("*.md")]
+        for path in files:
+            path.unlink()
+    except (OSError, sqlite3.Error):
+        print("지우지 못했습니다: 서버를 끈 뒤 다시 실행하세요.", file=sys.stderr)
+        return 1
+    print(f"{len(files)} files deleted")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="llm-fix-server", description="Polyspace 수정 제안 서비스"
@@ -331,8 +355,16 @@ def main(argv: list[str] | None = None) -> int:
         help="설정은 .env.NAME, 작업 DB와 대화 기록은 private/NAME을 쓴다 "
         "(같은 폴더에서 서버를 하나 더 띄울 때)",
     )
+    parser.add_argument(
+        "--clear",
+        choices=("all", "cache"),
+        help="서버를 켜지 않고 기록을 지운다. all: 작업 목록·LLM 답·대화 기록, cache: LLM 답만 "
+        "(--profile과 함께 쓰면 그 프로필의 기록). 서버를 끈 상태에서 실행한다",
+    )
     args = parser.parse_args(argv)
     data_dir = DATA_DIR / args.profile if args.profile else DATA_DIR
+    if args.clear:
+        return clear_records(data_dir, args.clear)
     try:
         settings = load_settings(args.profile)
     except ConfigError as exc:
