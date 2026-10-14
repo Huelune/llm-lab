@@ -132,3 +132,18 @@ def test_missing_folder_or_job_says_what_to_do(tmp_path):
     assert "대화 기록이 없습니다" in "\n".join(peek.summarize(tmp_path / "nope"))
     sample(tmp_path)
     assert "작업 9의 대화 기록이 없습니다" in "\n".join(peek.summarize(tmp_path, job=9))
+
+
+def test_default_job_comes_from_the_database_when_it_is_newer(tmp_path):
+    # 작업 DB의 최근 작업에 대화 기록이 없으면 이전 작업으로 넘어가지 않고 그렇다고 말한다
+    from llm_lab.store import NewRow, Store
+
+    sample(tmp_path / "logs")
+    store = Store(tmp_path / "fixer.db")
+    for _ in range(4):
+        store.create_job("secret.xlsx", "RTE_Result", 0, [], [NewRow(finding(), None, "no_source")])
+
+    screen = "\n".join(peek.summarize(tmp_path / "logs", db=tmp_path / "fixer.db"))
+
+    assert "작업 4의 대화 기록이 없습니다" in screen
+    assert "작업 3:" not in screen

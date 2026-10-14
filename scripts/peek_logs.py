@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
@@ -134,14 +135,33 @@ LABELS = {
 }
 
 
-def summarize(folder: Path, job: int | None = None, pattern: str | None = None) -> list[str]:
-    if not folder.is_dir() or (job is None and newest_job(folder) is None):
+def newest_db_job(db: Path | None) -> int | None:
+    """작업 DB의 가장 최근 작업 번호. DB가 없거나 못 읽으면 None."""
+    if db is None or not db.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as connection:
+            found = connection.execute("SELECT MAX(id) FROM jobs").fetchone()
+    except sqlite3.Error:
+        return None
+    return found[0] if found and found[0] is not None else None
+
+
+def summarize(
+    folder: Path, job: int | None = None, pattern: str | None = None, db: Path | None = None
+) -> list[str]:
+    if job is None:
+        # 작업 DB의 최근 작업을 먼저 본다. 기록 파일만 보면 기록이 없는 최근 작업을 건너뛴다
+        job = newest_db_job(db) or (newest_job(folder) if folder.is_dir() else None)
+    if job is None:
         return ["대화 기록이 없습니다. 서버를 켠 프로젝트 폴더에서 실행하세요."]
-    job = job if job is not None else newest_job(folder)
-    assert job is not None
-    logs = read_logs(folder, job)
+    logs = read_logs(folder, job) if folder.is_dir() else []
     if not logs:
-        return [f"작업 {job}의 대화 기록이 없습니다. 작업 번호를 확인하세요."]
+        return [
+            f"작업 {job}의 대화 기록이 없습니다.",
+            "아직 처리 중이거나, LLM을 부르기 전에 끝났거나, 서버를 --profile로 켰으면 같은 "
+            "--profile을 붙이세요.",
+        ]
     decided = Counter(decision for _, answer in logs for decision in _decisions(answer))
     lines = [
         f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준)",
@@ -171,9 +191,10 @@ def main() -> int:
     parser.add_argument("--job", type=int, help="작업 번호 (빼면 가장 최근)")
     parser.add_argument("--profile", help="llm-fix-server --profile 이름")
     args = parser.parse_args()
-    folder = Path("private") / (args.profile or "") / "llm-logs"
+    data = Path("private") / (args.profile or "")
+    folder = data / "llm-logs"
     try:
-        screen = summarize(folder, args.job, args.pattern)
+        screen = summarize(folder, args.job, args.pattern, data / "fixer.db")
     except Exception as exc:
         clear_screen()
         print(f"요약하지 못했습니다: {type(exc).__name__}")
