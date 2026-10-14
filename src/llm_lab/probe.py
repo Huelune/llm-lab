@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import ssl
+import statistics
 import sys
 import time
+from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Literal, TextIO
@@ -17,7 +20,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletion
 
 from llm_lab.client import get_client
-from llm_lab.config import ConfigError, Settings, load_settings
+from llm_lab.config import MAX_WORKERS, ConfigError, Settings, load_settings
 
 SSL_ERROR = "SSL"
 NETWORK_ERROR = "네트워크"
@@ -463,6 +466,85 @@ def run_context(client: OpenAI, settings: Settings, *, output: TextIO | None = N
     return 0
 
 
+# 동시 요청 시험: 짧은 요청을 한꺼번에 보내 게이트웨이가 몇 개까지 받는지 본다.
+# 화면은 캡처해 회사 밖으로 보내므로 개수, 시간, 상태 코드만 찍는다
+# (주소·모델·서버 메시지는 찍지 않음).
+# 동시 요청의 중간 시간이 혼자일 때의 이 배수를 넘고, 차이도 SLOW_GAP초 이상이면 줄 세우기로 본다.
+# 차이 조건이 없으면 수 밀리초짜리 응답의 흔들림만으로도 줄 세우기로 판단한다
+SLOW_RATIO = 2.0
+SLOW_GAP = 1.0
+
+
+def parallel_count(text: str) -> int:
+    """--parallel 값. 요청마다 생각 토큰이 붙으므로 한 번에 너무 많이 보내지 않는다."""
+    if not text.isdigit() or not 1 <= int(text) <= MAX_WORKERS:
+        raise argparse.ArgumentTypeError(f"--parallel은 1~{MAX_WORKERS}의 정수여야 합니다")
+    return int(text)
+
+
+def _ping(client: OpenAI, model: str) -> tuple[str, float]:
+    """짧은 요청 하나. (결과 종류, 걸린 초). 결과 종류는 "ok", 상태 코드, 또는 정해 둔 낱말이다."""
+    start = time.perf_counter()
+    try:
+        client.chat.completions.create(model=model, messages=PING_MESSAGES)
+        outcome = "ok"
+    except openai.APIStatusError as exc:
+        outcome = str(exc.status_code)
+    except openai.APITimeoutError:
+        outcome = "시간 초과"
+    except openai.APIConnectionError:
+        outcome = "연결 실패"
+    except Exception as exc:
+        outcome = type(exc).__name__  # 예외 이름만 (메시지에는 주소나 값이 들 수 있음)
+    return outcome, time.perf_counter() - start
+
+
+def run_parallel(
+    client: OpenAI, settings: Settings, count: int, *, output: TextIO | None = None
+) -> int:
+    """혼자 1개를 보낸 뒤 count개를 동시에 보내 결과를 센다. 혼자 1개부터 실패하면 1."""
+    emit = _emitter(settings, output)
+    emit(f"동시 요청 시험: 짧은 요청 {count}개를 한꺼번에 보냅니다 (주소·모델은 찍지 않음)\n")
+    alone, alone_time = _ping(client, settings.model)
+    if alone != "ok":
+        emit(f"혼자 1개부터 실패: {alone} - 먼저 llm-probe 기본 점검을 통과시키세요")
+        return 1
+    emit(f"혼자 1개: 성공, {alone_time:.1f}s")
+
+    start = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        results = list(pool.map(lambda _: _ping(client, settings.model), range(count)))
+    total = time.perf_counter() - start
+
+    outcomes = Counter(outcome for outcome, _ in results)
+    ok, limited = outcomes["ok"], outcomes["429"]
+    emit(f"동시 {count}개: 성공 {ok} / 429 {limited} / 그 밖의 오류 {count - ok - limited}")
+    errors = [(name, n) for name, n in outcomes.most_common() if name != "ok"]
+    if errors:
+        emit("  오류 종류: " + ", ".join(f"{name} {n}개" for name, n in errors))
+    times = sorted(elapsed for outcome, elapsed in results if outcome == "ok")
+    median = statistics.median(times) if times else 0.0
+    if times:
+        emit(
+            f"  성공한 요청의 시간: 최소 {times[0]:.1f}s / 중간 {median:.1f}s / "
+            f"최대 {times[-1]:.1f}s"
+        )
+    emit(f"  전체 걸린 시간: {total:.1f}s\n")
+
+    if limited:
+        emit(f"판단: 429(요청이 너무 많음)가 나왔습니다. LLM_WORKERS는 {count}개보다 적게 두세요.")
+    elif ok < count:
+        emit("판단: 오류가 섞였습니다. 위 오류 종류를 알려 주세요.")
+    elif median > alone_time * SLOW_RATIO and median - alone_time >= SLOW_GAP:
+        emit(
+            f"판단: 모두 성공했지만 중간 시간이 혼자일 때의 {median / alone_time:.1f}배입니다. "
+            "게이트웨이가 줄을 세우는 것으로 보여, 작업자를 늘려도 빨라지지 않을 수 있습니다."
+        )
+    else:
+        emit(f"판단: 동시 {count}개 모두 성공했습니다. LLM_WORKERS={count}까지 써도 됩니다.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         # 파이프·파일로 리다이렉트된 cp949 콘솔에서도 인코딩 오류로 죽지 않게 한다
@@ -472,6 +554,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", metavar="FILE", help="화면 출력을 UTF-8 파일로도 저장")
     parser.add_argument(
         "--context", action="store_true", help="기본 점검 대신 컨텍스트 길이(최대 입력 토큰)를 잼"
+    )
+    parser.add_argument(
+        "--parallel",
+        metavar="N",
+        type=parallel_count,
+        help=f"기본 점검 대신 짧은 요청 N개(1~{MAX_WORKERS})를 동시에 보내 게이트웨이 한도를 잼",
     )
     parser.add_argument("--profile", metavar="NAME", help=".env 대신 .env.NAME을 읽는다")
     args = parser.parse_args(argv)
@@ -485,4 +573,6 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.output, "w", encoding="utf-8") if args.output else nullcontext() as output:
         if args.context:
             return run_context(client, settings, output=output)
+        if args.parallel:
+            return run_parallel(client, settings, args.parallel, output=output)
         return run_probe(client, settings, verbose=args.verbose, output=output)

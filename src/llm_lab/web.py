@@ -40,7 +40,7 @@ DB_NAME = "fixer.db"
 LOG_DIR_NAME = "llm-logs"
 DB_PATH = DATA_DIR / DB_NAME
 LOG_DIR = DATA_DIR / LOG_DIR_NAME
-WORKERS = 2
+
 RECENT_JOBS = 10  # 첫 화면에 보여줄 최근 작업 수
 LISTED_JOBS = 100  # 작업 목록 화면에 보여줄 작업 수
 
@@ -375,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     except StoreError as exc:
         print(f"DB 오류: {exc}", file=sys.stderr)
         return 1
-    submit = daemon_pool(WORKERS)
+    submit = daemon_pool(settings.workers)
     worker = Worker(
         store, get_client(settings), settings.model, submit, log_dir=data_dir / LOG_DIR_NAME
     )

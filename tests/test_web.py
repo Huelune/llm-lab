@@ -495,6 +495,16 @@ def test_main_keeps_conversation_logs_in_private(tmp_path, monkeypatch):
     assert workers[0]["log_dir"] == Path("private/llm-logs")
 
 
+def test_main_runs_as_many_workers_as_llm_workers_says(tmp_path, monkeypatch):
+    pools = []
+    monkeypatch.setattr(web, "daemon_pool", lambda count: pools.append(count) or run_now)
+    monkeypatch.setenv("LLM_WORKERS", "5")
+
+    start_main(tmp_path, monkeypatch, ["--no-browser"])
+
+    assert pools == [5]
+
+
 def test_main_opens_browser_unless_told_not_to(tmp_path, monkeypatch):
     _, _, opened = start_main(tmp_path, monkeypatch, ["--port", "8123"])
     for _ in range(50):  # 브라우저 열기는 별도 스레드에서 돈다
