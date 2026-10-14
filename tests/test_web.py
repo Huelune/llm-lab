@@ -495,6 +495,14 @@ def test_main_keeps_conversation_logs_in_private(tmp_path, monkeypatch):
     assert workers[0]["log_dir"] == Path("private/llm-logs")
 
 
+def test_main_passes_llm_follow_ups_to_the_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_FOLLOW_UPS", "1")
+
+    _, workers, _ = start_main(tmp_path, monkeypatch, ["--no-browser"])
+
+    assert workers[0]["follow_ups"] == 1
+
+
 def test_main_runs_as_many_workers_as_llm_workers_says(tmp_path, monkeypatch):
     pools = []
     monkeypatch.setattr(web, "daemon_pool", lambda count: pools.append(count) or run_now)

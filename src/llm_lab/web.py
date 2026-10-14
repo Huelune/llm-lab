@@ -377,7 +377,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     submit = daemon_pool(settings.workers)
     worker = Worker(
-        store, get_client(settings), settings.model, submit, log_dir=data_dir / LOG_DIR_NAME
+        store,
+        get_client(settings),
+        settings.model,
+        submit,
+        log_dir=data_dir / LOG_DIR_NAME,
+        follow_ups=settings.follow_ups,
     )
     worker.resume()
     url = f"http://127.0.0.1:{args.port}/"

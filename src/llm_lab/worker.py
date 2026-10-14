@@ -7,22 +7,27 @@ import logging
 import queue
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from openai import OpenAI
 
 from llm_lab.client import chat_endpoint
 from llm_lab.fixer import (
+    Ask,
     Exchange,
     FatalLLMError,
+    Request,
     cache_key,
     make_request,
     propose_fixes,
     user_error,
 )
+from llm_lab.followups import Asked, IndexCache, find_asked
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import DECISIONS
 from llm_lab.polyspace import Finding
+from llm_lab.sources import DecodeError, SourceFile, decode_source
 from llm_lab.store import Row, Store
 from llm_lab.transcript import render_log, write_log
 
@@ -59,12 +64,16 @@ class Worker:
         model: str,
         submit: Submit,
         log_dir: Path | None = None,
+        follow_ups: int = 0,
+        indexes: IndexCache | None = None,
     ) -> None:
         self.store = store
         self.client = client
         self.model = model
         self._submit = submit
         self.log_dir = log_dir
+        self.follow_ups = follow_ups  # 묶음마다 정의를 되물을 수 있는 횟수
+        self.indexes = indexes or IndexCache()  # 되묻기 때 찾을 작업별 프로젝트 색인
 
     def start(self, job_id: int) -> None:
         """작업의 pending 행을 묶음으로 모아, 중요한 대상부터 묶음마다 하나씩 제출한다."""
@@ -116,6 +125,7 @@ class Worker:
         source = self.store.source(job_id, rows[0].file_name)
         context = json.loads(job.context) if job.context else None
         exchanges: list[Exchange] = []
+        rounds: list[Asked] = []
         reused = False
         try:
             request = make_request(
@@ -125,13 +135,19 @@ class Worker:
                 context,
                 self.store.definitions(job_id),
                 self.store.sources(job_id),
+                follow_ups=self.follow_ups,
             )
             key = cache_key(self.model, request)
-            results = self.store.cache_get(key)
+            entry = self.store.cache_entry(key)
+            results = None
+            if entry is not None and self._restore(job_id, job.source_root, entry[1]):
+                results = entry[0]
             reused = results is not None
             if results is None:
-                results = propose_fixes(self.client, self.model, request, exchanges)
-                self.store.cache_put(key, results)
+                used: dict[str, str] = {}  # 되묻기로 고칠 수 있게 보낸 파일 → sha256
+                ask = self._asker(job_id, job.source_root, rounds, used)
+                results = propose_fixes(self.client, self.model, request, exchanges, ask=ask)
+                self.store.cache_put(key, results, files=sorted(used.items()))
         except FatalLLMError as exc:
             # 나머지 묶음도 같은 이유로 실패하므로 작업을 멈춘다. 이 묶음은 다시 시도 때 처리한다.
             self._save_log(job_id, kind, findings, source.name, exchanges, [f"작업 중단: {exc}"])
@@ -156,10 +172,68 @@ class Worker:
                         f"엑셀 {row.finding.row}행 {outcome}"
                         for row, outcome in zip(rows, outcomes, strict=True)
                     ]
+            if rounds:
+                outcomes = [f"정의 되묻기 {len(rounds)}번", *outcomes]
             self._save_log(job_id, kind, findings, source.name, exchanges, outcomes)
             for row, result in zip(rows, results, strict=True):
                 self.store.set_row(row.id, "done", result=result)
         self.store.finish_if_done(job_id)
+
+    def _asker(self, job_id: int, root: str, rounds: list[Asked], used: dict[str, str]) -> Ask:
+        """되물은 이름을 작업의 프로젝트 색인에서 찾는 함수.
+
+        보낸 정의는 작업에 더한다. 고칠 수 있는 종류면 그 정의의 파일도 작업에 더하고(작업에 없으면
+        소스 폴더에서 다시 읽는다), 다시 읽지 못한 파일의 정의는 참고만으로 보낸다.
+        """
+
+        def ask(names: list[str], request: Request) -> Asked:
+            index = self.indexes.get(job_id, root)
+            asked = find_asked(
+                names,
+                index,
+                request.source.name,
+                request.first,
+                request.last,
+                (*request.definitions, *request.asked),
+            )
+            files: dict[str, SourceFile] = {}
+            if request.kind.edits_definitions and index is not None:
+                stored = self.store.sources(job_id)
+                for name in dict.fromkeys(d.file for d in asked.definitions):
+                    if name in request.files:
+                        continue
+                    if name == request.source.name:
+                        files[name] = request.source
+                        continue
+                    found = stored.get(name) or index.source(name)
+                    if found is not None:
+                        files[name] = found
+                        used[name] = found.sha256
+                self.store.add_files(job_id, files.values())
+            self.store.add_definitions(job_id, asked.definitions)
+            asked = replace(asked, files=files)
+            rounds.append(asked)
+            return asked
+
+        return ask
+
+    def _restore(self, job_id: int, root: str, files: list[tuple[str, str]]) -> bool:
+        """저장된 답이 기댄 파일을 작업에 둔다. 그 파일이 그때와 다르거나 없으면 False."""
+        stored = self.store.sources(job_id)
+        missing: list[SourceFile] = []
+        for name, sha256 in files:
+            have = stored.get(name)
+            if have is None and root:
+                try:
+                    have = decode_source(name, (Path(root) / name).read_bytes())
+                except DecodeError, OSError:
+                    have = None
+                if have is not None:
+                    missing.append(have)
+            if have is None or have.sha256 != sha256:
+                return False
+        self.store.add_files(job_id, missing)
+        return True
 
     def _save_log(
         self,
