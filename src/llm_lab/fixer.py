@@ -3,19 +3,26 @@
 
 from __future__ import annotations
 
+import copy
 import difflib
 import hashlib
 import json
 import re
 import time
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 import openai
 from openai import OpenAI
 
-from llm_lab.csource import Definition, pick_definitions, split_lines, top_level_blocks
+from llm_lab.csource import (
+    MAX_DEFINITION_LINES,
+    Definition,
+    pick_definitions,
+    split_lines,
+    top_level_blocks,
+)
 from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
@@ -340,6 +347,19 @@ FIX_SCHEMA = {
     "additionalProperties": False,
 }
 
+# 다른 파일도 고치는 종류(RTE)의 답: 수정마다 file("" = 검사 파일)을 받는다
+FIX_SCHEMA_WITH_FILE = copy.deepcopy(FIX_SCHEMA)
+FIX_SCHEMA_WITH_FILE["properties"]["edits"]["items"]["properties"] = {
+    "file": {"type": "string"},
+    "original": {"type": "string"},
+    "replacement": {"type": "string"},
+}
+FIX_SCHEMA_WITH_FILE["properties"]["edits"]["items"]["required"] = [
+    "file",
+    "original",
+    "replacement",
+]
+
 
 @dataclass(frozen=True)
 class Request:
@@ -353,12 +373,28 @@ class Request:
     context: Any  # 작업 정보 (polyspace.Prepared.data)
     messages: list[dict[str, str]]
     definitions: tuple[Definition, ...] = ()  # 코드 뒤에 붙인 다른 곳의 정의
+    # 고칠 수 있게 보낸 정의의 파일 (이름 → 원문). 비었으면 정의는 참고만이다
+    files: Mapping[str, SourceFile] = field(default_factory=dict)
 
 
-def definitions_block(definitions: tuple[Definition, ...]) -> str:
-    """코드 뒤에 붙이는 다른 곳의 정의 절. 베끼지 못하게 줄 번호는 붙이지 않는다."""
+def _shown_last(definition: Definition) -> int:
+    """정의에서 보여 주는(고칠 수 있는) 마지막 줄."""
+    return min(definition.last, definition.first + MAX_DEFINITION_LINES - 1)
+
+
+def definitions_block(
+    definitions: tuple[Definition, ...], editable: Mapping[str, SourceFile] | None = None
+) -> str:
+    """코드 뒤에 붙이는 다른 곳의 정의 절.
+
+    editable에 원문이 있는 파일의 정의는 줄 번호를 붙여 고칠 수 있게 보내고, 나머지는 번호 없이
+    참고로만 보낸다 (editable을 준 종류는 "reference only" 라벨을 붙인다). None이면 모두 라벨 없이
+    참고만이다.
+    """
     if not definitions:
         return ""
+    labelled = editable is not None
+    editable = editable or {}
     parts = []
     for definition in definitions:
         where = (
@@ -366,11 +402,27 @@ def definitions_block(definitions: tuple[Definition, ...]) -> str:
             if definition.first == definition.last
             else f"lines {definition.first}-{definition.last}"
         )
-        parts.append(f"```c\n// {definition.file} {where}\n{definition.text}\n```")
-    return (
-        "\n\nDefinitions from other places, for reference only. "
-        "Edits must stay in the numbered code above.\n\n" + "\n\n".join(parts)
-    )
+        source = editable.get(definition.file)
+        if source is None:
+            label = "reference only: " if labelled else ""
+            parts.append(f"```c\n// {label}{definition.file} {where}\n{definition.text}\n```")
+            continue
+        last = _shown_last(definition)
+        body = numbered(source.text, definition.first, last)
+        if last < definition.last:
+            body += f"\n... ({definition.last - last} more lines, not editable)"
+        parts.append(f"```c\n// editable: {definition.file} {where}\n{body}\n```")
+    if not any(definition.file in editable for definition in definitions):
+        heading = (
+            "\n\nDefinitions from other places, for reference only. "
+            "Edits must stay in the numbered code above.\n\n"
+        )
+    else:
+        heading = (
+            "\n\nDefinitions from other places. Those marked editable may be changed; "
+            'set "file" to their path. Edits in the numbered code above use "file": "".\n\n'
+        )
+    return heading + "\n\n".join(parts)
 
 
 def build_prompt(
@@ -381,6 +433,7 @@ def build_prompt(
     last: int,
     context: Any,
     definitions: tuple[Definition, ...] = (),
+    editable: Mapping[str, SourceFile] | None = None,
 ) -> str:
     blocks = []
     for number, finding in enumerate(findings, start=1):
@@ -394,7 +447,8 @@ def build_prompt(
         + (f"\n\n{tail}" if tail else "")
         + f"\n\nCode (lines {first}-{last} of {source.name}; "
         "each line starts with its number and '| '):\n"
-        f"```c\n{numbered(source.text, first, last)}\n```" + definitions_block(definitions)
+        f"```c\n{numbered(source.text, first, last)}\n```"
+        + definitions_block(definitions, editable)
     )
 
 
@@ -404,6 +458,7 @@ def make_request(
     source: SourceFile,
     context: Any = None,
     definitions: Iterable[Definition] = (),
+    files: Mapping[str, SourceFile] | None = None,
 ) -> Request:
     """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError."""
     line_count = len(split_lines(source.text))
@@ -431,14 +486,19 @@ def make_request(
     if kind.uses_definitions:
         lines = [finding.line for finding in findings if finding.line is not None]
         picked = tuple(pick_definitions(definitions, source.name, source.text, first, last, lines))
+    editable: dict[str, SourceFile] = {}
+    if kind.edits_definitions and files:
+        editable = {d.file: files[d.file] for d in picked if d.file in files}
+    # 고칠 수 없는 종류나 files를 주지 않은 호출은 None: 정의를 라벨 없이 참고로만 붙인다
+    shown = editable if kind.edits_definitions and files is not None else None
     messages = [
         {"role": "system", "content": kind.prompt(context)},
         {
             "role": "user",
-            "content": build_prompt(kind, findings, source, first, last, context, picked),
+            "content": build_prompt(kind, findings, source, first, last, context, picked, shown),
         },
     ]
-    return Request(kind, list(findings), source, first, last, context, messages, picked)
+    return Request(kind, list(findings), source, first, last, context, messages, picked, editable)
 
 
 def cache_key(model: str, request: Request) -> str:
@@ -453,6 +513,7 @@ def cache_key(model: str, request: Request) -> str:
         model,
         request.source.sha256,
         *(message["content"] for message in request.messages),
+        *(f"{name}:{f.sha256}" for name, f in sorted(request.files.items())),
     ]
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
@@ -570,6 +631,40 @@ def edits_results(data: dict[str, Any], request: Request) -> list[FixResult]:
     return share(decisions, edits, diff)
 
 
+def _ranges(request: Request, target: str) -> list[tuple[int, int]]:
+    """target 파일에서 수정을 찾을 줄 범위들: 검사 파일은 보낸 범위, 그리고 고칠 수 있는 정의."""
+    ranges = [(request.first, request.last)] if target == request.source.name else []
+    if target in request.files:
+        ranges += [(d.first, _shown_last(d)) for d in request.definitions if d.file == target]
+    return ranges
+
+
+def _locate_one(
+    text: str,
+    ranges: list[tuple[int, int]],
+    raw: dict[str, str],
+    line: int | None,
+    number: int,
+    name: str,
+) -> tuple[Edit, ...]:
+    """수정 하나를 범위들 가운데 정확히 한 곳에서 찾는다."""
+    found: list[tuple[Edit, ...]] = []
+    errors: list[EditMismatch] = []
+    for first, last in ranges:
+        try:
+            found.append(locate_edits(text, first, last, [raw], line))
+        except EditMismatch as exc:
+            errors.append(exc)
+    unique = list(dict.fromkeys(found))
+    if len(unique) == 1:
+        return unique[0]
+    if not unique and len(ranges) == 1:
+        # 범위가 하나면 찾는 쪽의 설명을 그대로 쓴다 (번호만 이 수정의 번호로)
+        raise EditMismatch(str(errors[0]).replace("edits[1]", f"edits[{number}]", 1))
+    where = "찾을 수 없음" if not unique else "여러 곳에 나옴"
+    raise EditMismatch(f"edits[{number}].original을 {name}의 보여 준 코드에서 {where}")
+
+
 def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
     source = request.source
     if (
@@ -579,27 +674,49 @@ def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], 
             isinstance(edit, dict)
             and isinstance(edit.get("original"), str)
             and isinstance(edit.get("replacement"), str)
+            and isinstance(edit.get("file", ""), str)
             for edit in raw_edits
         )
     ):
         raise EditMismatch("fix인데 edits가 비었거나 형식이 다름", "format")
+    texts = {source.name: source, **request.files}
+    by_target: dict[str, list[Edit]] = {}
     for number, raw in enumerate(raw_edits, start=1):
+        target = raw.get("file") or source.name
+        if target not in texts:
+            raise EditMismatch(f"edits[{number}].file {target}은 고칠 수 있게 보낸 파일이 아님")
+        file = texts[target]
         # 소스 인코딩(CP949 등)으로 못 쓰는 문자가 있으면 패치를 만들 수 없으므로 지금 다시 요청한다
         try:
-            raw["replacement"].encode(source.encoding)
+            raw["replacement"].encode(file.encoding)
         except UnicodeEncodeError as exc:
             char = ord(raw["replacement"][exc.start])
             raise EditMismatch(
-                f"edits[{number}].replacement에 {source.encoding}로 쓸 수 없는 문자 "
+                f"edits[{number}].replacement에 {file.encoding}로 쓸 수 없는 문자 "
                 f"U+{char:04X}가 있음 - ASCII나 한글만 쓰세요",
                 "encoding",
             ) from None
-    line = request.findings[0].line
-    edits = locate_edits(source.text, request.first, request.last, raw_edits, line)
-    fixed = apply_edits(source.text, edits)
-    if fixed == source.text:
+        line = request.findings[0].line if target == source.name else None
+        located = _locate_one(file.text, _ranges(request, target), raw, line, number, target)
+        by_target.setdefault(target, []).extend(located)
+    edits: list[Edit] = []
+    diffs: list[str] = []
+    for target in [source.name, *sorted(t for t in by_target if t != source.name)]:
+        found = sorted(by_target.get(target, []), key=lambda edit: edit.start)
+        if not found:
+            continue
+        for before, after in zip(found, found[1:], strict=False):
+            if after.start < before.end:
+                raise EditMismatch("edits끼리 같은 줄을 고침")
+        text = texts[target].text
+        fixed = apply_edits(text, found)
+        if fixed != text:
+            diffs.append(display_diff(target, text, fixed))
+        stored = "" if target == source.name else target
+        edits.extend(replace(edit, file=stored) for edit in found)
+    if not diffs:
         raise EditMismatch("수정해도 원본과 같음")
-    return edits, display_diff(source.name, source.text, fixed)
+    return tuple(edits), "\n".join(diffs)
 
 
 def _to_results(content: str, finish_reason: str | None, request: Request) -> list[FixResult]:

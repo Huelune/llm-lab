@@ -6,8 +6,9 @@ from fake_llm import MODEL, completion, error, make_client, scripted
 from misra_fixtures import misra_finding
 from rte_fixtures import CALC_C, DIVIDE_FIX, REASON, answer, finding, fix_answer
 
-from llm_lab.csource import Definition
+from llm_lab.csource import MAX_DEFINITION_LINES, Definition
 from llm_lab.fixer import (
+    FIX_SCHEMA_WITH_FILE,
     MISMATCH_SUMMARIES,
     EditMismatch,
     FatalLLMError,
@@ -404,3 +405,154 @@ def test_rte_mode_in_the_job_context_picks_the_system_prompt():
     assert "a guard is acceptable" in guard.messages[0]["content"]
     assert "Never make such a change" in root.messages[0]["content"]
     assert cache_key(MODEL, guard) != cache_key(MODEL, root)
+
+
+USE_DRV = decode_source(
+    "src/calc.c", b"int divide(int a, int b)\n{\n    return a / drv_scale(b);\n}\n"
+)
+DRV = decode_source("lib/drv.c", b"int drv_scale(int v)\n{\n    return v - 1;\n}\n")
+DRV_DEF = Definition("drv_scale", "function", "lib/drv.c", 1, 4, DRV.text.rstrip("\n"))
+DRV_FIX = {"file": "lib/drv.c", "original": "    return v - 1;", "replacement": "    return v + 1;"}
+
+
+def ask_with(handler, *, definitions=(DRV_DEF,), files=None, kind=RTE, source=USE_DRV):
+    files = {"lib/drv.c": DRV} if files is None else files
+    request = make_request(kind, [finding(line=3)], source, None, definitions, files)
+    return request, propose_fixes(make_client(handler), MODEL, request)
+
+
+def test_rte_sends_definitions_with_stored_files_as_editable_numbered_code():
+    request = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": DRV})
+
+    content = request.messages[1]["content"]
+    assert "Those marked editable may be changed" in content
+    assert "// editable: lib/drv.c lines 1-4\n    1| int drv_scale(int v)" in content
+    assert set(request.files) == {"lib/drv.c"}
+    assert RTE.answer_schema is FIX_SCHEMA_WITH_FILE
+    assert FIX_SCHEMA_WITH_FILE["properties"]["edits"]["items"]["required"] == [
+        "file",
+        "original",
+        "replacement",
+    ]
+
+
+def test_definitions_without_a_stored_file_stay_reference_only():
+    # 예전 작업: 정의 파일 원문이 작업에 없다
+    request = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {})
+
+    content = request.messages[1]["content"]
+    assert "// reference only: lib/drv.c lines 1-4\nint drv_scale(int v)" in content
+    assert "editable:" not in content and request.files == {}
+
+
+def test_misra_never_marks_definitions_editable():
+    request = make_request(
+        MISRA, [misra_finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": DRV}
+    )
+
+    content = request.messages[1]["content"]
+    assert "editable" not in content
+    assert "for reference only" in content
+
+
+def test_fix_in_another_file_is_located_there_and_shown_in_the_diff():
+    handler, _ = scripted(answer(("fix", REASON), edits=[DRV_FIX]))
+
+    _, (result,) = ask_with(handler)
+
+    (edit,) = result.edits
+    assert edit.file == "lib/drv.c"
+    assert apply_edits(DRV.text, [replace(edit, file="")]) == DRV.text.replace("v - 1", "v + 1")
+    assert "--- a/lib/drv.c" in result.diff and "+    return v + 1;" in result.diff
+
+
+def test_local_and_other_file_edits_share_one_diff_local_first():
+    local = {
+        "file": "",
+        "original": "    return a / drv_scale(b);",
+        "replacement": "    return a / (drv_scale(b) ? drv_scale(b) : 1);",
+    }
+    handler, _ = scripted(answer(("fix", REASON), edits=[DRV_FIX, local]))
+
+    _, (result,) = ask_with(handler)
+
+    assert [edit.file for edit in result.edits] == ["", "lib/drv.c"]
+    assert result.diff.index("--- a/src/calc.c") < result.diff.index("--- a/lib/drv.c")
+
+
+def test_edit_in_the_checked_file_outside_the_sent_range_uses_its_definition():
+    # 검사 파일 안의 다른 함수(보낸 범위 밖)도 정의로 붙었으면 고칠 수 있고, file은 비운다
+    text = (
+        "int helper(int v)\n{\n    return v - 1;\n}\n"
+        + "\n" * 2100
+        + "int divide(int a, int b)\n{\n    return a / helper(b);\n}\n"
+    )
+    source = decode_source("src/calc.c", text.encode())
+    helper = Definition(
+        "helper", "function", "src/calc.c", 1, 4, "int helper(int v)\n{\n    return v - 1;\n}"
+    )
+    fix = {
+        "file": "src/calc.c",
+        "original": "    return v - 1;",
+        "replacement": "    return v + 1;",
+    }
+    handler, _ = scripted(answer(("fix", REASON), edits=[fix]))
+    line = text.count("\n", 0, text.index("return a / helper")) + 1
+
+    request = make_request(
+        RTE, [finding(line=line)], source, None, [helper], {"src/calc.c": source}
+    )
+    (result,) = propose_fixes(make_client(handler), MODEL, request)
+
+    assert result.edits[0].file == "" and result.edits[0].start == text.index("    return v - 1;")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"file": "lib/unknown.c", "original": "    return v - 1;", "replacement": "x"},
+        {"file": "lib/drv.c", "original": "    return a / drv_scale(b);", "replacement": "x"},
+    ],
+)
+def test_other_file_edit_outside_what_was_shown_is_asked_again(bad):
+    handler, sent = scripted(
+        answer(("fix", REASON), edits=[bad]), answer(("fix", REASON), edits=[DRV_FIX])
+    )
+
+    _, (result,) = ask_with(handler)
+
+    assert len(sent) == 2
+    assert result.edits[0].file == "lib/drv.c"
+
+
+def test_clipped_definition_can_be_edited_only_in_the_shown_lines():
+    body = "\n".join(f"    v += {i};" for i in range(MAX_DEFINITION_LINES + 10))
+    text = f"int drv_scale(int v)\n{{\n{body}\n    return v;\n}}\n"
+    drv = decode_source("lib/drv.c", text.encode())
+    lines = text.split("\n")
+    clipped = Definition(
+        "drv_scale",
+        "function",
+        "lib/drv.c",
+        1,
+        len(lines) - 1,
+        "\n".join(lines[:MAX_DEFINITION_LINES]) + "\n... (more)",
+    )
+    hidden = {"file": "lib/drv.c", "original": "    return v;", "replacement": "    return v + 1;"}
+    shown = {"file": "lib/drv.c", "original": "    v += 0;", "replacement": "    v += 100;"}
+    handler, sent = scripted(
+        answer(("fix", REASON), edits=[hidden]), answer(("fix", REASON), edits=[shown])
+    )
+
+    _, (result,) = ask_with(handler, definitions=(clipped,), files={"lib/drv.c": drv})
+
+    assert len(sent) == 2
+    assert "v += 100;" in result.diff
+
+
+def test_editable_file_contents_are_part_of_the_cache_key():
+    changed = decode_source("lib/drv.c", DRV.text.encode() + b"int other;\n")
+    a = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": DRV})
+    b = make_request(RTE, [finding(line=3)], USE_DRV, None, [DRV_DEF], {"lib/drv.c": changed})
+
+    assert cache_key(MODEL, a) != cache_key(MODEL, b)

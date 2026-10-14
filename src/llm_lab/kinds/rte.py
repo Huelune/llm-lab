@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from llm_lab.fixer import select_region
+from llm_lab.fixer import FIX_SCHEMA_WITH_FILE, select_region
 from llm_lab.kinds.base import Cell, Kind
 from llm_lab.polyspace import Finding, cell_text, line_number, norm
 
@@ -179,4 +179,6 @@ RTE = Kind(
     prompt_version=5,
     group_key=same_function,
     region=region,
+    edits_definitions=True,
+    answer_schema=FIX_SCHEMA_WITH_FILE,
 )
