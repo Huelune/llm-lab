@@ -182,7 +182,13 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
 
     root = tmp_path / "secret_proj"
     (root / "lib").mkdir(parents=True)
-    (root / "lib" / "secret_lib.h").write_text("#define SECRET_WRAP(x) secret_missing(x)\n")
+    (root / "lib" / "secret_lib.h").write_text(
+        "#define SECRET_WRAP(x) secret_missing(x)\nextern int secret_missing(int x);\n"
+    )
+    (root / "lib" / "secret_lib.c").write_text(
+        "FUNC(int, CODE) secret_missing(int x)\n{\n    return secret_use(x);\n}\n"
+        "void secret_use(int y)\n{\n    y = secret_missing(1);\n}\n"
+    )
     store = Store(tmp_path / "fixer.db")
     store.create_job(
         "secret.xlsx",
@@ -223,6 +229,11 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
         "정의를 못 찾은 호출 이름 2개: 다른 파일에 글자가 있음 1개, 프로젝트 어디에도 없음 1개"
         in screen
     )
+    # 이름마다 자리의 모양을 센다: 매크로·선언·FUNC로 감싼 정의·호출
+    assert "  호출 이름 1: 직접 수정 1행, 다른 파일 4곳, 검사 파일 0곳" in screen
+    shapes = "매크로 1, 이어 붙임(##) 0, 선언 1, 정의 모양 1, 호출 1, 주석 0, 그 밖 0"
+    assert f"    모양: {shapes}" in screen
+    assert "  호출 이름 2: 직접 수정 1행, 다른 파일 0곳, 검사 파일 0곳" in screen
     assert "%TEMP%\\peek_logs_job1.txt" in screen
     assert "secret" not in screen.casefold()
     assert len(screen.splitlines()) <= 40
@@ -230,4 +241,18 @@ def test_counts_which_names_manual_reasons_point_at(tmp_path):
     # 자세한 목록은 회사 PC의 임시 폴더에만 쓴다: 이유 원문과 이름이 찾은 자리
     detail = (out / "peek_logs_job1.txt").read_text(encoding="utf-8-sig")
     assert "secret_gone 구현이 없습니다" in detail
-    assert "lib/secret_lib.h:1:" in detail
+    assert "[매크로] lib/secret_lib.h:1:" in detail
+    assert "== 짚은 이름이 모두 요청에 있었음 (2개)" in detail
+
+
+def test_shape_tells_how_a_name_appears():
+    assert peek.shape("#define SECRET_A(x) secret_f(x)", "secret_f") == "macro"
+    assert peek.shape("#define SECRET_B(x) secret_##x()", "secret_f") == "pasted"
+    assert peek.shape("extern int secret_f(int a);", "secret_f") == "declaration"
+    assert peek.shape("static int *secret_f(void)", "secret_f") == "definition"
+    assert peek.shape("FUNC(void, SECRET_CODE) secret_f(void)", "secret_f") == "definition"
+    assert peek.shape("    return secret_f(1);", "secret_f") == "call"
+    assert peek.shape("    x = secret_f(1);", "secret_f") == "call"
+    assert peek.shape("    secret_f(1);", "secret_f") == "call"
+    assert peek.shape("    table[0] = secret_f;", "secret_f") == "other"
+    assert peek.shape("/* secret_f() */", "secret_f") == "comment"

@@ -34,6 +34,7 @@ BLOCK_HEAD = re.compile(r"^```c\n// (editable caller: |editable: |reference only
 CODE_BLOCK = re.compile(r"^```c\n(.*?)\n```$", re.S | re.M)
 CODE_RANGE = re.compile(r"^Code \(lines (\d+)-(\d+) of (.+?)[;)]", re.M)
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # 한글이 붙은 이름(예: 이름을)에서도 이름만
+SHOWN_CALLS = 3  # 화면에 모양을 찍는 호출 이름 수 (나머지는 자세한 목록에)
 DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
@@ -255,45 +256,107 @@ def project_texts(root: Path) -> dict[str, str]:
     return texts
 
 
-def places(name: str, texts: dict[str, str], checked: set[str]) -> list[str]:
-    """이름이 글자로 나오는 자리 "파일:줄: 원문", 검사 파일이 아닌 곳만, 3개까지."""
+SHAPES = {
+    "macro": "매크로",
+    "pasted": "이어 붙임(##)",
+    "declaration": "선언",
+    "definition": "정의 모양",
+    "call": "호출",
+    "comment": "주석",
+    "other": "그 밖",
+}
+TYPE_WORDS = re.compile(
+    r"^[A-Za-z_][\w\s\*,()]*$"
+)  # 이름 앞이 타입·속성 낱말뿐인지 (예: static int *)
+
+
+def shape(line: str, name: str) -> str:
+    """이름이 나오는 줄의 모양. 스캐너가 정의를 왜 못 알아봤는지 보려고 센다."""
+    text = line.strip()
+    if text.startswith("#"):
+        return "pasted" if "##" in text else "macro"
+    if text.startswith(("//", "/*", "*")):
+        return "comment"
+    at = re.search(rf"\b{re.escape(name)}\s*\(", text)
+    if not at:
+        return "other"
+    before = text[: at.start()].strip()
+    typed = bool(before) and bool(TYPE_WORDS.match(before)) and not before.startswith("return")
+    if typed and "=" not in before:
+        return "declaration" if text.endswith(";") else "definition"
+    return "call"
+
+
+def places(name: str, texts: dict[str, str], limit: int = 200) -> list[tuple[str, int, str]]:
+    """이름이 글자로 나오는 자리 (파일, 줄 번호, 원문), limit개까지."""
     word = re.compile(rf"\b{re.escape(name)}\b")
     found = []
     for file, text in texts.items():
-        if file in checked:
-            continue
         for number, line in enumerate(text.splitlines(), start=1):
             if word.search(line):
-                found.append(f"{file}:{number}: {line.strip()[:160]}")
-                if len(found) >= 3:
+                found.append((file, number, line))
+                if len(found) >= limit:
                     return found
     return found
+
+
+@dataclass
+class Call:
+    """정의를 못 찾은 호출 이름 하나: 몇 판단이 짚었는지, 프로젝트에 나오는 자리와 모양."""
+
+    name: str
+    rows: int
+    checked: set[str]
+    spots: list[tuple[str, int, str]]
+
+    def other_files(self) -> int:
+        return sum(1 for file, _, _ in self.spots if file not in self.checked)
+
+    def shapes(self) -> Counter[str]:
+        return Counter(shape(line, self.name) for _, _, line in self.spots)
+
+
+def unfound_calls(reasons: list[Reason], texts: dict[str, str]) -> list[Call]:
+    """정의를 못 찾은 호출 이름마다 Call. 많이 짚힌 것부터."""
+    rows: Counter[str] = Counter()
+    checked: dict[str, set[str]] = {}
+    for reason in reasons:
+        for call in reason.calls:
+            rows[call] += 1
+            checked.setdefault(call, set()).add(reason.checked)
+    calls = [Call(name, rows[name], checked[name], places(name, texts)) for name in rows]
+    return sorted(calls, key=lambda c: (-c.rows, -len(c.spots), c.name))
 
 
 def write_detail(
     path: Path,
     job: int,
-    logs: list[tuple[str, dict]],
     names: list[str],
     reasons: list[Reason],
-    texts: dict[str, str] | None,
+    calls: list[Call] | None,
 ) -> None:
     """직접 수정 판단의 이유 원문과, 정의를 못 찾은 호출 이름이 나오는 자리. 회사 PC에서만 본다."""
     lines = [
         f"작업 {job} 직접 수정 판단 {len(reasons)}개 - 회사 PC에서만 보고 밖으로 보내지 않습니다.",
         "",
     ]
-    for reason in reasons:
-        kinds = ", ".join(REASON_LABELS[k] for k in REASON_LABELS if k in reason.kinds)
-        lines += [
-            f"[{kinds}] {names[reason.group]} 판단 {reason.number}",
-            f"  이유: {reason.text}",
-        ]
-        for call in sorted(reason.calls):
-            lines.append(f"  정의를 못 찾은 호출: {call}")
-            if texts is not None:
-                spots = places(call, texts, {reason.checked})
-                lines += [f"    {spot}" for spot in spots] or ["    프로젝트 어디에도 없음"]
+    for number, call in enumerate(calls or [], start=1):
+        lines.append(f"== 호출 이름 {number}: {call.name} (직접 수정 {call.rows}행)")
+        for file, line_number, line in call.spots[:20]:
+            mark = "검사 파일" if file in call.checked else SHAPES[shape(line, call.name)]
+            lines.append(f"  [{mark}] {file}:{line_number}: {line.strip()[:160]}")
+        if not call.spots:
+            lines.append("  프로젝트 어디에도 없음")
+        lines.append("")
+    for key, label in REASON_LABELS.items():
+        chosen = [reason for reason in reasons if key in reason.kinds]
+        if not chosen:
+            continue
+        lines += [f"== {label} ({len(chosen)}개)", ""]
+        for reason in chosen:
+            lines.append(f"  {names[reason.group]} 판단 {reason.number}")
+            lines.append(f"    이유: {reason.text}")
+            lines += [f"    정의를 못 찾은 호출: {call}" for call in sorted(reason.calls)]
         lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8-sig")
@@ -335,22 +398,30 @@ def _reason_lines(
     lines = [f"  {REASON_LABELS[key]:<28}{counts[key]:>6}" for key in REASON_LABELS]
     root = Path(stored.source_root) if stored.source_root else None
     texts = project_texts(root) if root and root.is_dir() else None
-    calls: dict[str, set[str]] = {}
-    for reason in reasons:
-        for call in reason.calls:
-            calls.setdefault(call, set()).add(reason.checked)
-    if texts is None:
+    calls = unfound_calls(reasons, texts) if texts is not None else None
+    if calls is None:
         lines.append("소스 폴더를 찾지 못해 호출 이름을 프로젝트에서 찾지 않았습니다.")
     else:
-        elsewhere = sum(1 for call, checked in calls.items() if places(call, texts, checked))
+        elsewhere = sum(1 for call in calls if call.other_files())
         lines.append(
             f"정의를 못 찾은 호출 이름 {len(calls)}개: 다른 파일에 글자가 있음 {elsewhere}개, "
             f"프로젝트 어디에도 없음 {len(calls) - elsewhere}개"
         )
+        for number, call in enumerate(calls[:SHOWN_CALLS], start=1):
+            shapes = call.shapes()
+            lines.append(
+                f"  호출 이름 {number}: 직접 수정 {call.rows}행, 다른 파일 {call.other_files()}곳, "
+                f"검사 파일 {len(call.spots) - call.other_files()}곳"
+            )
+            lines.append(
+                "    모양: " + ", ".join(f"{label} {shapes[key]}" for key, label in SHAPES.items())
+            )
+        if len(calls) > SHOWN_CALLS:
+            lines.append(f"  나머지 {len(calls) - SHOWN_CALLS}개는 자세한 목록에 있습니다.")
     if detail is not None and reasons:
         name = f"peek_logs_job{job}.txt"
         names = [path.name for path, _, _ in read_log_files(folder, job)]
-        write_detail(detail / name, job, logs, names, reasons, texts)
+        write_detail(detail / name, job, names, reasons, calls)
         lines.append(f"자세한 목록(회사 PC에서만 보기): %TEMP%\\{name}")
     return lines
 
