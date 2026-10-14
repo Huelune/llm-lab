@@ -262,3 +262,41 @@ def test_old_results_without_file_still_load():
 
     assert result.edits == (Edit(1, 2, "z"),)
     assert result.edits[0].file == ""
+
+
+def test_row_editing_two_files_conflicts_in_the_second_file():
+    calc = decode_source("calc.c", b"int a;\nint b;\n")
+    drv = decode_source("lib/drv.c", b"int x;\nint y;\n")
+    files = [
+        FilePatch("calc.c", calc, [(1, replace(calc, "int a;", "A"))]),
+        FilePatch(
+            "lib/drv.c",
+            drv,
+            [(1, replace(drv, "int x;", "X")), (2, replace(drv, "int x;", "Z"))],
+        ),
+    ]
+
+    with pytest.raises(PatchConflict) as caught:
+        build_patch(files)
+
+    assert caught.value.pairs == [(1, 2)]
+
+
+def test_same_offsets_in_different_files_do_not_conflict():
+    calc = decode_source("calc.c", b"int a;\nint b;\n")
+    drv = decode_source("lib/drv.c", b"int x;\nint y;\n")
+    # 행 1은 calc.c를 먼저, drv.c를 나중에 고친다. 행 2는 calc.c의 같은 자리를 고치지 않는다
+    files = [
+        FilePatch(
+            "calc.c",
+            calc,
+            [(1, replace(calc, "int b;", "B")), (2, replace(calc, "int a;", "A"))],
+        ),
+        FilePatch("lib/drv.c", drv, [(1, replace(drv, "int x;", "X"))]),
+    ]
+
+    patch = build_patch(files)
+
+    assert b"+A\n" in patch
+    assert b"+B\n" in patch
+    assert b"+X\n" in patch

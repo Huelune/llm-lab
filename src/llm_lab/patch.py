@@ -161,7 +161,8 @@ def build_patch(files: list[FilePatch]) -> bytes:
     rows: dict[int, tuple[str, list[Edit]]] = {}
     for path, edits in unique.items():
         for row, edit in edits:
-            rows.setdefault(row, (path, []))[1].append(edit)
+            # 수정마다 실제 파일을 적어 두어 한 행이 여러 파일을 고쳐도 파일별로 비교한다
+            rows.setdefault(row, ("", []))[1].append(replace(edit, file=path))
     conflicts = find_conflicts(rows)
     pairs = sorted({(min(a, b), max(a, b)) for a, partners in conflicts.items() for b in partners})
     if pairs:
