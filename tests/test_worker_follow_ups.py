@@ -104,7 +104,7 @@ def test_file_that_cannot_be_read_again_is_sent_for_reference_only(tmp_path):
     # 색인에는 있는데 파일을 다시 읽지 못한다 (그사이 지워짐 등)
     root = project(tmp_path)
     ghost = Definition("ghost_fn", "function", "lib/ghost.c", 1, 3, "int ghost_fn(void)\n{\n}")
-    indexes = IndexCache(build=lambda path: ProjectIndex(path, {"ghost_fn": (ghost,)}))
+    indexes = IndexCache(build=lambda path, texts: ProjectIndex(path, {"ghost_fn": (ghost,)}))
     handler, sent = scripted(reply("manual", need=["ghost_fn"]), reply("manual"))
     store = Store(tmp_path / "fixer.db")
     worker = Worker(store, make_client(handler), MODEL, run_now, follow_ups=1, indexes=indexes)
@@ -116,6 +116,29 @@ def test_file_that_cannot_be_read_again_is_sent_for_reference_only(tmp_path):
     assert "// lib/ghost.c lines 1-3\nint ghost_fn(void)" in follow_up
     assert "lib/ghost.c" not in store.sources(job_id)
     assert store.rows(job_id)[0].state == "done"
+
+
+def test_asked_lines_come_from_the_job_text_when_the_disk_changed(tmp_path):
+    # 작업을 만든 뒤 디스크 파일 앞에 줄이 생겨도 작업이 저장한 글의 줄 번호로 보낸다
+    root = project(tmp_path)
+    handler, sent = scripted(reply("manual", need=["deep_scale"]), reply("fix", [DEEP_FIX]))
+    store = Store(tmp_path / "fixer.db")
+    worker = Worker(store, make_client(handler), MODEL, run_now, follow_ups=1)
+    job_id = store.create_job(
+        "rte.xlsx",
+        "RTE_Result",
+        0,
+        [decode_source("src/calc.c", USE_TEXT), decode_source("lib/deep.c", DEEP_TEXT)],
+        [NewRow(finding(line=3), "src/calc.c", "pending")],
+        source_root=str(root),
+        kind="rte",
+    )
+    (root / "lib" / "deep.c").write_bytes(b"\n\n" + DEEP_TEXT)
+
+    worker.start(job_id)
+
+    assert "// editable: lib/deep.c lines 1-4\n" in sent[1]["messages"][-1]["content"]
+    assert store.rows(job_id)[0].result.decision == "fix"
 
 
 def test_no_follow_ups_sends_the_old_schema(tmp_path):

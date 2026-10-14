@@ -59,10 +59,19 @@ def test_with_need_adds_a_required_list_and_leaves_the_original():
 def test_need_names_keeps_identifiers_once_and_at_most_ten():
     data = {"need": ["helper", " helper ", "a b", "x->y", 3, "_ok1", *[f"n{i}" for i in range(12)]]}
 
-    assert need_names(data) == ["helper", "_ok1", *[f"n{i}" for i in range(8)]]
+    # "a b"와 "x->y"는 마지막 이름만 남는다
+    assert need_names(data) == ["helper", "b", "y", "_ok1", *[f"n{i}" for i in range(6)]]
     assert need_names({"need": "helper"}) == []
     assert need_names({}) == []
     assert need_names([]) == []
+
+
+def test_need_names_takes_the_name_out_of_calls_and_tags():
+    data = {
+        "need": ["deep_scale()", "struct cfg", "deep_scale", "Rte_Read_x (uint8 *v)", "->", "  "]
+    }
+
+    assert need_names(data) == ["deep_scale", "cfg", "Rte_Read_x"]
 
 
 def test_make_request_without_follow_ups_sends_todays_messages():
@@ -182,9 +191,28 @@ def test_project_index_reads_the_folder_and_rereads_one_file(tmp_path):
     assert index.source("gen/none.c") is None
 
 
+def test_project_index_takes_the_job_text_over_the_disk(tmp_path):
+    # 작업이 저장한 글과 디스크 파일이 다르면 (작업 중 패치 등) 줄 번호는 저장한 글을 따른다
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "gen" / "impl.c").write_bytes(b"\n\nint impl_get(int x)\n{\n    return x;\n}\n")
+    (tmp_path / "gen" / "disk.c").write_bytes(b"int disk_only(void)\n{\n}\n")
+    texts = {
+        "gen/impl.c": "int impl_get(int x)\n{\n    return x;\n}\n",
+        "gen/kept.c": "int kept_only(void)\n{\n}\n",  # 디스크에 없는 저장 파일
+    }
+
+    index = ProjectIndex.build(tmp_path, texts)
+
+    assert [(d.file, d.first, d.last) for d in index.definitions["impl_get"]] == [
+        ("gen/impl.c", 1, 4)
+    ]
+    assert [d.file for d in index.definitions["kept_only"]] == ["gen/kept.c"]
+    assert [d.file for d in index.definitions["disk_only"]] == ["gen/disk.c"]
+
+
 def test_index_cache_builds_each_job_once_and_keeps_two(tmp_path):
     built: list[Path] = []
-    cache = IndexCache(build=lambda root: built.append(root) or ProjectIndex(root, {}))
+    cache = IndexCache(build=lambda root, texts: built.append(root) or ProjectIndex(root, {}))
 
     threads = [threading.Thread(target=cache.get, args=(1, str(tmp_path))) for _ in range(8)]
     for thread in threads:
@@ -199,3 +227,13 @@ def test_index_cache_builds_each_job_once_and_keeps_two(tmp_path):
     assert len(built) == 4
     assert cache.get(9, str(tmp_path / "gone")) is None
     assert cache.get(8, "") is None
+
+
+def test_index_cache_passes_the_job_texts_to_the_build(tmp_path):
+    seen: list[dict] = []
+    cache = IndexCache(build=lambda root, texts: seen.append(texts) or ProjectIndex(root, {}))
+
+    cache.get(1, str(tmp_path), {"a.c": "int a;"})
+    cache.get(2, str(tmp_path))
+
+    assert seen == [{"a.c": "int a;"}, {}]

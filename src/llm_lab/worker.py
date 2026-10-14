@@ -188,7 +188,9 @@ class Worker:
         """
 
         def ask(names: list[str], request: Request) -> Asked:
-            index = self.indexes.get(job_id, root)
+            # 색인은 작업이 저장한 글로 만든다. 요청의 줄 번호와 고칠 자리도 그 글을 따른다
+            stored = self.store.sources(job_id)
+            index = self.indexes.get(job_id, root, {n: f.text for n, f in stored.items()})
             asked = find_asked(
                 names,
                 index,
@@ -199,7 +201,6 @@ class Worker:
             )
             files: dict[str, SourceFile] = {}
             if request.kind.edits_definitions and index is not None:
-                stored = self.store.sources(job_id)
                 for name in dict.fromkeys(d.file for d in asked.definitions):
                     if name in request.files:
                         continue

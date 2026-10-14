@@ -19,6 +19,7 @@ from llm_lab.csource import (
     PER_NAME,
     Definition,
     definition_rank,
+    find_definitions,
     macro_target,
     scan_project,
 )
@@ -88,15 +89,23 @@ def with_need(schema: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _need_name(item: Any) -> str | None:
+    """need 항목 하나에서 이름. "f()", "f(int x)"는 괄호 앞, "struct cfg"·"x->y"는 마지막 이름."""
+    if not isinstance(item, str):
+        return None
+    found = NEED_NAME.findall(item.split("(", 1)[0])
+    return found[-1] if found else None
+
+
 def need_names(data: Any) -> list[str]:
-    """답의 need에서 C 이름 모양인 것만, 한 번씩, 앞에서 MAX_ASKED_NAMES개."""
+    """답의 need에서 꺼낸 C 이름, 한 번씩, 앞에서 MAX_ASKED_NAMES개."""
     raw = data.get("need") if isinstance(data, dict) else None
     if not isinstance(raw, list):
         return []
     names: list[str] = []
     for item in raw:
-        name = item.strip() if isinstance(item, str) else ""
-        if NEED_NAME.fullmatch(name) and name not in names:
+        name = _need_name(item)
+        if name and name not in names:
             names.append(name)
     return names[:MAX_ASKED_NAMES]
 
@@ -109,8 +118,16 @@ class ProjectIndex:
     definitions: Mapping[str, tuple[Definition, ...]]
 
     @classmethod
-    def build(cls, root: Path) -> ProjectIndex:
+    def build(cls, root: Path, texts: Mapping[str, str] | None = None) -> ProjectIndex:
+        """root를 읽어 만든다. texts(작업이 저장한 파일 → 글)에 있는 파일은 디스크 대신
+        그 글로 찾는다. 요청의 줄 번호는 작업이 저장한 글을 따르므로, 그사이 디스크 파일이
+        바뀌어도 맞게 한다.
+        """
+        texts = texts or {}
         found, _, _ = scan_project(root)
+        found = [definition for definition in found if definition.file not in texts]
+        for name, text in texts.items():
+            found.extend(find_definitions(name, text))
         by_name: dict[str, list[Definition]] = {}
         for definition in found:
             by_name.setdefault(definition.name, []).append(definition)
@@ -131,15 +148,22 @@ class IndexCache:
     """
 
     def __init__(
-        self, build: Callable[[Path], ProjectIndex] = ProjectIndex.build, keep: int = 2
+        self,
+        build: Callable[[Path, Mapping[str, str]], ProjectIndex] = ProjectIndex.build,
+        keep: int = 2,
     ) -> None:
         self._build = build
         self._keep = keep
         self._lock = threading.Lock()
         self._items: OrderedDict[int, ProjectIndex | None] = OrderedDict()
 
-    def get(self, job_id: int, root: str) -> ProjectIndex | None:
-        """작업의 색인. 소스 폴더가 없거나 읽다 실패하면 None."""
+    def get(
+        self, job_id: int, root: str, texts: Mapping[str, str] | None = None
+    ) -> ProjectIndex | None:
+        """작업의 색인. 소스 폴더가 없거나 읽다 실패하면 None.
+
+        texts는 작업이 저장한 파일의 글이다. 색인은 작업마다 처음 한 번만 만든다.
+        """
         with self._lock:
             if job_id in self._items:
                 self._items.move_to_end(job_id)
@@ -147,7 +171,7 @@ class IndexCache:
             index = None
             if root and Path(root).is_dir():
                 try:
-                    index = self._build(Path(root))
+                    index = self._build(Path(root), texts or {})
                 except OSError:
                     index = None
             self._items[job_id] = index
