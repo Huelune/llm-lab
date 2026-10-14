@@ -56,11 +56,17 @@ def chapter_counts(path: Path) -> dict[str, dict[str, int]]:
                 result = MISRA.read_row(cell, number, prepared.data)
                 if isinstance(result, Finding):
                     chapter[result.category or NO_CATEGORY] += 1
+                    # 줄 번호나 파일이 없으면 서버가 코드를 보낼 수 없어 분석하지 못한다
+                    chapter["no_line"] += result.line is None
+                    chapter["no_file"] += not result.file
                 elif result == DISABLED:
                     chapter["disabled"] += 1
                 else:
                     chapter["other"] += 1
-            return {name: dict(counter) for name, counter in counts.items()}
+            return {
+                name: {k: v for k, v in counter.items() if v or k in ("rows", "disabled")}
+                for name, counter in counts.items()
+            }
     finally:
         workbook.close()
     raise LookupError("MISRA 결과 시트 없음")
@@ -91,6 +97,10 @@ def summarize(path: Path) -> list[str]:
         label = name if name == NO_KEY or name.startswith("Dir") else f"규칙 {name}장"
         parts = [f"행 {item['rows']}", f"조건 시트에서 꺼짐 {item.get('disabled', 0)}"]
         parts += [f"{c} {item[c]}" for c in (*CATEGORIES, NO_CATEGORY) if item.get(c)]
+        if item.get("no_line"):
+            parts.append(f"줄 번호 없음 {item['no_line']}")
+        if item.get("no_file"):
+            parts.append(f"파일 칸 빔 {item['no_file']}")
         if item.get("other"):
             parts.append(f"그 밖 {item['other']}")
         lines.append(f"  {label}: " + ", ".join(parts))

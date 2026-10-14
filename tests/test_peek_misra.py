@@ -65,3 +65,25 @@ def test_missing_file_or_sheet_says_what_to_do(tmp_path):
     other = tmp_path / "secret_other.xlsx"
     other.write_bytes(workbook_bytes({"Summary": [["x"]]}))
     assert "MISRA 결과 시트를 찾지 못했습니다" in "\n".join(peek.summarize(other))
+
+
+def test_counts_rows_without_file_or_line(tmp_path):
+    # 1.1처럼 줄이 아닌 환경 전체에 걸린 규칙은 File·Line이 비어 서버가 분석하지 못한다
+    rows = [
+        misra_row(
+            "1.1 secret env", category="Required", group="1 A standard C environment", line=None
+        ),
+        misra_row(
+            "1.3 secret env", category="Required", group="1 A standard C environment", file=""
+        ),
+    ]
+    path = tmp_path / "secret.xlsx"
+    path.write_bytes(workbook_bytes({"MISRA_Result": [MISRA_HEADER, *rows]}))
+
+    counts = peek.chapter_counts(path)
+
+    assert counts["1"]["no_line"] == 1 and counts["1"]["no_file"] == 1
+    screen = "\n".join(peek.summarize(path))
+    assert (
+        "규칙 1장: 행 2, 조건 시트에서 꺼짐 0, Required 2, 줄 번호 없음 1, 파일 칸 빔 1" in screen
+    )
