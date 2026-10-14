@@ -339,3 +339,84 @@ def test_counts_follow_ups_without_showing_names(tmp_path):
     assert "secret" not in screen.casefold()
     assert len(screen.splitlines()) <= 40
     assert max(len(line) for line in screen.splitlines()) <= 118
+
+
+def talk(folder: Path, job: int, row: int, messages: list[str], content: str | None) -> None:
+    """되묻기 대화 기록 하나. messages는 user, assistant가 번갈아 오고, content가 None이면 오류."""
+    roles = ("user", "assistant")
+    exchange = Exchange(
+        [
+            {"role": "system", "content": "secret system"},
+            *({"role": roles[i % 2], "content": m} for i, m in enumerate(messages)),
+        ],
+        raw=None if content is None else {"secret": "raw"},
+        content=content or "",
+        finish_reason=None if content is None else "stop",
+        error="secret error" if content is None else "",
+    )
+    text = render_log(
+        job_id=job,
+        kind="RTE",
+        findings=[finding(row=row, file=r"C:\secret_dir\secret_file.c")],
+        source_name="secret_file.c",
+        model="secret-model",
+        endpoint="https://secret.example/v1/chat/completions",
+        extra_body={},
+        exchanges=[exchange],
+        outcomes=["정의 되묻기 1번", "secret outcome"],
+    )
+    write_log(folder, job, row, text)
+
+
+def provisional(*need: str) -> str:
+    body = {"findings": [{"number": 1, "decision": "manual", "reason": "secret why"}]}
+    return json.dumps({**body, "edits": [], "need": list(need)})
+
+
+def test_names_received_in_a_follow_up_count_as_sent(tmp_path):
+    # 첫 요청에 없었어도 되물어 받은 이름은 "요청에 있었음"이다
+    # 프로젝트에 없다고 들은 이름은 아니다
+    from llm_lab.followups import ASKED_EDITABLE, LAST_LINE, MISSING_LINE
+    from llm_lab.store import NewRow, Store
+
+    store = Store(tmp_path / "fixer.db")
+    store.create_job(
+        "secret.xlsx", "RTE_Result", 0, [], [NewRow(finding(), None, "no_source")], kind="rte"
+    )
+    calls = CODE.replace("(void)", "(void) { return secret_got() + secret_none(); }")
+    follow_up = (
+        ASKED_EDITABLE
+        + "\n\n```c\n// editable: gen/secret.c lines 1-2\n    1| int secret_got(void)\n```\n\n"
+        + MISSING_LINE
+        + "secret_none.\n\n"
+        + LAST_LINE
+    )
+    logs = tmp_path / "logs"
+    messages = [HEAD + calls, provisional("secret_got()", "secret_none"), follow_up]
+    talk(logs, 1, 2, messages, answer("manual", reason="secret_got가 정해야 합니다"))
+    talk(logs, 1, 3, messages, answer("manual", reason="secret_none 구현이 없습니다"))
+
+    screen = "\n".join(peek.summarize(logs, db=tmp_path / "fixer.db"))
+
+    assert f"  {peek.REASON_LABELS['sent']:<28}{1:>6}" in screen
+    assert f"  {peek.REASON_LABELS['missing_call']:<28}{1:>6}" in screen
+    assert "secret" not in screen.casefold()
+    assert len(screen.splitlines()) <= 40
+    assert max(len(line) for line in screen.splitlines()) <= 118
+    found = dict(peek.reason_counts(peek.read_logs(logs, 1), [], peek.received_names(logs, 1)))
+    assert found == {"cut": 0, "missing_call": 1, "missing_other": 0, "sent": 1, "none": 0}
+
+
+def test_follow_ups_count_only_logs_with_an_answer(tmp_path):
+    # 답을 못 받은 기록(오류)은 묶음 수에서 빠지므로 되물은 묶음에서도 뺀다
+    from llm_lab.followups import LAST_LINE, MISSING_LINE
+
+    follow_up = MISSING_LINE + "secret_x.\n\n" + LAST_LINE
+    messages = [HEAD + CODE, provisional("secret_x"), follow_up]
+    talk(tmp_path, 5, 2, messages, answer("manual"))
+    talk(tmp_path, 5, 3, messages, None)
+
+    assert peek.follow_up_counts(tmp_path, 5)["groups"] == 1
+    screen = "\n".join(peek.summarize(tmp_path, job=5))
+    assert "되묻기: 되물은 묶음 1 / 1 " in screen
+    assert "secret" not in screen.casefold()

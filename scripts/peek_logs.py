@@ -110,12 +110,44 @@ def _json(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _listed(message: str, prefix: str) -> int:
-    """되묻기 메시지에서 prefix로 시작하는 줄의 이름 수."""
+def _names_on(message: str, prefix: str) -> list[str]:
+    """되묻기 메시지에서 prefix로 시작하는 줄의 이름들."""
     for line in message.splitlines():
         if line.startswith(prefix):
-            return len([name for name in line[len(prefix) :].rstrip(".").split(", ") if name])
-    return 0
+            return [name for name in line[len(prefix) :].rstrip(".").split(", ") if name]
+    return []
+
+
+def _listed(message: str, prefix: str) -> int:
+    return len(_names_on(message, prefix))
+
+
+def _follow_ups(talk: list[tuple[str, str]]) -> list[tuple[dict, str]]:
+    """대화의 되묻기마다 (그 앞의 임시 답 JSON, 되묻기 메시지)."""
+    return [
+        (_json(talk[index - 1][1]) if index else {}, content)
+        for index, (role, content) in enumerate(talk)
+        if role == "user" and (AGAIN_LINE in content or LAST_LINE in content)
+    ]
+
+
+def _received(talk: list[tuple[str, str]]) -> set[str]:
+    """되물어 받은 이름: need 가운데 프로젝트에 없음·상한으로 못 보냄·찾을 수 없음이 아닌 것."""
+    got: set[str] = set()
+    for previous, message in _follow_ups(talk):
+        if UNAVAILABLE_LINE in message:
+            continue
+        refused = {*_names_on(message, MISSING_LINE), *_names_on(message, LATER_LINE)}
+        got.update(name for name in need_names(previous) if name not in refused)
+    return got
+
+
+def received_names(folder: Path, job: int) -> list[set[str]]:
+    """read_logs의 묶음마다 되물어 받은 이름."""
+    return [
+        _received(_conversation(path.read_text(encoding="utf-8", errors="replace")))
+        for path, _, _ in read_log_files(folder, job)
+    ]
 
 
 def _decided(answer: dict) -> dict[object, object]:
@@ -124,20 +156,17 @@ def _decided(answer: dict) -> dict[object, object]:
 
 
 def follow_up_counts(folder: Path, job: int) -> dict[str, int]:
-    """작업의 되묻기를 센다: 되물은 묶음, 횟수별 묶음, 요청한 이름의 처리, 판단이 바뀐 행."""
+    """작업의 되묻기를 센다: 되물은 묶음, 횟수별 묶음, 요청한 이름의 처리, 판단이 바뀐 행.
+
+    화면의 묶음 수와 같은 기록(read_log_files가 읽은 것)만 센다.
+    """
     counts: Counter[str] = Counter()
-    for path in sorted(folder.glob(f"*_job{job}_row*.md")):
-        if not LOG_NAME.search(path.name):
-            continue
+    for path, _, _ in read_log_files(folder, job):
         talk = _conversation(path.read_text(encoding="utf-8", errors="replace"))
-        rounds = 0
-        first_answer: dict | None = None
-        for index, (role, content) in enumerate(talk):
-            if role != "user" or not (AGAIN_LINE in content or LAST_LINE in content):
-                continue
-            rounds += 1
-            previous = _json(talk[index - 1][1]) if index else {}
-            first_answer = previous if first_answer is None else first_answer
+        asked = _follow_ups(talk)
+        rounds = len(asked)
+        first_answer = asked[0][0] if asked else None
+        for previous, content in asked:
             names = len(need_names(previous))
             counts["asked"] += names
             counts["missing"] += _listed(content, MISSING_LINE)
@@ -238,8 +267,14 @@ class Reason:
     calls: set[str] = field(default_factory=set)
 
 
-def manual_reasons(logs: list[tuple[str, dict]], definitions: list[Definition]) -> list[Reason]:
+def manual_reasons(
+    logs: list[tuple[str, dict]],
+    definitions: list[Definition],
+    received: list[set[str]] | None = None,
+) -> list[Reason]:
     """직접 수정 판단마다 이유가 짚은 코드 이름을 나눈다. 한 판단이 여러 칸에 들 수 있다.
+
+    received는 묶음마다 되물어 받은 이름(received_names)이다. 그 이름은 요청에 있었던 것으로 본다.
 
     cut: 작업에 정의가 저장됐지만 요청에 안 붙은 이름 / missing_call: 보낸 코드에서 불렀지만 저장된
     정의가 없는 이름 / missing_other: 그 밖에 정의가 없는 이름(지역 변수·매개변수·멤버 등) /
@@ -256,18 +291,23 @@ def manual_reasons(logs: list[tuple[str, dict]], definitions: list[Definition]) 
         code = set(identifiers(code_text))
         shown = CODE_RANGE.search(user)
         sent = partial(_sent, user, shown)
+        got = received[group] if received else set()
         for item in items:
             if not isinstance(item, dict) or item.get("decision") != "manual":
                 continue
             text = item.get("reason") if isinstance(item.get("reason"), str) else ""
             reason = Reason(group, item.get("number"), shown.group(3) if shown else "", text)
             found.append(reason)
-            named = {name for name in WORD.findall(text) if name in stored or name in code}
+            named = {
+                name for name in WORD.findall(text) if name in stored or name in code or name in got
+            }
             if not named:
                 reason.kinds.add("none")
                 continue
-            unsent = {n for n in named if n in stored and not any(map(sent, stored[n]))}
-            missing = {name for name in named if name not in stored}
+            unsent = {
+                n for n in named if n in stored and n not in got and not any(map(sent, stored[n]))
+            }
+            missing = {name for name in named if name not in stored and name not in got}
             reason.calls = {
                 name for name in missing if re.search(rf"\b{re.escape(name)}\s*\(", code_text)
             }
@@ -292,9 +332,12 @@ REASON_LABELS = {
 
 
 def reason_counts(
-    logs: list[tuple[str, dict]], definitions: list[Definition]
+    logs: list[tuple[str, dict]],
+    definitions: list[Definition],
+    received: list[set[str]] | None = None,
 ) -> list[tuple[str, int]]:
-    counts = Counter(kind for reason in manual_reasons(logs, definitions) for kind in reason.kinds)
+    reasons = manual_reasons(logs, definitions, received)
+    counts = Counter(kind for reason in reasons for kind in reason.kinds)
     return [(key, counts[key]) for key in REASON_LABELS]
 
 
@@ -507,7 +550,7 @@ def _reason_lines(
     store: Store,
     detail: Path | None,
 ) -> list[str]:
-    reasons = manual_reasons(logs, store.definitions(job))
+    reasons = manual_reasons(logs, store.definitions(job), received_names(folder, job))
     counts = Counter(kind for reason in reasons for kind in reason.kinds)
     lines = [f"  {REASON_LABELS[key]:<28}{counts[key]:>6}" for key in REASON_LABELS]
     root = Path(stored.source_root) if stored.source_root else None
