@@ -19,7 +19,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from llm_lab.csource import SOURCE_SUFFIXES, identifiers
+from llm_lab.csource import (
+    SOURCE_SUFFIXES,
+    callers_for,
+    enclosing_function,
+    identifiers,
+    scan_project,
+    used_definitions,
+)
 from llm_lab.fixer import FixError, make_request, split_lines
 from llm_lab.kinds import KINDS
 from llm_lab.sources import DecodeError, decode_source
@@ -97,6 +104,20 @@ def facts(db: Path, job_id: int | None = None, pattern: str | None = None) -> li
     if counts["rescanned"]:
         assert root is not None
         counts.update(_rescan(root, pattern))
+        # 지금 코드로 작업을 새로 만들면 무엇이 저장되는지 (예전 서버가 만든 작업과 비교)
+        found, _, texts = scan_project(root)
+        analysed = {row.file_name for rows in groups.values() for row in rows}
+        fresh = used_definitions(found, [sources[name].text for name in analysed])
+        counts["fresh_definitions"] = len(fresh)
+        counts["fresh_pattern_names_defined"] = len(used & {d.name for d in fresh})
+        targets: dict[str, str] = {}
+        for rows in groups.values():
+            for row in rows:
+                name = enclosing_function(sources[row.file_name].text, row.finding.line)
+                if name:
+                    targets.setdefault(name, row.file_name)
+        fresh_callers = callers_for(found, texts, targets)
+        counts["fresh_callers"] = sum(1 for d in fresh_callers if d.kind == "caller")
     keys = (
         "job",
         "stored_files",
@@ -115,6 +136,9 @@ def facts(db: Path, job_id: int | None = None, pattern: str | None = None) -> li
         "unreadable_open",
         "pattern_files",
         "pattern_unreadable",
+        "fresh_definitions",
+        "fresh_pattern_names_defined",
+        "fresh_callers",
     )
     return [(key, counts[key]) for key in keys]
 
@@ -151,6 +175,13 @@ def summarize(db: Path, job_id: int | None = None, pattern: str | None = None) -
             f"  패턴이 든 파일 {f['pattern_files']}개, "
             f"그중 못 읽은 파일 {f['pattern_unreadable']}개"
         )
+    fresh = (
+        f"지금 코드로 작업을 새로 만들면: 참고 정의 {f['fresh_definitions']}개, "
+        f"호출자 조각 {f['fresh_callers']}개"
+    )
+    if pattern:
+        fresh += f", 패턴 이름 중 정의를 찾는 것 {f['fresh_pattern_names_defined']}개"
+    lines.append(fresh)
     return lines
 
 

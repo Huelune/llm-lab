@@ -101,3 +101,37 @@ def test_missing_database_or_folder_says_what_to_do(tmp_path):
     shutil.rmtree(tmp_path / "secret_proj")
     screen = "\n".join(peek.summarize(db, pattern="rte"))
     assert "소스 폴더를 찾지 못해 다시 훑지 않았습니다" in screen
+
+
+def test_fresh_scan_shows_what_a_new_job_would_attach(tmp_path):
+    # 예전 서버가 만든 작업처럼 정의 없이 저장하고, 지금 코드로 다시 훑으면 무엇이 붙는지 센다
+    root = tmp_path / "secret_proj"
+    (root / "app").mkdir(parents=True)
+    (root / "gen").mkdir()
+    calc_text = b"int secret_func(int b)\n{\n    return 10 / Rte_Read_ok(b);\n}\n"
+    (root / "app" / "secret_calc.c").write_bytes(calc_text)
+    (root / "gen" / "Rte_ok.c").write_bytes(b"int Rte_Read_ok(int v)\n{\n    return v;\n}\n")
+    (root / "app" / "secret_main.c").write_bytes(
+        b"int secret_main(void)\n{\n    return secret_func(3);\n}\n"
+    )
+    store = Store(tmp_path / "private" / "fixer.db")
+    calc = decode_source("app/secret_calc.c", calc_text)
+    store.create_job(
+        "secret.xlsx",
+        "RTE_Result",
+        0,
+        [calc],
+        [NewRow(finding(line=3), calc.name, "pending")],
+        source_root=str(root),
+        kind="rte",
+    )
+
+    facts = dict(peek.facts(tmp_path / "private" / "fixer.db", pattern="rte"))
+
+    assert facts["stored_definitions"] == 0
+    assert facts["fresh_definitions"] == 2
+    assert facts["fresh_pattern_names_defined"] == 1
+    assert facts["fresh_callers"] == 1
+    screen = "\n".join(peek.summarize(tmp_path / "private" / "fixer.db", pattern="rte"))
+    assert "지금 코드로 작업을 새로 만들면" in screen
+    assert "secret" not in screen.casefold()
