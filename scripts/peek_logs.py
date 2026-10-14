@@ -227,12 +227,35 @@ def _matches(file: str, pattern: str | None) -> bool:
     return bool(pattern) and pattern.casefold() in file.rsplit("/", 1)[-1].casefold()
 
 
+def _loose(name: str) -> str:
+    """fixer와 같은 파일 이름 비교: 역슬래시는 /로, 앞의 ./은 떼고, 대소문자는 무시."""
+    name = name.replace("\\", "/")
+    return (name[2:] if name.startswith("./") else name).lower()
+
+
+def _other_files(user: str, answer: dict) -> set[str]:
+    """답의 수정이 고친 다른 파일. file이 비었거나 검사 파일 자신을 적은 수정은 뺀다.
+
+    서버(fixer)도 검사 파일 경로를 적은 수정은 검사 파일 수정으로 받는다.
+    """
+    shown = CODE_RANGE.search(user)
+    own = _loose(shown.group(3)) if shown else None
+    edits = answer.get("edits") if isinstance(answer.get("edits"), list) else []
+    return {
+        e["file"]
+        for e in edits
+        if isinstance(e, dict)
+        and isinstance(e.get("file"), str)
+        and e["file"]
+        and _loose(e["file"]) != own
+    }
+
+
 def other_file_fixes(logs: list[tuple[str, dict]], pattern: str | None = None) -> tuple[int, int]:
     """다른 파일을 고친 수정 행 수, 그중 패턴에 맞는 파일을 고친 행 수."""
     rows = matched = 0
-    for _, answer in logs:
-        edits = answer.get("edits") if isinstance(answer.get("edits"), list) else []
-        files = [e.get("file") for e in edits if isinstance(e, dict) and e.get("file")]
+    for user, answer in logs:
+        files = _other_files(user, answer)
         fixes = sum(1 for decision in _decisions(answer) if decision == "fix")
         if files and fixes:
             rows += fixes
@@ -253,9 +276,7 @@ def other_file_places(folder: Path, job: int) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for path, user, answer in read_log_files(folder, job):
         fixes = sum(1 for decision in _decisions(answer) if decision == "fix")
-        edits = answer.get("edits") if isinstance(answer.get("edits"), list) else []
-        files = {e["file"] for e in edits if isinstance(e, dict) and isinstance(e.get("file"), str)}
-        files.discard("")
+        files = _other_files(user, answer)
         if not fixes or not files:
             continue
         first = {m.group(2): m.group(1) for m in EDITABLE_HEAD.finditer(user)}

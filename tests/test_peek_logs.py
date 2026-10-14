@@ -431,6 +431,16 @@ def test_follow_ups_count_only_logs_with_an_answer(tmp_path):
     assert "secret" not in screen.casefold()
 
 
+def test_edits_that_name_the_checked_file_are_not_other_file_fixes(tmp_path):
+    # LLM이 검사 파일 수정에 file을 ""가 아닌 그 파일 경로로 적어도 서버는 검사 파일 수정으로 받는다
+    own = [{"file": ".\\SECRET_FILE.c", "original": "a", "replacement": "b"}]
+    log(tmp_path, 6, 2, HEAD + CODE, answer("fix", own))
+
+    assert peek.other_file_fixes(peek.read_logs(tmp_path, 6)) == (0, 0)
+    assert peek.other_file_places(tmp_path, 6)["other"] == 0
+    assert "다른 파일을 고친 수정 행: 0" in "\n".join(peek.summarize(tmp_path, job=6))
+
+
 def test_other_file_fixes_are_split_by_where_the_edited_file_was_sent(tmp_path):
     # 다른 파일을 고친 수정이 호출자·첫 요청의 정의·되물어 받은 정의·헤더 중 어디인지 센다
     from llm_lab.followups import LAST_LINE
