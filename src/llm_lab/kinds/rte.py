@@ -71,14 +71,21 @@ Definitions marked reference only cannot be changed. \
 Set "file" to "" for edits in the numbered code of the findings.
 """
 
+_CALLERS = """\
+Callers of the function may follow the definitions. Use them to see which values really reach \
+its parameters. If every caller shown guarantees safety and none are said to be not shown, \
+answer no_fix and name the caller lines. If a caller passes an unsafe value, \
+you may fix it in that caller, where the value is produced, and set "file" to that path.
+"""
+
 _DEFINITIONS_GUARD = """\
-If the cause is in a caller or in a definition marked reference only, or changing \
-the editable definition would be risky, \
+If the cause is in a caller that is not shown or in a definition marked reference only, \
+or changing an editable caller or definition would be risky, \
 guard the operation here and name that file and function in reason.
 """
 
 _DEFINITIONS_ROOT = """\
-If the cause is in a caller or in a definition marked reference only, \
+If the cause is in a caller that is not shown or in a definition marked reference only, \
 answer manual and name that file and function in reason.
 """
 
@@ -91,8 +98,8 @@ Answer with JSON only. "findings" has one entry for each numbered finding. \
 "edits" is [] when no finding is fix.
 """
 
-GUARD_PROMPT = _HEAD + GUARD_RULES + _FIX_RULES + _DEFINITIONS_GUARD + _TAIL
-ROOT_CAUSE_PROMPT = _HEAD + ROOT_CAUSE_RULES + _FIX_RULES + _DEFINITIONS_ROOT + _TAIL
+GUARD_PROMPT = _HEAD + GUARD_RULES + _FIX_RULES + _CALLERS + _DEFINITIONS_GUARD + _TAIL
+ROOT_CAUSE_PROMPT = _HEAD + ROOT_CAUSE_RULES + _FIX_RULES + _CALLERS + _DEFINITIONS_ROOT + _TAIL
 SYSTEM_PROMPT = GUARD_PROMPT  # 기본값: 가드 허용
 
 # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값이다
