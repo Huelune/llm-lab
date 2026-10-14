@@ -241,6 +241,44 @@ def other_file_fixes(logs: list[tuple[str, dict]], pattern: str | None = None) -
     return rows, matched
 
 
+EDITABLE_HEAD = re.compile(r"^// (editable caller: |editable: )(\S+) ", re.M)
+
+
+def other_file_places(folder: Path, job: int) -> dict[str, int]:
+    """다른 파일을 고친 수정 행을, 고친 파일이 어떻게 보내졌는지로 센다 (한 행이 여러 칸에).
+
+    caller: 호출자 조각 / definition: 첫 요청의 정의 / asked: 되물어 받은 정의 / other: 그 밖.
+    header는 고친 파일이 .h인 행이다.
+    """
+    counts: Counter[str] = Counter()
+    for path, user, answer in read_log_files(folder, job):
+        fixes = sum(1 for decision in _decisions(answer) if decision == "fix")
+        edits = answer.get("edits") if isinstance(answer.get("edits"), list) else []
+        files = {e["file"] for e in edits if isinstance(e, dict) and isinstance(e.get("file"), str)}
+        files.discard("")
+        if not fixes or not files:
+            continue
+        first = {m.group(2): m.group(1) for m in EDITABLE_HEAD.finditer(user)}
+        talk = _conversation(path.read_text(encoding="utf-8", errors="replace"))
+        later = {
+            m.group(2) for _, message in _follow_ups(talk) for m in EDITABLE_HEAD.finditer(message)
+        }
+        places = set()
+        for file in files:
+            if first.get(file) == "editable caller: ":
+                places.add("caller")
+            elif file in first:
+                places.add("definition")
+            elif file in later:
+                places.add("asked")
+            else:
+                places.add("other")
+        for place in places:
+            counts[place] += fixes
+        counts["header"] += fixes if any(f.casefold().endswith(".h") for f in files) else 0
+    return {key: counts[key] for key in ("caller", "definition", "asked", "header", "other")}
+
+
 def _where(definition: Definition) -> str:
     if definition.first == definition.last:
         return f"line {definition.first}"
@@ -624,8 +662,8 @@ def summarize(
         f"되묻기: 되물은 묶음 {follow['groups']} / {len(logs)} "
         f"(1번 {follow['round_1']}, 2번 {follow['round_2']}, 3번 {follow['round_3']})",
         f"  요청한 이름 {follow['asked']}: 보냄 {follow['sent']}, "
-        f"프로젝트에 없음 {follow['missing']}, 이미 보냄 {follow['shown']}, "
-        f"상한으로 못 보냄 {follow['later']}, 찾을 수 없었음 {follow['unavailable']}",
+        f"프로젝트에 없음 {follow['missing']}, 이미 보냄 {follow['shown']}",
+        f"  상한으로 못 보냄 {follow['later']}, 찾을 수 없었음 {follow['unavailable']}",
         f"  되묻기 뒤 판단이 바뀐 행: {follow['changed']}",
     ]
     lines += ["", "직접 수정 이유가 짚은 이름 (한 행이 여러 줄에 들 수 있음):"]
@@ -644,6 +682,13 @@ def summarize(
         lines.append(f"  나머지 {len(checks) - SHOWN_CHECKS}종류 {rest}행")
     rows, matched = other_file_fixes(logs, pattern)
     lines += ["", f"다른 파일을 고친 수정 행: {rows}"]
+    if rows:
+        place = other_file_places(folder, job)
+        lines.append(
+            f"  고친 곳: 호출자 {place['caller']}, 첫 요청의 정의 {place['definition']}, "
+            f"되물어 받은 정의 {place['asked']}, 그 밖 {place['other']} "
+            f"/ 헤더(.h) {place['header']}"
+        )
     if pattern:
         lines.append(f"  그중 패턴에 맞는 파일을 고친 행: {matched}")
     return lines

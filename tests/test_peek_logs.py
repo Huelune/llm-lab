@@ -57,6 +57,13 @@ def answer(decision: str, edits: list[dict] | None = None, reason: str = "secret
     )
 
 
+def width(line: str) -> int:
+    """터미널에서 차지하는 칸 수 (한글은 2칸)."""
+    import unicodedata
+
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in line)
+
+
 def log(folder: Path, job: int, row: int, user: str, content: str) -> None:
     exchange = Exchange(
         [{"role": "system", "content": "secret system"}, {"role": "user", "content": user}],
@@ -333,7 +340,9 @@ def test_counts_follow_ups_without_showing_names(tmp_path):
     }
     screen = "\n".join(peek.summarize(tmp_path, job=4))
     assert "되묻기: 되물은 묶음 1 / 2 (1번 1, 2번 0, 3번 0)" in screen
-    assert "요청한 이름 3: 보냄 1, 프로젝트에 없음 1, 이미 보냄 1, 상한으로 못 보냄 0" in screen
+    assert "요청한 이름 3: 보냄 1, 프로젝트에 없음 1, 이미 보냄 1" in screen
+    assert "  상한으로 못 보냄 0, 찾을 수 없었음 0" in screen
+    assert max(width(line) for line in screen.splitlines()) <= 118
     assert "되묻기 뒤 판단이 바뀐 행: 1" in screen
     assert "판단 행: 수정 1 / 수정 불필요 1 / 직접 수정 0" in screen
     assert "secret" not in screen.casefold()
@@ -419,4 +428,48 @@ def test_follow_ups_count_only_logs_with_an_answer(tmp_path):
     assert peek.follow_up_counts(tmp_path, 5)["groups"] == 1
     screen = "\n".join(peek.summarize(tmp_path, job=5))
     assert "되묻기: 되물은 묶음 1 / 1 " in screen
+    assert "secret" not in screen.casefold()
+
+
+def test_other_file_fixes_are_split_by_where_the_edited_file_was_sent(tmp_path):
+    # 다른 파일을 고친 수정이 호출자·첫 요청의 정의·되물어 받은 정의·헤더 중 어디인지 센다
+    from llm_lab.followups import LAST_LINE
+
+    def fix(file: str) -> str:
+        return answer("fix", [{"file": file, "original": "a", "replacement": "b"}])
+
+    log(tmp_path, 5, 2, HEAD + CODE + CALLER, fix("app/secret_main.c"))
+    log(tmp_path, 5, 3, HEAD + CODE + EDITABLE, fix("gen/Rte_secret.c"))
+    asked = "Definitions you asked for.\n\n```c\n// editable: inc/secret_deep.h lines 1-2\n```"
+    exchange = Exchange(
+        [
+            {"role": "system", "content": "secret system"},
+            {"role": "user", "content": HEAD + CODE},
+            {"role": "assistant", "content": json.dumps({"need": ["secret_deep"]})},
+            {"role": "user", "content": asked + "\n\n" + LAST_LINE},
+        ],
+        raw={},
+        content=fix("inc/secret_deep.h"),
+        finish_reason="stop",
+    )
+    text = render_log(
+        job_id=5,
+        kind="RTE",
+        findings=[finding(row=4)],
+        source_name="secret_file.c",
+        model="m",
+        endpoint="e",
+        extra_body={},
+        exchanges=[exchange],
+        outcomes=["x"],
+    )
+    write_log(tmp_path, 5, 4, text)
+
+    counts = peek.other_file_places(tmp_path, 5)
+
+    assert counts == {"caller": 1, "definition": 1, "asked": 1, "header": 1, "other": 0}
+    screen = "\n".join(peek.summarize(tmp_path, job=5))
+    assert (
+        "  고친 곳: 호출자 1, 첫 요청의 정의 1, 되물어 받은 정의 1, 그 밖 0 / 헤더(.h) 1" in screen
+    )
     assert "secret" not in screen.casefold()
