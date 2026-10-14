@@ -850,6 +850,7 @@ def test_home_asks_for_the_whole_project_folder(tmp_path):
 
     assert 'name="ref_dirs"' not in page
     assert "프로젝트 최상위 폴더" in page
+    assert r'placeholder="예: C:\work\brake"' in page
 
 
 DRV_C = b"int drv_scale(int v)\n{\n    return v + 1;\n}\n"

@@ -484,7 +484,7 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         '"폴더 찾기…"로 고르거나 경로를 붙여넣습니다. 엑셀에 나온 파일을 이 폴더 안에서 '
         "찾고, 패치도 이 폴더 기준으로 만듭니다.</p>"
         '<div class="pickrow"><input type="text" name="source_dir" list="recent-dirs" required '
-        r'placeholder="예: C:\work\brake\src" autocomplete="off">'
+        r'placeholder="예: C:\work\brake" autocomplete="off">'
         '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
         '<p class="hint" id="pick-note"></p>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'

@@ -631,3 +631,39 @@ def test_stored_copy_of_the_checked_file_does_not_replace_the_sent_source():
     (result,) = propose_fixes(make_client(handler), MODEL, request)
 
     assert result.edits[0].start == LONG_TEXT.rindex("    v = v - 1;")
+
+
+GUARD = {
+    "original": "    return a / b;",
+    "replacement": "    if (b == 0) return 0;\n    return a / b;",
+}
+
+
+@pytest.mark.parametrize(("kind", "make"), [(RTE, finding), (MISRA, misra_finding)])
+def test_same_insertion_given_twice_is_applied_once(kind, make):
+    handler, _ = scripted(answer(("fix", REASON), edits=[GUARD, dict(GUARD)]))
+
+    (result,) = ask(handler, [make(line=3)], kind=kind)
+
+    assert apply_edits(SOURCE.text, result.edits).count("if (b == 0)") == 1
+    assert result.diff.count("+    if (b == 0) return 0;") == 1
+
+
+@pytest.mark.parametrize("name", ["LIB\\Drv.c", "./lib/drv.c", "Lib/DRV.C"])
+def test_other_file_name_is_matched_loosely_and_stored_as_the_job_name(name):
+    handler, sent = scripted(answer(("fix", REASON), edits=[{**DRV_FIX, "file": name}]))
+
+    _, (result,) = ask_with(handler)
+
+    assert len(sent) == 1
+    assert [edit.file for edit in result.edits] == ["lib/drv.c"]
+
+
+def test_checked_file_name_is_matched_loosely_and_stored_empty():
+    local = {"file": "SRC\\Calc.c", "original": "    return a / drv_scale(b);", "replacement": "x"}
+    handler, sent = scripted(answer(("fix", REASON), edits=[local]))
+
+    _, (result,) = ask_with(handler)
+
+    assert len(sent) == 1
+    assert [edit.file for edit in result.edits] == [""]

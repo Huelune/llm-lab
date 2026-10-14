@@ -669,6 +669,12 @@ def _locate_one(
     raise EditMismatch(f"edits[{number}].original을 {name}의 보여 준 코드에서 찾을 수 없음")
 
 
+def _loose_name(name: str) -> str:
+    """LLM이 적은 파일 이름을 비교용으로 맞춘다: 역슬래시는 /로, 앞의 ./은 떼고, 대소문자는 무시."""
+    name = name.replace("\\", "/")
+    return (name[2:] if name.startswith("./") else name).lower()
+
+
 def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], str]:
     source = request.source
     if (
@@ -684,11 +690,13 @@ def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], 
     ):
         raise EditMismatch("fix인데 edits가 비었거나 형식이 다름", "format")
     texts = {**request.files, source.name: source}
+    names = {_loose_name(name): name for name in texts}
     by_target: dict[str, list[Edit]] = {}
     for number, raw in enumerate(raw_edits, start=1):
-        target = raw.get("file") or source.name
-        if target not in texts:
-            raise EditMismatch(f"edits[{number}].file {target}은 고칠 수 있게 보낸 파일이 아님")
+        asked = raw.get("file") or source.name
+        target = names.get(_loose_name(asked))
+        if target is None:
+            raise EditMismatch(f"edits[{number}].file {asked}은 고칠 수 있게 보낸 파일이 아님")
         file = texts[target]
         # 소스 인코딩(CP949 등)으로 못 쓰는 문자가 있으면 패치를 만들 수 없으므로 지금 다시 요청한다
         try:
@@ -706,7 +714,8 @@ def _located_edits(raw_edits: Any, request: Request) -> tuple[tuple[Edit, ...], 
     edits: list[Edit] = []
     diffs: list[str] = []
     for target in [source.name, *sorted(t for t in by_target if t != source.name)]:
-        found = sorted(by_target.get(target, []), key=lambda edit: edit.start)
+        # 같은 수정이 두 번 오면 한 번만 적용한다 (같은 자리의 삽입이 겹쳐 두 번 들어가지 않게)
+        found = sorted(dict.fromkeys(by_target.get(target, [])), key=lambda edit: edit.start)
         if not found:
             continue
         for before, after in zip(found, found[1:], strict=False):

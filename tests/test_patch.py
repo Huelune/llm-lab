@@ -226,6 +226,7 @@ def test_conflict_message_is_short_and_says_what_to_do():
 
     assert "행 0와 행 1, 행 1와 행 2, 행 2와 행 3 외 7쌍" in message
     assert "수정 모두 선택" in message
+    assert "하나만 체크" in message  # 다른 파일 수정 행은 '수정 모두 선택'으로 안 골라진다
 
 
 def test_edits_in_other_files_conflict_only_in_the_same_file():
