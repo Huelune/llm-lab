@@ -574,7 +574,11 @@ def _selection(kind: Kind, rows: list[Row]) -> tuple[dict[int, set[int]], set[in
         if row.file_name and row.result is not None and row.result.decision == "fix"
     }
     conflicts = find_conflicts(fixable)
-    manual = {row_id for row_id in fixable if not kind.auto_select(by_id[row_id].finding)}
+    manual = {
+        row_id
+        for row_id in fixable
+        if not kind.auto_select(by_id[row_id].finding) or _edits_other_files(by_id[row_id])
+    }
     order = sorted(
         (row_id for row_id in fixable if row_id not in manual),
         key=lambda row_id: (kind.priority(by_id[row_id].finding), by_id[row_id].finding.row),
@@ -690,6 +694,8 @@ def _overview_row(
                 f"{_badge('gray', '이번엔 제외')} 행 {partner.finding.row} 수정과 같은 줄을 "
                 f"고칩니다 · {summary_html}"
             )
+        if row.result.decision == "fix" and _edits_other_files(row):
+            summary_html = f"{_badge('blue', '다른 파일 수정')} {summary_html}"
     else:
         title = ROW_STATES.get(row.state, row.state)
         summary_html = escape(title)
@@ -758,6 +764,13 @@ def _detail_card(
                 f'<p class="excluded">{_badge("gray", "이번엔 제외")} 행 {partner.finding.row} '
                 "수정과 같은 줄을 고칩니다. 이번 패치를 적용하고 Polyspace를 다시 돌린 뒤 "
                 "다시 분석하면 남은 문제만 다시 고칩니다.</p>"
+            )
+        if row.result.decision == "fix" and _edits_other_files(row):
+            files = sorted({edit.file for edit in row.result.edits if edit.file})
+            body.append(
+                f'<p class="excluded">{_badge("blue", "다른 파일 수정")} '
+                f"{escape(', '.join(files))}도 고칩니다. 그 함수를 부르는 모든 곳의 동작이 "
+                '바뀌므로 "수정 모두 선택"이 고르지 않습니다. 보고 직접 체크하세요.</p>'
             )
         body.append(f'<div class="reason">{escape(row.result.reason)}</div>')
         # 같은 묶음의 수정 행은 수정이 똑같으므로 diff는 묶음의 첫 수정 행에만 보인다
@@ -885,3 +898,8 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
     else:
         body += panels
     return page(title, body, refresh=not finished)
+
+
+def _edits_other_files(row: Row) -> bool:
+    """수정이 행의 파일 말고 다른 파일도 고치는지 (그 함수를 부르는 모든 곳에 영향)."""
+    return row.result is not None and any(edit.file for edit in row.result.edits)

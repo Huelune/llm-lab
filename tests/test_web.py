@@ -21,6 +21,7 @@ from rte_fixtures import (
     rte_row,
     workbook_bytes,
 )
+from test_patch import git_apply, needs_git
 
 from llm_lab import web
 from llm_lab.config import OPTIONAL_VARS, REQUIRED_VARS
@@ -915,3 +916,25 @@ def test_misra_job_does_not_store_extra_files(tmp_path):
     )
 
     assert set(store.sources(1)) == {"app/src/calc.c"}
+
+
+@needs_git
+def test_other_file_fix_is_not_auto_picked_shows_a_chip_and_patches_the_project(tmp_path):
+    drv_fix = {
+        "file": "common/drv.c",
+        "original": "    return v + 1;",
+        "replacement": "    return v + 2;",
+    }
+    client, store, _ = make_service(tmp_path, answer(("fix", REASON), edits=[drv_fix]))
+    app, top = project_with_shared_code(tmp_path)
+    upload(client, rte_excel(rte_row("Orange Check", line=4)), top)
+    (row,) = store.rows(1)
+
+    page = client.get("/results/1").text
+
+    assert "다른 파일 수정" in page
+    assert f'name="row" value="{row.id}" data-auto="0"' in page
+    patch = client.post("/results/1/fixes.patch", data={"row": [str(row.id)]}).content
+    assert b"--- a/common/drv.c\n+++ b/common/drv.c\n" in patch
+    git_apply(top, patch)
+    assert b"return v + 2;" in (top / "common" / "drv.c").read_bytes()
