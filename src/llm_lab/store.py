@@ -298,14 +298,6 @@ class Store:
             ).fetchall()
         return [Definition(**dict(record)) for record in found]
 
-    def add_definitions(self, job_id: int, definitions: Iterable[Definition]) -> None:
-        """되묻기로 보낸 정의를 작업에 더한다. 이미 있는 정의는 그대로."""
-        with self._write() as db:
-            db.executemany(
-                "INSERT OR IGNORE INTO definitions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(job_id, d.name, d.kind, d.file, d.first, d.last, d.text) for d in definitions],
-            )
-
     def add_files(self, job_id: int, files: Iterable[SourceFile]) -> None:
         """작업에 없는 파일만 더한다. 있는 파일은 분석 당시 원문을 지킨다."""
         with self._write() as db:

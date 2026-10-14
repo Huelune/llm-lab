@@ -182,8 +182,9 @@ class Worker:
     def _asker(self, job_id: int, root: str, rounds: list[Asked], used: dict[str, str]) -> Ask:
         """되물은 이름을 작업의 프로젝트 색인에서 찾는 함수.
 
-        보낸 정의는 작업에 더한다. 고칠 수 있는 종류면 그 정의의 파일도 작업에 더하고(작업에 없으면
-        소스 폴더에서 다시 읽는다), 다시 읽지 못한 파일의 정의는 참고만으로 보낸다.
+        보낸 정의는 작업에 남기지 않는다(대화 기록에 남는다). 남기면 같은 작업의 다른 묶음 첫 요청에
+        섞여 처리 순서에 따라 요청이 달라진다. 고칠 수 있는 종류면 그 정의의 파일만 작업에 더하고
+        (작업에 없으면 소스 폴더에서 다시 읽는다), 다시 읽지 못한 파일의 정의는 참고만으로 보낸다.
         """
 
         def ask(names: list[str], request: Request) -> Asked:
@@ -210,7 +211,6 @@ class Worker:
                         files[name] = found
                         used[name] = found.sha256
                 self.store.add_files(job_id, files.values())
-            self.store.add_definitions(job_id, asked.definitions)
             asked = replace(asked, files=files)
             rounds.append(asked)
             return asked

@@ -56,7 +56,7 @@ def new_job(store: Store, root: Path) -> int:
     )
 
 
-def test_need_is_answered_from_the_project_and_what_was_sent_stays_in_the_job(tmp_path):
+def test_need_is_answered_from_the_project_and_the_files_sent_stay_in_the_job(tmp_path):
     root = project(tmp_path)
     handler, sent = scripted(reply("manual", need=["deep_scale"]), reply("fix", [DEEP_FIX]))
     store = Store(tmp_path / "fixer.db")
@@ -72,7 +72,8 @@ def test_need_is_answered_from_the_project_and_what_was_sent_stays_in_the_job(tm
     assert row.result.edits[0].file == "lib/deep.c"
     assert "// editable: lib/deep.c lines 1-4" in sent[1]["messages"][-1]["content"]
     assert "lib/deep.c" in store.sources(job_id)
-    assert [d.name for d in store.definitions(job_id)] == ["deep_scale"]
+    # 되물은 정의는 다른 묶음의 첫 요청에 섞이지 않게 작업에 남기지 않는다
+    assert store.definitions(job_id) == []
     text = next((tmp_path / "logs").glob("*.md")).read_text(encoding="utf-8")
     assert "- 결과: 정의 되묻기 1번" in text
 

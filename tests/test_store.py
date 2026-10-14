@@ -322,7 +322,7 @@ def test_sources_returns_every_file_of_a_job(tmp_path):
     assert store.sources(job_id + 1) == {}
 
 
-def test_add_files_and_definitions_keep_what_the_job_already_has(tmp_path):
+def test_add_files_keeps_what_the_job_already_has(tmp_path):
     store = Store(tmp_path / "fixer.db")
     source = decode_source("calc.c", CALC_C)
     job = store.create_job(
@@ -332,12 +332,9 @@ def test_add_files_and_definitions_keep_what_the_job_already_has(tmp_path):
     extra = decode_source("lib/deep.c", b"int deep(void);\n")
 
     store.add_files(job, [changed, extra])
-    deep = Definition("deep", "function", "lib/deep.c", 1, 1, "int deep(void);")
-    store.add_definitions(job, [deep, deep])
 
     assert store.sources(job)["calc.c"].text == source.text
     assert store.sources(job)["lib/deep.c"].text == extra.text
-    assert store.definitions(job) == [deep]
 
 
 def test_cache_keeps_the_files_an_answer_relied_on(tmp_path):
