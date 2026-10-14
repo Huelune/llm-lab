@@ -306,10 +306,8 @@ def test_misra_prompt_sends_fixes_that_live_elsewhere_to_manual():
 def test_rte_and_misra_prompts_explain_the_definitions_section():
     sentence = "Definitions of functions, macros, variables and types"
     assert sentence in RTE.system_prompt and sentence in MISRA.system_prompt
-    assert "Edits must stay in the numbered code;" in RTE.system_prompt
     assert "Edits must stay in the numbered code;" in MISRA.system_prompt
     assert "answer manual and name that file and function" in RTE.prompt({"mode": "root_cause"})
-    assert "not in the code or the definitions shown" in RTE.prompt({"mode": "root_cause"})
     assert "Definitions of" not in CODEMETRICS.system_prompt
     assert RTE.prompt_version == 5 and MISRA.prompt_version == 2  # 답 처리는 그대로
 
@@ -323,3 +321,19 @@ def test_rte_modes_default_to_guard_and_pick_the_prompt():
     assert "Never make such a change" in root and "a guard is acceptable" not in root
     assert "answer manual and name that file and function" in root
     assert MISRA.modes == () and MISRA.prompt({"anything": 1}) == MISRA.system_prompt
+
+
+def test_rte_prompts_let_the_model_fix_editable_definitions():
+    for mode in ("guard", "root_cause"):
+        prompt = RTE.prompt({"mode": mode})
+        assert "Those marked editable may be changed" in prompt
+        assert 'set "file" to that path' in prompt
+        assert "A change there affects every caller" in prompt
+        assert 'Set "file" to "" for edits in the numbered code' in prompt
+    assert "guard the operation here and name that file and function" in RTE.prompt(
+        {"mode": "guard"}
+    )
+    root = RTE.prompt({"mode": "root_cause"})
+    assert "answer manual and name that file and function" in root
+    assert "the cause is in a caller or in a definition marked reference only" in root
+    assert "editable" not in MISRA.system_prompt

@@ -43,8 +43,8 @@ When the code must change, decide between fix and manual:
 is safe on every execution and static analysis can prove it: initialise the variable, \
 use the real array size as the bound, check the value where it enters the function, \
 correct the loop bound, and similar.
-- Otherwise answer manual: the cause is not in the code or the definitions shown \
-(the value comes from a caller or from data that is not shown), or the only change you could make \
+- Otherwise answer manual: the cause is in a caller or in a definition marked reference only \
+(the value comes from code or data you cannot change here), or the only change you could make \
 would hide the failure (a default or fallback value, skipping the operation, \
 an early return, a condition that is always true). Never make such a change. \
 In reason say what has to be decided and where: which caller, value or definition.
@@ -62,17 +62,23 @@ without the line-number prefix. "replacement" is the new text for those lines.
 - Keep each edit small: "original" holds only the lines you change, not the whole function. \
 Add one unchanged neighbouring line only when the changed line appears more than once.
 Definitions of functions, macros, variables and types that this code uses but that live \
-elsewhere may follow the code, for reference. Use them to judge value ranges, array sizes, \
-return values and the real types behind typedefs. Edits must stay in the numbered code; \
+elsewhere may follow the code. Use them to judge value ranges, array sizes, \
+return values and the real types behind typedefs. \
+Those marked editable may be changed: when the real cause is there (for example a called \
+function can return a value the caller cannot handle), fix it there and set "file" to that path. \
+A change there affects every caller, so keep the behavior for valid inputs. \
+Definitions marked reference only cannot be changed. \
+Set "file" to "" for edits in the numbered code of the findings.
 """
 
 _DEFINITIONS_GUARD = """\
-if the right change is in one of those definitions or in a caller, \
+If the cause is in a caller or in a definition marked reference only, or changing \
+the editable definition would be risky, \
 guard the operation here and name that file and function in reason.
 """
 
 _DEFINITIONS_ROOT = """\
-if the right change is in one of those definitions or in a caller, \
+If the cause is in a caller or in a definition marked reference only, \
 answer manual and name that file and function in reason.
 """
 
