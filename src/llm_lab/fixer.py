@@ -406,12 +406,12 @@ class Request:
         return self.kind.answer_schema
 
     def with_asked(self, asked: Asked) -> Request:
-        """되묻기로 보낸 정의와 새로 고칠 수 있게 된 파일을 더한 요청."""
-        return replace(
-            self,
-            asked=(*self.asked, *asked.definitions),
-            files={**self.files, **asked.files},
-        )
+        """되묻기로 보낸 정의와 새로 고칠 수 있게 된 파일을 더한 요청.
+
+        고칠 수 없는 종류는 정의를 참고로만 받으므로 파일이 와도 고칠 수 있는 파일에 더하지 않는다.
+        """
+        files = {**self.files, **asked.files} if self.kind.edits_definitions else self.files
+        return replace(self, asked=(*self.asked, *asked.definitions), files=files)
 
 
 def _shown_last(definition: Definition) -> int:

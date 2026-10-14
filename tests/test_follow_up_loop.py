@@ -2,12 +2,13 @@
 
 import json
 
+import pytest
 from fake_llm import MODEL, completion, make_client, scripted
 from misra_fixtures import misra_finding
 from rte_fixtures import REASON, finding
 
 from llm_lab.csource import Definition
-from llm_lab.fixer import make_request, propose_fixes
+from llm_lab.fixer import FixError, make_request, propose_fixes
 from llm_lab.followups import (
     ASKED_EDITABLE,
     ASKED_REFERENCE,
@@ -165,3 +166,20 @@ def test_misra_gets_asked_definitions_for_reference_only():
     assert follow_up.startswith(ASKED_REFERENCE)
     assert "// lib/deep.c lines 1-4\nint deep_scale(int v)" in follow_up
     assert "    1|" not in follow_up
+
+
+def test_misra_cannot_edit_asked_files_even_if_a_caller_passes_them():
+    handler, _ = scripted(
+        reply(("manual", REASON), need=["deep_scale"]),
+        reply(("fix", REASON), edits=[{**DEEP_FIX, "replacement": "x"}]),
+        reply(("fix", REASON), edits=[{**DEEP_FIX, "replacement": "x"}]),
+    )
+    request = make_request(MISRA, [misra_finding(line=3)], USE, None, (), {}, follow_ups=1)
+
+    with pytest.raises(FixError):
+        propose_fixes(
+            make_client(handler),
+            MODEL,
+            request,
+            ask=lambda names, request: Asked(definitions=(DEEP_DEF,), files={"lib/deep.c": DEEP}),
+        )
