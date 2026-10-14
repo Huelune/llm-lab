@@ -34,7 +34,7 @@ BLOCK_HEAD = re.compile(r"^```c\n// (editable caller: |editable: |reference only
 CODE_BLOCK = re.compile(r"^```c\n(.*?)\n```$", re.S | re.M)
 CODE_RANGE = re.compile(r"^Code \(lines (\d+)-(\d+) of (.+?)[;)]", re.M)
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # 한글이 붙은 이름(예: 이름을)에서도 이름만
-SHOWN_CALLS = 3  # 화면에 모양을 찍는 호출 이름 수 (나머지는 자세한 목록에)
+SHOWN_CALLS = 2  # 화면에 모양을 찍는 호출 이름 수 (나머지는 자세한 목록에)
 DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
@@ -362,6 +362,72 @@ def write_detail(
     path.write_text("\n".join(lines), encoding="utf-8-sig")
 
 
+# Polyspace Code Prover 런타임 검사 이름 (공개 문서의 표준 용어). 화면에는 이 이름만 찍는다
+CHECKS = (
+    "Absolute address usage",
+    "Correctness condition",
+    "Division by zero",
+    "Function not called",
+    "Function not reachable",
+    "Function not returning value",
+    "Illegally dereferenced pointer",
+    "Invalid shift operations",
+    "Invalid use of standard library routine",
+    "Invalid use of standard library floating point routine",
+    "Invalid use of standard library integer routine",
+    "Invalid use of standard library memory routine",
+    "Invalid use of standard library string routine",
+    "Non-initialized local variable",
+    "Non-initialized pointer",
+    "Non-initialized variable",
+    "Non-terminating call",
+    "Non-terminating loop",
+    "Out of bounds array index",
+    "Overflow",
+    "Return value not initialized",
+    "Subnormal float",
+    "Uncaught exception",
+    "Unreachable code",
+    "User assertion",
+)
+KNOWN_CHECKS = {name.casefold(): name for name in CHECKS}
+FINDING_BLOCK = re.compile(r"^Finding (\d+):\n((?:- .*\n?)+)", re.M)
+SHOWN_CHECKS = 5  # 화면에 찍는 검사 종류 수
+
+
+def _finding_facts(user: str) -> dict[str, dict[str, str]]:
+    """사용자 메시지의 Finding 번호 → {사실 이름(소문자): 값}."""
+    found = {}
+    for match in FINDING_BLOCK.finditer(user):
+        facts = {}
+        for line in match.group(2).splitlines():
+            name, _, value = line[2:].partition(": ")
+            facts[name.strip().casefold()] = value.strip()
+        found[match.group(1)] = facts
+    return found
+
+
+def manual_checks(logs: list[tuple[str, dict]]) -> list[tuple[str, int]]:
+    """직접 수정 행의 (색 검사 이름, 행 수), 많은 것부터. 표준 이름이 아니면 "그 밖"으로 묶는다."""
+    counts: Counter[str] = Counter()
+    for user, answer in logs:
+        facts = _finding_facts(user)
+        items = answer.get("findings") if isinstance(answer.get("findings"), list) else []
+        for item in items:
+            if not isinstance(item, dict) or item.get("decision") != "manual":
+                continue
+            fact = facts.get(str(item.get("number")), {})
+            check = KNOWN_CHECKS.get(fact.get("check", "").casefold())
+            color = fact.get("type", "").split(" ")[0]
+            if check is None or color not in ("Red", "Orange"):
+                counts["그 밖"] += 1
+            else:
+                counts[f"{color} {check}"] += 1
+    other = counts.pop("그 밖", 0)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return ranked + ([("그 밖", other)] if other else [])
+
+
 LABELS = {
     "editable": "고칠 수 있는 정의가 붙음",
     "editable_pattern": "  그중 패턴에 맞는 파일의 정의",
@@ -478,6 +544,12 @@ def summarize(
         )
     else:
         lines += _reason_lines(folder, job, logs, stored, Store(db), detail)
+    lines += ["", "직접 수정 행의 검사 종류:"]
+    checks = manual_checks(logs)
+    lines += [f"  {label:<40}{count:>6}" for label, count in checks[:SHOWN_CHECKS]]
+    if len(checks) > SHOWN_CHECKS:
+        rest = sum(count for _, count in checks[SHOWN_CHECKS:])
+        lines.append(f"  나머지 {len(checks) - SHOWN_CHECKS}종류 {rest}행")
     rows, matched = other_file_fixes(logs, pattern)
     lines += ["", f"다른 파일을 고친 수정 행: {rows}"]
     if pattern:

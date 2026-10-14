@@ -256,3 +256,28 @@ def test_shape_tells_how_a_name_appears():
     assert peek.shape("    secret_f(1);", "secret_f") == "call"
     assert peek.shape("    table[0] = secret_f;", "secret_f") == "other"
     assert peek.shape("/* secret_f() */", "secret_f") == "comment"
+
+
+def test_counts_check_kinds_of_manual_rows_with_standard_names_only(tmp_path):
+    # 검사 이름은 Polyspace 표준 이름일 때만 찍는다. 엑셀 칸에 다른 글이 있으면 "그 밖"으로 센다
+    def head(color: str, check: str) -> str:
+        return (
+            "Polyspace Code Prover results in one C function:\n\nFinding 1:\n"
+            f"- TYPE: {color} Check\n- check: {check}\n- File: secret_file.c\n"
+        )
+
+    log(tmp_path, 3, 2, head("Red", "Non-terminating call") + CODE, answer("manual"))
+    log(tmp_path, 3, 3, head("Red", "Non-terminating call") + CODE, answer("manual"))
+    log(tmp_path, 3, 4, head("Orange", "overflow") + CODE, answer("manual"))
+    log(tmp_path, 3, 5, head("Orange", "secret custom check") + CODE, answer("manual"))
+    log(tmp_path, 3, 6, head("Orange", "Overflow") + CODE, answer("fix"))
+
+    assert peek.manual_checks(peek.read_logs(tmp_path, 3)) == [
+        ("Red Non-terminating call", 2),
+        ("Orange Overflow", 1),
+        ("그 밖", 1),
+    ]
+    screen = "\n".join(peek.summarize(tmp_path, job=3))
+    assert "직접 수정 행의 검사 종류:" in screen
+    assert "  Red Non-terminating call" in screen
+    assert "secret" not in screen.casefold()
