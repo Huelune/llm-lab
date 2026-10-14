@@ -1,13 +1,27 @@
 """정의 되묻기: 지시문·답 형식·요청 (followups.py, make_request)."""
 
+import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from fake_llm import MODEL, make_client, scripted
 from rte_fixtures import CALC_C, finding, fix_answer
 
+from llm_lab import followups
+from llm_lab.csource import Definition
 from llm_lab.fixer import FIX_SCHEMA_WITH_FILE, cache_key, make_request, propose_fixes
-from llm_lab.followups import ASK_RULE, GUESS_RULE, need_names, with_follow_ups, with_need
+from llm_lab.followups import (
+    ASK_RULE,
+    GUESS_RULE,
+    Asked,
+    IndexCache,
+    ProjectIndex,
+    find_asked,
+    need_names,
+    with_follow_ups,
+    with_need,
+)
 from llm_lab.kinds import CODEMETRICS, MISRA, RTE
 from llm_lab.sources import decode_source
 
@@ -91,3 +105,97 @@ def test_propose_fixes_sends_the_schema_with_need_when_asking():
 
     assert result.decision == "fix"
     assert "need" in sent[0]["response_format"]["json_schema"]["schema"]["properties"]
+
+
+API = Definition("api_get", "macro", "inc/api.h", 3, 3, "#define api_get(x) impl_get(x)")
+IMPL = Definition(
+    "impl_get", "function", "gen/impl.c", 10, 13, "int impl_get(int x)\n{\n    return x;\n}"
+)
+HERE = Definition("divide", "function", "calc.c", 1, 4, "int divide(int a, int b)\n{\n}\n")
+OTHER = Definition("other_fn", "function", "gen/o.c", 1, 3, "int other_fn(void)\n{\n}")
+
+
+def index_of(*definitions: Definition) -> ProjectIndex:
+    by_name: dict[str, list[Definition]] = {}
+    for definition in definitions:
+        by_name.setdefault(definition.name, []).append(definition)
+    return ProjectIndex(Path("."), {name: tuple(found) for name, found in by_name.items()})
+
+
+def test_find_asked_sends_new_definitions_and_follows_aliases():
+    asked = find_asked(["api_get"], index_of(API, IMPL), "calc.c", 1, 4, ())
+
+    assert asked.definitions == (API, IMPL)
+    assert asked.missing == asked.shown == asked.later == ()
+
+
+def test_find_asked_sorts_names_into_missing_and_shown():
+    asked = find_asked(
+        ["nowhere", "divide", "impl_get"], index_of(HERE, IMPL), "calc.c", 1, 4, (IMPL,)
+    )
+
+    assert asked.missing == ("nowhere",)
+    assert asked.shown == ("divide", "impl_get")  # 보낸 코드 안, 이미 보낸 정의
+    assert asked.definitions == ()
+
+
+def test_alias_already_sent_still_brings_its_target():
+    asked = find_asked(["api_get"], index_of(API, IMPL), "calc.c", 1, 4, (API,))
+
+    assert asked.definitions == (IMPL,)
+    assert asked.shown == ()
+
+
+def test_find_asked_stops_at_the_definition_limit(monkeypatch):
+    monkeypatch.setattr(followups, "MAX_ASKED_DEFINITIONS", 1)
+
+    asked = find_asked(
+        ["impl_get", "other_fn", "nowhere"], index_of(IMPL, OTHER), "calc.c", 1, 4, ()
+    )
+
+    assert asked.definitions == (IMPL,)
+    assert asked.later == ("other_fn",)
+    assert asked.missing == ("nowhere",)
+
+
+def test_find_asked_stops_at_the_line_limit(monkeypatch):
+    monkeypatch.setattr(followups, "MAX_ASKED_LINES", 3)
+
+    asked = find_asked(["other_fn", "impl_get"], index_of(IMPL, OTHER), "calc.c", 1, 4, ())
+
+    assert asked.definitions == (OTHER,)
+    assert asked.later == ("impl_get",)
+
+
+def test_no_index_means_the_names_cannot_be_looked_up():
+    assert find_asked(["x"], None, "calc.c", 1, 4, ()) == Asked(unavailable=True)
+
+
+def test_project_index_reads_the_folder_and_rereads_one_file(tmp_path):
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "gen" / "impl.c").write_bytes(b"int impl_get(int x)\n{\n    return x;\n}\n")
+
+    index = ProjectIndex.build(tmp_path)
+
+    assert [d.file for d in index.definitions["impl_get"]] == ["gen/impl.c"]
+    assert index.source("gen/impl.c").text.startswith("int impl_get")
+    assert index.source("gen/none.c") is None
+
+
+def test_index_cache_builds_each_job_once_and_keeps_two(tmp_path):
+    built: list[Path] = []
+    cache = IndexCache(build=lambda root: built.append(root) or ProjectIndex(root, {}))
+
+    threads = [threading.Thread(target=cache.get, args=(1, str(tmp_path))) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(built) == 1
+
+    cache.get(2, str(tmp_path))
+    cache.get(3, str(tmp_path))
+    cache.get(1, str(tmp_path))  # 2개만 두므로 1은 다시 만든다
+    assert len(built) == 4
+    assert cache.get(9, str(tmp_path / "gone")) is None
+    assert cache.get(8, "") is None

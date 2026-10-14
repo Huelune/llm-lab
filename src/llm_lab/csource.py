@@ -584,7 +584,8 @@ def pick_callers(
     return picked, len(mine) - len(picked)
 
 
-def _rank(definition: Definition, source_name: str) -> int:
+def definition_rank(definition: Definition, source_name: str) -> int:
+    """정의 후보 순서: 검사 파일 0, 헤더 1, 그 밖 2."""
     if definition.file == source_name:
         return 0
     return 1 if definition.file.casefold().endswith(".h") else 2
@@ -636,7 +637,7 @@ def pick_definitions(
             return True
         seen.add(name)
         candidates = sorted(
-            by_name.get(name, ()), key=lambda d: (_rank(d, source_name), d.file, d.first)
+            by_name.get(name, ()), key=lambda d: (definition_rank(d, source_name), d.file, d.first)
         )
         for definition in candidates[:PER_NAME]:
             if (definition.file, definition.first) in placed:
