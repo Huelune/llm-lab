@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +26,20 @@ from llm_lab.csource import (
     split_lines,
     top_level_blocks,
 )
-from llm_lab.followups import with_follow_ups, with_need
+from llm_lab.followups import (
+    AGAIN_LINE,
+    ASKED_EDITABLE,
+    ASKED_REFERENCE,
+    LAST_LINE,
+    LATER_LINE,
+    MISSING_LINE,
+    SHOWN_LINE,
+    UNAVAILABLE_LINE,
+    Asked,
+    need_names,
+    with_follow_ups,
+    with_need,
+)
 from llm_lab.polyspace import Finding
 from llm_lab.probe import FATAL_CATEGORIES, classify_error
 from llm_lab.sources import SourceFile
@@ -392,22 +405,28 @@ class Request:
             return with_need(self.kind.answer_schema)
         return self.kind.answer_schema
 
+    def with_asked(self, asked: Asked) -> Request:
+        """되묻기로 보낸 정의와 새로 고칠 수 있게 된 파일을 더한 요청."""
+        return replace(
+            self,
+            asked=(*self.asked, *asked.definitions),
+            files={**self.files, **asked.files},
+        )
+
 
 def _shown_last(definition: Definition) -> int:
     """정의에서 보여 주는(고칠 수 있는) 마지막 줄."""
     return min(definition.last, definition.first + MAX_DEFINITION_LINES - 1)
 
 
-def definitions_block(
-    definitions: tuple[Definition, ...], editable: Mapping[str, SourceFile] | None = None
-) -> str:
-    """코드 뒤에 붙이는 다른 곳의 정의 절.
+def _definition_blocks(
+    definitions: tuple[Definition, ...], editable: Mapping[str, SourceFile] | None
+) -> tuple[list[str], bool]:
+    """정의마다 코드 블록 하나, 그리고 고칠 수 있는 정의가 하나라도 있는지.
 
-    editable에 원문이 있는 파일의 정의는 줄 번호를 붙여 고칠 수 있게 보내고, 나머지는 번호 없이
-    참고로만 보낸다. 고칠 수 있는 정의가 하나도 없으면 예전과 같은 참고용 절이다 (라벨 없음).
+    editable에 원문이 있는 파일의 정의는 줄 번호를 붙여 고칠 수 있게, 나머지는 번호 없이 참고로.
+    고칠 수 있는 정의가 하나도 없으면 참고 블록에 라벨을 달지 않는다 (예전과 같은 글).
     """
-    if not definitions:
-        return ""
     editable = editable or {}
     labelled = any(definition.file in editable for definition in definitions)
     parts = []
@@ -427,6 +446,16 @@ def definitions_block(
         if last < definition.last:
             body += f"\n... ({definition.last - last} more lines, not editable)"
         parts.append(f"```c\n// editable: {definition.file} {where}\n{body}\n```")
+    return parts, labelled
+
+
+def definitions_block(
+    definitions: tuple[Definition, ...], editable: Mapping[str, SourceFile] | None = None
+) -> str:
+    """코드 뒤에 붙이는 다른 곳의 정의 절."""
+    if not definitions:
+        return ""
+    parts, labelled = _definition_blocks(definitions, editable)
     if not labelled:
         heading = (
             "\n\nDefinitions from other places, for reference only. "
@@ -438,6 +467,32 @@ def definitions_block(
             'set "file" to their path. Edits in the numbered code above use "file": "".\n\n'
         )
     return heading + "\n\n".join(parts)
+
+
+def follow_up_message(
+    asked: Asked, editable: Mapping[str, SourceFile] | None, rounds_left: int
+) -> str:
+    """되묻기에 답하는 사용자 메시지. rounds_left는 이 메시지 뒤에 더 되물을 수 있는 횟수."""
+    parts = []
+    if asked.definitions:
+        blocks, labelled = _definition_blocks(asked.definitions, editable)
+        heading = ASKED_EDITABLE if labelled else ASKED_REFERENCE
+        parts.append(heading + "\n\n" + "\n\n".join(blocks))
+    if asked.unavailable:
+        parts.append(UNAVAILABLE_LINE)
+    for line, names in (
+        (MISSING_LINE, asked.missing),
+        (SHOWN_LINE, asked.shown),
+        (LATER_LINE, asked.later),
+    ):
+        if names:
+            parts.append(line + ", ".join(names) + ".")
+    if rounds_left > 0:
+        times = "time" if rounds_left == 1 else "times"
+        parts.append(f"{AGAIN_LINE}{rounds_left} more {times}.")
+    else:
+        parts.append(LAST_LINE)
+    return "\n\n".join(parts)
 
 
 def callers_block(
@@ -729,6 +784,7 @@ def _ranges(request: Request, target: str) -> list[list[tuple[int, int]]]:
     """target 파일에서 수정을 찾을 줄 범위를 먼저 볼 순서대로 묶은 것.
 
     검사 파일은 보낸 범위를 먼저 보고, 거기 없을 때만 고칠 수 있게 보낸 같은 파일의 정의를 본다.
+    되묻기로 보낸 정의는 그다음이다.
     """
     tiers = [[(request.first, request.last)]] if target == request.source.name else []
     if target in request.files:
@@ -736,6 +792,9 @@ def _ranges(request: Request, target: str) -> list[list[tuple[int, int]]]:
             [(d.first, _shown_last(d)) for d in request.definitions if d.file == target]
             + [(c.first, c.last) for c in request.callers if c.file == target]
         )
+        asked = [(d.first, _shown_last(d)) for d in request.asked if d.file == target]
+        if asked:
+            tiers.append(asked)
     return tiers
 
 
@@ -847,31 +906,68 @@ def _to_results(content: str, finish_reason: str | None, request: Request) -> li
     return results
 
 
-def propose_fixes(
-    client: OpenAI, model: str, request: Request, transcript: list[Exchange] | None = None
-) -> list[FixResult]:
-    """묶음 하나에 대한 행별 판단과 함께 쓰는 수정. 쓸 수 없는 답이면 한 번만 다시 요청한다.
+# 되물은 이름 → 이번에 보낼 것. worker가 프로젝트 색인으로 찾고 작업에 남긴다
+Ask = Callable[[list[str], Request], Asked]
 
-    돌려주는 목록은 request.findings와 같은 순서다.
+
+def _need_of(content: str, finish_reason: str | None) -> list[str]:
+    """임시 답의 need. 잘렸거나 JSON이 아니면 EditMismatch (그 차례에서 다시 묻는다)."""
+    if finish_reason == "length":
+        raise EditMismatch("응답이 출력 길이 제한으로 잘림", "truncated")
+    try:
+        data: Any = json.loads(content)
+    except json.JSONDecodeError:
+        raise EditMismatch("응답이 JSON이 아님", "format") from None
+    return need_names(data)
+
+
+def propose_fixes(
+    client: OpenAI,
+    model: str,
+    request: Request,
+    transcript: list[Exchange] | None = None,
+    ask: Ask | None = None,
+) -> list[FixResult]:
+    """묶음 하나에 대한 행별 판단과 함께 쓰는 수정.
+
+    쓸 수 없는 답이면 차례마다 한 번 다시 요청한다. ask를 주면 답의 need에 적힌 이름을 ask로
+    찾아 request.follow_ups번까지 다음 메시지로 보내고 다시 판단하게 한다. 마지막 차례의 답은
+    need가 있어도 최종이다. 돌려주는 목록은 request.findings와 같은 순서다.
     transcript를 주면 LLM과 주고받은 요청·응답을 순서대로 담는다.
     """
     kind = request.kind
     client = client.with_options(timeout=kind.timeout, max_retries=1)
     messages = list(request.messages)
-    problem, summary = "", MISMATCH_SUMMARIES["locate"]
-    for _ in range(2):
+    rounds_left = request.follow_ups if ask is not None else 0
+    retry = True
+    while True:
         content, finish_reason = _ask(client, model, messages, request.schema, transcript)
         try:
-            return _to_results(content, finish_reason, request)
+            need = _need_of(content, finish_reason) if rounds_left else []
+            if not need:
+                return _to_results(content, finish_reason, request)
         except EditMismatch as exc:
-            problem, summary = str(exc), exc.summary
+            if not retry:
+                raise FixError(user_error(exc.summary, RETRY_ACTION, f"{exc} (2번 시도)")) from None
+            retry = False
             messages = [
                 *messages,
                 {"role": "assistant", "content": content},
                 {
                     "role": "user",
-                    "content": f"Your answer could not be used: {problem}. "
+                    "content": f"Your answer could not be used: {exc}. "
                     "Answer again with the same JSON format.",
                 },
             ]
-    raise FixError(user_error(summary, RETRY_ACTION, f"{problem} (2번 시도)"))
+            continue
+        assert ask is not None  # rounds_left는 ask가 있을 때만 0보다 크다
+        asked = ask(need, request)
+        request = request.with_asked(asked)
+        rounds_left -= 1
+        retry = True
+        editable = request.files if kind.edits_definitions else None
+        messages = [
+            *messages,
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": follow_up_message(asked, editable, rounds_left)},
+        ]

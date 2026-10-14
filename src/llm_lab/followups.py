@@ -41,6 +41,18 @@ ASK_RULE = (
 )
 JSON_RULE = "Answer with JSON only."  # 되묻기 규칙은 이 문장 앞에 붙인다
 
+# 되묻기에 답하는 메시지의 문장 (fixer가 쓰고, scripts/peek_logs.py가 세는 데 쓴다)
+ASKED_EDITABLE = (
+    'Definitions you asked for. Those marked editable may be changed; set "file" to their path.'
+)
+ASKED_REFERENCE = "Definitions you asked for, for reference only."
+MISSING_LINE = "Not in the project, so their behavior is unknown (external code): "
+SHOWN_LINE = "Already shown above: "
+LATER_LINE = "Not sent this time because of the size limit; ask again if you still need them: "
+UNAVAILABLE_LINE = "Definitions cannot be looked up now."
+AGAIN_LINE = "Answer again with the same JSON format. You can ask "
+LAST_LINE = 'No more definitions can be sent. Answer with "need": [].'
+
 
 def follow_up_rules(rounds: int) -> str:
     """지시문에 붙이는 되묻기 규칙 문단."""
