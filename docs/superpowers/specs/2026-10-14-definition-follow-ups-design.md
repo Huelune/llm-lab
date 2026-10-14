@@ -1,7 +1,7 @@
 # 필요한 정의를 LLM이 되묻게 하기 설계
 
 - 작성일: 2026-10-14
-- 상태: 설계 검토 중
+- 상태: 구현됨 (2026-10-14)
 - 바탕: `2026-10-13-definitions-context-design.md`(참고 정의), `2026-10-14-cross-file-fixes-design.md`(다른 파일 수정),
   `2026-10-14-callers-context-design.md`(호출자). 여기 적지 않은 것은 그대로 따른다.
 

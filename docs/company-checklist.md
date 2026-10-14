@@ -39,7 +39,7 @@
 | `LLM_PROJECT_ID`, `LLM_PROJECT_HEADER` | 프로젝트 ID를 받았을 때만 | 프로젝트 ID와 샘플에 적힌 헤더 이름 |
 | `LLM_MODEL` | 모델명 | 배포(deployment) 이름 |
 
-- [ ] 선택 항목(`LLM_TIMEOUT`, `LLM_VERIFY_SSL`, `LLM_ENABLE_THINKING`, `LLM_API_VERSION`, `LLM_WORKERS`)은 `.env.example`의 설명을 보고 필요할 때만 채웁니다.
+- [ ] 선택 항목(`LLM_TIMEOUT`, `LLM_VERIFY_SSL`, `LLM_ENABLE_THINKING`, `LLM_API_VERSION`, `LLM_WORKERS`, `LLM_FOLLOW_UPS`)은 `.env.example`의 설명을 보고 필요할 때만 채웁니다.
 - [ ] 키와 프로젝트 ID는 채팅이나 스크린샷에 올리지 않습니다.
 
 ## 2. 되는지 파악하기
