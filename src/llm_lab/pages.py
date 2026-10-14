@@ -157,10 +157,12 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap; }
 .summary-page .box { max-height: none; }
 .summary-page .box td.num, .summary-page .box th.num { width: 76px; white-space: nowrap; }
 .box h3 { font-size: 12px; margin: 0 6px 4px; color: var(--muted); }
-.list td.summary { color: var(--muted); max-width: 520px; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
+/* 칸 폭을 고정해 긴 요약·검사·위치는 줄이고, 맨 끝 "보기"가 카드 밖으로 밀리지 않게 한다 */
+.list table { table-layout: fixed; }
+.list td.summary, .list td.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list td.summary { color: var(--muted); }
 .list tr.problem td.summary { color: var(--amber); }
-.list td.check { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+.list td.check { overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .later { color: #cfd8e8; font-size: 12px; }
 .item { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--line);
@@ -753,9 +755,11 @@ def _overview(kind: Kind, job: Job, rows: list[Row], finished: bool, conflicts, 
     )
     return (
         _groups(job, rows) + '<div class="card table list"><table><tr><th style="width:26px"></th>'
-        '<th style="width:44px">행</th><th style="width:64px">종류</th><th>검사</th>'
-        '<th>위치</th><th style="width:90px">판단</th><th>요약</th>'
-        '<th style="width:36px"></th></tr>' + lines + "</table></div>"
+        '<th style="width:44px">행</th><th style="width:64px">종류</th>'
+        '<th style="width:22%">검사</th><th style="width:18%">위치</th>'
+        '<th style="width:90px">판단</th><th>요약</th><th style="width:48px"></th></tr>'
+        + lines
+        + "</table></div>"
     )
 
 
