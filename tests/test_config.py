@@ -32,6 +32,17 @@ def test_missing_required_values_are_all_named():
     assert "LLM_API_KEY" not in message
 
 
+def test_workers_default_to_two_and_read_llm_workers():
+    assert settings_from_env(VALID).workers == 2
+    assert settings_from_env({**VALID, "LLM_WORKERS": "6"}).workers == 6
+
+
+@pytest.mark.parametrize("bad", ["0", "17", "abc", "2.5"])
+def test_workers_must_be_a_whole_number_from_1_to_16(bad):
+    with pytest.raises(ConfigError, match="LLM_WORKERS"):
+        settings_from_env({**VALID, "LLM_WORKERS": bad})
+
+
 def test_blank_value_counts_as_missing():
     with pytest.raises(ConfigError, match="LLM_MODEL"):
         settings_from_env({**VALID, "LLM_MODEL": "   "})

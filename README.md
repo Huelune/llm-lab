@@ -27,6 +27,7 @@
    | `LLM_API_VERSION` | – | `azure` 방식의 `api-version` 쿼리. 비워 두면 붙이지 않습니다 |
    | `LLM_MODEL` | ✅ | 사용할 모델명 |
    | `LLM_TIMEOUT` | – | 요청 타임아웃(초), 기본 60 |
+   | `LLM_WORKERS` | – | `llm-fix-server`가 LLM에 동시에 보내는 요청 수(1~16), 기본 2. 게이트웨이 한도는 `llm-probe --parallel N`으로 잽니다 |
    | `LLM_VERIFY_SSL` | – | `false`이면 서버 인증서를 검증하지 않습니다(`requests`의 `verify=False`와 같음). 기본 `true` |
    | `LLM_ENABLE_THINKING` | – | `true`/`false`. 모든 채팅 요청에 `chat_template_kwargs.enable_thinking`을 붙입니다(생각 모드를 지원하는 모델용). 비워 두면 보내지 않습니다 |
 
