@@ -335,7 +335,10 @@ def test_rte_prompts_let_the_model_fix_editable_definitions():
     )
     root = RTE.prompt({"mode": "root_cause"})
     assert "answer manual and name that file and function" in root
-    assert "the cause is in a caller or in a definition marked reference only" in root
+    assert (
+        "the cause is in a caller that is not shown or in a definition marked reference only"
+        in root
+    )
     assert "editable" not in MISRA.system_prompt
 
 
@@ -344,7 +347,10 @@ def test_rte_prompts_explain_callers():
         prompt = RTE.prompt({"mode": mode})
         assert "Callers of the function may follow" in prompt
         assert "which values really reach its parameters" in prompt
-        assert "If every caller shown guarantees safety and none are said to be not shown" in prompt
+        assert (
+            "If callers are shown, every one guarantees safety and none are said to be not shown"
+            in prompt
+        )
         assert "you may fix it in that caller, where the value is produced" in prompt
     guard = RTE.prompt({"mode": "guard"})
     assert "changing an editable caller or definition would be risky" in guard

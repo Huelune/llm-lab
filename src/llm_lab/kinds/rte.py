@@ -43,7 +43,8 @@ When the code must change, decide between fix and manual:
 is safe on every execution and static analysis can prove it: initialise the variable, \
 use the real array size as the bound, check the value where it enters the function, \
 correct the loop bound, and similar.
-- Otherwise answer manual: the cause is in a caller or in a definition marked reference only \
+- Otherwise answer manual: the cause is in a caller that is not shown or in a definition \
+marked reference only \
 (the value comes from code or data you cannot change here), or the only change you could make \
 would hide the failure (a default or fallback value, skipping the operation, \
 an early return, a condition that is always true). Never make such a change. \
@@ -73,8 +74,9 @@ Set "file" to "" for edits in the numbered code of the findings.
 
 _CALLERS = """\
 Callers of the function may follow the definitions. Use them to see which values really reach \
-its parameters. If every caller shown guarantees safety and none are said to be not shown, \
-answer no_fix and name the caller lines. If a caller passes an unsafe value, \
+its parameters. If callers are shown, every one guarantees safety and \
+none are said to be not shown, answer no_fix and name the caller lines. \
+If a caller passes an unsafe value, \
 you may fix it in that caller, where the value is produced, and set "file" to that path.
 """
 
