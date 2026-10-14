@@ -368,3 +368,13 @@ def test_rte_prompts_explain_callers():
     root = RTE.prompt({"mode": "root_cause"})
     assert "If the cause is in a caller that is not shown" in root
     assert "Callers of" not in MISRA.system_prompt
+
+
+def test_rte_prompts_carry_the_autosar_rte_api_contract():
+    # Rte_ API 동작을 몰라 판단을 미루지 않게, 공개 규격의 계약을 두 처리 방식 모두에 넣는다
+    from llm_lab.kinds.rte import AUTOSAR_RTE, GUARD_PROMPT, ROOT_CAUSE_PROMPT
+
+    for prompt in (GUARD_PROMPT, ROOT_CAUSE_PROMPT):
+        assert AUTOSAR_RTE in prompt
+        assert prompt.index(AUTOSAR_RTE) < prompt.index("Answer with JSON only.")
+    assert "valid only when the call returned RTE_E_OK" in AUTOSAR_RTE

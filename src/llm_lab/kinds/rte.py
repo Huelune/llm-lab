@@ -83,6 +83,20 @@ you may fix it in that caller, where the value is produced, and set "file" to th
 When call sites are not shown, check the value where it enters the function instead.
 """
 
+# AUTOSAR RTE API의 일반 계약 (공개 규격). 구현이 안 보여도 이것으로 판단하게 한다
+AUTOSAR_RTE = """\
+The code may call AUTOSAR RTE APIs (names starting with Rte_, such as Rte_Read_, Rte_Write_, \
+Rte_Send_, Rte_Receive_, Rte_Call_, Rte_IRead_, Rte_IWrite_). Their contract from the AUTOSAR \
+RTE specification: explicit APIs return Std_ReturnType, RTE_E_OK (0) on success and an error \
+code otherwise; an output argument of Rte_Read, Rte_Receive or Rte_Call is valid only when \
+the call returned RTE_E_OK, so code that uses it without checking the return value may read \
+an unset value; implicit APIs (Rte_IRead, Rte_IWrite) have no return code and always give \
+a value of the declared type, but not a narrower range. The RTE is generated from the \
+configuration: prefer checking the return value and the value range where the API is called, \
+and change Rte_ code only when the cause is in that code. When an Rte_ implementation is \
+not shown, judge from this contract instead of answering manual for that reason alone.
+"""
+
 _DEFINITIONS_GUARD = """\
 If the cause is in a caller that is not shown or in a definition marked reference only, \
 or changing an editable caller or definition would be risky, \
@@ -103,8 +117,12 @@ Answer with JSON only. "findings" has one entry for each numbered finding. \
 "edits" is [] when no finding is fix.
 """
 
-GUARD_PROMPT = _HEAD + GUARD_RULES + _FIX_RULES + _CALLERS + _DEFINITIONS_GUARD + _TAIL
-ROOT_CAUSE_PROMPT = _HEAD + ROOT_CAUSE_RULES + _FIX_RULES + _CALLERS + _DEFINITIONS_ROOT + _TAIL
+GUARD_PROMPT = (
+    _HEAD + GUARD_RULES + _FIX_RULES + _CALLERS + AUTOSAR_RTE + _DEFINITIONS_GUARD + _TAIL
+)
+ROOT_CAUSE_PROMPT = (
+    _HEAD + ROOT_CAUSE_RULES + _FIX_RULES + _CALLERS + AUTOSAR_RTE + _DEFINITIONS_ROOT + _TAIL
+)
 SYSTEM_PROMPT = GUARD_PROMPT  # 기본값: 가드 허용
 
 # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값이다
