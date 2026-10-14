@@ -84,6 +84,8 @@ class Kind:
     uses_definitions: bool = True
     # 붙인 정의 가운데 작업에 원문이 있는 것을 LLM이 고칠 수 있는지 (답의 edits[].file)
     edits_definitions: bool = False
+    # 검사 함수를 부르는 곳(호출자 조각)을 요청에 붙일지
+    sends_callers: bool = False
     # 작업마다 고르는 처리 방식 (값, 라벨, 설명). 첫 항목이 기본값. 비어 있으면 고를 것이 없다
     modes: tuple[tuple[str, str, str], ...] = ()
     # 작업 정보(context)로 시스템 지시문을 고른다. None이면 system_prompt 하나뿐이다

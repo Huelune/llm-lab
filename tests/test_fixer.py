@@ -667,3 +667,86 @@ def test_checked_file_name_is_matched_loosely_and_stored_empty():
 
     assert len(sent) == 1
     assert [edit.file for edit in result.edits] == [""]
+
+
+CALC = decode_source("app/calc.c", b"int divide(int a, int b)\n{\n    return a / b;\n}\n")
+MAIN = decode_source(
+    "app/main.c",
+    b"int update(int sum)\n{\n    int n = read_count();\n    return divide(sum, n);\n}\n",
+)
+UPDATE = Definition("divide", "caller", "app/main.c", 1, 5, MAIN.text.rstrip("\n"))
+FILES = {"app/calc.c": CALC, "app/main.c": MAIN}
+
+
+def caller_request(kind=RTE, definitions=(UPDATE,), files=FILES):
+    return make_request(kind, [finding(line=3)], CALC, None, definitions, files)
+
+
+def test_rte_request_carries_editable_callers():
+    request = caller_request()
+
+    content = request.messages[1]["content"]
+    assert "Callers of divide(), for the values that reach its parameters." in content
+    assert (
+        "// editable caller: app/main.c lines 1-5 (in update())\n    1| int update(int sum)"
+        in content
+    )
+    assert request.callers == (UPDATE,)
+    assert "app/main.c" in request.files
+
+
+def test_no_caller_section_without_fragments_files_or_for_misra():
+    plain = make_request(RTE, [finding(line=3)], CALC)
+
+    for request in (
+        caller_request(definitions=()),
+        caller_request(files={"app/calc.c": CALC}),
+        make_request(MISRA, [misra_finding(line=3)], CALC, None, (UPDATE,), FILES),
+    ):
+        assert "Callers of" not in request.messages[1]["content"]
+        assert request.callers == ()
+    assert caller_request(definitions=()).messages == plain.messages
+
+
+def test_caller_section_says_how_many_call_sites_are_hidden():
+    many = tuple(Definition("divide", "caller", "app/main.c", 1, 5, "x") for _ in range(1)) + tuple(
+        Definition("divide", "caller", f"app/m{i}.c", 1, 5, "x") for i in range(5)
+    )
+    files = {**FILES, **{f"app/m{i}.c": replace(MAIN, name=f"app/m{i}.c") for i in range(5)}}
+
+    request = caller_request(definitions=many, files=files)
+
+    assert "2 more call sites are not shown." in request.messages[1]["content"]
+    assert len(request.callers) == 4
+
+
+def test_fix_in_a_caller_is_located_in_its_fragment():
+    guard = {
+        "file": "app/main.c",
+        "original": "    int n = read_count();",
+        "replacement": "    int n = read_count();\n    if (n == 0) {\n        n = 1;\n    }",
+    }
+    handler, _ = scripted(answer(("fix", REASON), edits=[guard]))
+
+    (result,) = propose_fixes(make_client(handler), MODEL, caller_request())
+
+    assert [edit.file for edit in result.edits] == ["app/main.c"]
+    assert "--- a/app/main.c" in result.diff and "+    if (n == 0) {" in result.diff
+
+
+def test_fix_in_a_caller_file_outside_its_fragment_is_asked_again():
+    fragment = Definition("divide", "caller", "app/main.c", 4, 5, "    return divide(sum, n);\n}")
+    outside = {"file": "app/main.c", "original": "    int n = read_count();", "replacement": "x"}
+    inside = {
+        "file": "app/main.c",
+        "original": "    return divide(sum, n);",
+        "replacement": "    return divide(sum, n ? n : 1);",
+    }
+    handler, sent = scripted(
+        answer(("fix", REASON), edits=[outside]), answer(("fix", REASON), edits=[inside])
+    )
+
+    (result,) = propose_fixes(make_client(handler), MODEL, caller_request(definitions=(fragment,)))
+
+    assert len(sent) == 2
+    assert "n ? n : 1" in result.diff

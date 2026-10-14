@@ -19,6 +19,8 @@ from openai import OpenAI
 from llm_lab.csource import (
     MAX_DEFINITION_LINES,
     Definition,
+    enclosing_function,
+    pick_callers,
     pick_definitions,
     split_lines,
     top_level_blocks,
@@ -375,6 +377,7 @@ class Request:
     definitions: tuple[Definition, ...] = ()  # 코드 뒤에 붙인 다른 곳의 정의
     # 고칠 수 있게 보낸 정의의 파일 (이름 → 원문). 비었으면 정의는 참고만이다
     files: Mapping[str, SourceFile] = field(default_factory=dict)
+    callers: tuple[Definition, ...] = ()  # 붙인 호출자 조각 (고칠 수 있음)
 
 
 def _shown_last(definition: Definition) -> int:
@@ -424,6 +427,31 @@ def definitions_block(
     return heading + "\n\n".join(parts)
 
 
+def callers_block(
+    function: str, callers: tuple[Definition, ...], hidden: int, files: Mapping[str, SourceFile]
+) -> str:
+    """검사 함수를 부르는 곳의 절. 조각마다 원래 줄 번호를 붙여 고칠 수 있게 보낸다."""
+    if not callers:
+        return ""
+    more = f" {hidden} more call sites are not shown." if hidden else ""
+    parts = []
+    for caller in callers:
+        source = files[caller.file]
+        name = enclosing_function(source.text, caller.first) or "?"
+        where = (
+            f"line {caller.first}"
+            if caller.first == caller.last
+            else f"lines {caller.first}-{caller.last}"
+        )
+        body = numbered(source.text, caller.first, caller.last)
+        parts.append(f"```c\n// editable caller: {caller.file} {where} (in {name}())\n{body}\n```")
+    return (
+        f"\n\nCallers of {function}(), for the values that reach its parameters. "
+        f'Those marked editable may be changed; set "file" to their path.{more}\n\n'
+        + "\n\n".join(parts)
+    )
+
+
 def build_prompt(
     kind: Kind,
     findings: list[Finding],
@@ -433,6 +461,7 @@ def build_prompt(
     context: Any,
     definitions: tuple[Definition, ...] = (),
     editable: Mapping[str, SourceFile] | None = None,
+    callers_text: str = "",
 ) -> str:
     blocks = []
     for number, finding in enumerate(findings, start=1):
@@ -448,6 +477,7 @@ def build_prompt(
         "each line starts with its number and '| '):\n"
         f"```c\n{numbered(source.text, first, last)}\n```"
         + definitions_block(definitions, editable)
+        + callers_text
     )
 
 
@@ -460,6 +490,7 @@ def make_request(
     files: Mapping[str, SourceFile] | None = None,
 ) -> Request:
     """묶음의 줄 번호를 확인하고 보낼 메시지를 만든다. 줄 번호가 소스와 맞지 않으면 FixError."""
+    definitions = list(definitions)
     line_count = len(split_lines(source.text))
     for finding in findings:
         line = finding.line
@@ -488,14 +519,28 @@ def make_request(
     editable: dict[str, SourceFile] = {}
     if kind.edits_definitions and files:
         editable = {d.file: files[d.file] for d in picked if d.file in files}
+    callers: tuple[Definition, ...] = ()
+    callers_text = ""
+    if kind.sends_callers and files:
+        line = next((f.line for f in findings if f.line is not None), None)
+        function = enclosing_function(source.text, line) if line is not None else None
+        if function:
+            found, hidden = pick_callers(definitions, function, source.name, files)
+            callers = tuple(found)
+            editable = {**editable, **{c.file: files[c.file] for c in callers}}
+            callers_text = callers_block(function, callers, hidden, files)
     messages = [
         {"role": "system", "content": kind.prompt(context)},
         {
             "role": "user",
-            "content": build_prompt(kind, findings, source, first, last, context, picked, editable),
+            "content": build_prompt(
+                kind, findings, source, first, last, context, picked, editable, callers_text
+            ),
         },
     ]
-    return Request(kind, list(findings), source, first, last, context, messages, picked, editable)
+    return Request(
+        kind, list(findings), source, first, last, context, messages, picked, editable, callers
+    )
 
 
 def cache_key(model: str, request: Request) -> str:
@@ -635,7 +680,10 @@ def _ranges(request: Request, target: str) -> list[list[tuple[int, int]]]:
     """
     tiers = [[(request.first, request.last)]] if target == request.source.name else []
     if target in request.files:
-        tiers.append([(d.first, _shown_last(d)) for d in request.definitions if d.file == target])
+        tiers.append(
+            [(d.first, _shown_last(d)) for d in request.definitions if d.file == target]
+            + [(c.first, c.last) for c in request.callers if c.file == target]
+        )
     return tiers
 
 
