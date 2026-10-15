@@ -10,12 +10,23 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
+import openai
+
+from llm_lab.client import get_client
 from llm_lab.config import (
     DEFAULT_PROJECT_HEADER,
     DEFAULT_TIMEOUT,
     ConfigError,
     Settings,
     settings_from_env,
+)
+from llm_lab.probe import (
+    AUTH_ERROR,
+    NETWORK_ERROR,
+    PATH_ERROR,
+    SSL_ERROR,
+    check_chat,
+    classify_error,
 )
 
 ENV_NAME = ".env"
@@ -226,3 +237,28 @@ class ConnectionStore:
             if self._find(name) is None:
                 raise ConfigError("없는 연결입니다")
             self._commit(self._saved, name)
+
+
+_CHECK_TIMEOUT = 10
+_CHECK_KINDS = {
+    AUTH_ERROR: "인증 실패",
+    PATH_ERROR: "주소·모델 오류",
+    NETWORK_ERROR: "연결 실패",
+    SSL_ERROR: "TLS·인증서 오류",
+}
+
+
+def check_connection(connection: Connection, base: Settings, make_client=get_client) -> str:
+    """짧은 chat 요청 하나로 연결을 확인하고 결과 종류를 글 하나로 돌려준다.
+
+    오류 원문은 돌려주지 않는다 (경로·값이 들어 있을 수 있다). 시간은 10초로 줄인다."""
+    try:
+        client = make_client(connection.settings(base)).with_options(
+            timeout=_CHECK_TIMEOUT, max_retries=0
+        )
+        result = check_chat(client, connection.model)
+    except openai.APIError as exc:
+        return _CHECK_KINDS.get(classify_error(exc)[0], "그 밖의 오류")
+    except Exception:
+        return "그 밖의 오류"
+    return "성공" if result.status == "ok" else "그 밖의 오류"

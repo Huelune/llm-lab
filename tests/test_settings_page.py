@@ -162,3 +162,16 @@ def test_same_origin_posts_pass(tmp_path):
 
     assert response.status_code == 303 and local.status_code == 303
     assert connections.current().name == "게이트웨이 B"
+
+
+def test_check_button_shows_the_result_kind(tmp_path, monkeypatch):
+    from llm_lab import web
+
+    client, _ = service(tmp_path)
+    monkeypatch.setattr(
+        web, "check_connection", lambda connection, base, make_client=None: "인증 실패"
+    )
+
+    client.post("/settings/check", data={"name": ENV_NAME})
+
+    assert "연결 확인: 인증 실패" in client.get("/settings").text

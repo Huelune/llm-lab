@@ -168,3 +168,19 @@ def test_failed_write_keeps_memory_and_reports_a_config_error(tmp_path):
 
     assert [c.name for c in store.list()] == ["A", "B"] and store.current().name == "A"
     assert not (tmp_path / "connections.json.tmp").exists()
+
+
+def test_check_connection_reports_kinds_without_raw_text():
+    from fake_llm import completion, error, make_client, scripted
+
+    from llm_lab.connections import check_connection
+
+    base = Settings(base_url="", api_key="", model="")
+    connection = connection_from_form(FORM)
+    ok, _ = scripted(completion("pong"))
+    denied, _ = scripted(error(401, "secret detail"))
+    missing, _ = scripted(error(404, "secret detail"))
+
+    assert check_connection(connection, base, lambda s: make_client(ok)) == "성공"
+    assert check_connection(connection, base, lambda s: make_client(denied)) == "인증 실패"
+    assert check_connection(connection, base, lambda s: make_client(missing)) == "주소·모델 오류"

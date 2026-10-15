@@ -23,10 +23,11 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from llm_lab.config import ConfigError, load_settings
+from llm_lab.config import ConfigError, Settings, load_settings
 from llm_lab.connections import (
     ENV_NAME,
     ConnectionStore,
+    check_connection,
     connection_from_form,
     connection_from_settings,
 )
@@ -143,7 +144,12 @@ def _cross_site(headers: Mapping[str, str]) -> bool:
     return referer is not None and not _local(referer)
 
 
-def create_app(store: Store, worker: Worker, connections: ConnectionStore | None = None) -> FastAPI:
+def create_app(
+    store: Store,
+    worker: Worker,
+    connections: ConnectionStore | None = None,
+    base_settings: Settings | None = None,
+) -> FastAPI:
     """connections가 없으면 위쪽 막대에 연결을 보이지 않고, 분석 시작도 연결을 확인하지 않는다."""
     app = FastAPI(title="llm-fix-server")
     # DNS 리바인딩으로 다른 사이트가 이 페이지(회사 소스·diff)를 읽지 못하게 Host를 제한한다
@@ -386,15 +392,20 @@ def create_app(store: Store, worker: Worker, connections: ConnectionStore | None
         return {**asdict(job), "base_folder": base, "rows": [_row_json(r) for r in rows]}
 
     if connections is not None:
-        _add_settings_routes(app, connections, label)
+        _add_settings_routes(app, connections, label, base_settings or worker.base_settings)
     return app
 
 
 def _add_settings_routes(
-    app: FastAPI, connections: ConnectionStore, label: Callable[[], str | None]
+    app: FastAPI,
+    connections: ConnectionStore,
+    label: Callable[[], str | None],
+    base_settings: Settings | None,
 ) -> None:
     """설정 페이지. 저장·고르기·지우기는 성공하면 /settings로 돌아가고, 실패하면 이유를 보인
     설정 페이지를 바로 그린다."""
+
+    checks: dict[str, str] = {}
 
     def settings_html(**kwargs: Any) -> str:
         current = connections.current()
@@ -402,6 +413,7 @@ def _add_settings_routes(
             connections.list(),
             current.name if current else None,
             connection=label(),
+            checks=checks,
             **kwargs,
         )
 
@@ -428,6 +440,7 @@ def _add_settings_routes(
         try:
             keep = connections.get(original) if original else None
             connections.save(connection_from_form(fields, keep), original)
+            checks.pop(original or fields.get("name", ""), None)
         except ConfigError as exc:
             return HTMLResponse(settings_html(form=fields, editing=original, error=str(exc)))
         return back()
@@ -440,10 +453,20 @@ def _add_settings_routes(
             return HTMLResponse(settings_html(error=str(exc)))
         return back()
 
+    @app.post("/settings/check")
+    def settings_check(name: Annotated[str, Form()] = "") -> Response:
+        target = connections.get(name)
+        if target is None:
+            return HTMLResponse(settings_html(error="없는 연결입니다"))
+        # 동기 def라 스레드 풀에서 돈다. 최대 10초 걸려도 다른 요청을 막지 않는다.
+        checks[name] = check_connection(target, base_settings or Settings("", "", ""))
+        return back()
+
     @app.post("/settings/delete")
     def settings_delete(name: Annotated[str, Form()] = "") -> Response:
         try:
             connections.delete(name)
+            checks.pop(name, None)
         except ConfigError as exc:
             return HTMLResponse(settings_html(error=str(exc)))
         return back()

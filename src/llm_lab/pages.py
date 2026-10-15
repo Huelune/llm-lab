@@ -264,6 +264,7 @@ pre.diff .hunk { color: var(--faint); }
 .connrow .what { flex: 1 1 320px; min-width: 0; }
 .connrow .what .sub { margin: 2px 0 0; overflow-wrap: anywhere; }
 .connrow .what .sub.ok { color: var(--green); }
+.connrow .what .sub.bad { color: var(--red); }
 .connrow .row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .connrow .row-actions .hint { margin: 0; }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 8px 0 12px; }
@@ -1103,7 +1104,11 @@ def _connection_row(connection: Connection, is_current: bool, check: str) -> str
         escape(part) for part in (connection.client_kind, connection.model, connection.base_url)
     )
     badge = " " + _badge("blue", "현재 연결") if is_current else ""
-    buttons = []
+    buttons = [
+        '<form method="post" action="/settings/check">'
+        f'<input type="hidden" name="name" value="{name}">'
+        '<button class="btn plain" type="submit">연결 확인</button></form>'
+    ]
     if not is_current:
         buttons.append(
             '<form method="post" action="/settings/select">'
@@ -1120,7 +1125,8 @@ def _connection_row(connection: Connection, is_current: bool, check: str) -> str
             f'<input type="hidden" name="name" value="{name}">'
             '<button class="btn plain" type="submit">삭제</button></form>'
         )
-    checked = f'<p class="sub ok">{escape(check)}</p>' if check else ""
+    verdict = "ok" if check == "성공" else "bad"
+    checked = f'<p class="sub {verdict}">연결 확인: {escape(check)}</p>' if check else ""
     return (
         f'<div class="card connrow{" current" if is_current else ""}"><div class="what">'
         f'<b>{name}</b>{badge}<p class="sub">{meta}</p>{checked}</div>'
