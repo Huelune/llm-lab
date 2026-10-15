@@ -184,3 +184,46 @@ def test_check_connection_reports_kinds_without_raw_text():
     assert check_connection(connection, base, lambda s: make_client(ok)) == "성공"
     assert check_connection(connection, base, lambda s: make_client(denied)) == "인증 실패"
     assert check_connection(connection, base, lambda s: make_client(missing)) == "주소·모델 오류"
+
+
+def test_broken_file_is_moved_aside_with_its_bytes(tmp_path):
+    path = tmp_path / "connections.json"
+    path.write_bytes(b"{not json")
+
+    store = ConnectionStore(path)
+    store.save(connection_from_form(FORM))
+
+    assert (tmp_path / "connections.json.bad").read_bytes() == b"{not json"
+    assert "connections.json.bad" in store.notice() and "JSONDecodeError" in store.notice()
+    assert ConnectionStore(path).get("게이트웨이 B") is not None
+
+
+def test_good_file_has_no_notice(tmp_path):
+    assert ConnectionStore(tmp_path / "connections.json").notice() == ""
+
+
+def test_env_name_is_refused_even_without_an_env_connection(tmp_path):
+    store = ConnectionStore(tmp_path / "connections.json")
+
+    with pytest.raises(ConfigError, match="^.env는 .env 파일의 연결 이름이라 쓸 수 없습니다.$"):
+        store.save(connection_from_form({**FORM, "name": ENV_NAME}))
+    assert store.list() == []
+
+
+def test_check_connection_reports_a_timeout():
+    import httpx2
+    from fake_llm import make_client
+
+    from llm_lab.connections import check_connection
+
+    def slow(request):
+        raise httpx2.ReadTimeout("secret detail", request=request)
+
+    def refused(request):
+        raise httpx2.ConnectError("secret detail", request=request)
+
+    base = Settings(base_url="", api_key="", model="")
+    connection = connection_from_form(FORM)
+
+    assert check_connection(connection, base, lambda s: make_client(slow)) == "연결 실패(시간 초과)"
+    assert check_connection(connection, base, lambda s: make_client(refused)) == "연결 실패"

@@ -379,7 +379,12 @@ def create_app(
 
     @app.post("/results/{job_id}/retry")
     def retry(job_id: int) -> Response:
-        job_or_404(job_id)
+        job = job_or_404(job_id)
+        # 작업의 연결이 지워졌으면 지금 고른 연결로 이어서 처리한다 (멈춤 안내가 시킨 대로)
+        if connections is not None and job.connection and connections.get(job.connection) is None:
+            current = connections.current()
+            if current is not None:
+                store.set_job_connection(job_id, current.name)
         store.retry(job_id)
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
@@ -412,6 +417,7 @@ def _add_settings_routes(
         return settings_page(
             connections.list(),
             current.name if current else None,
+            connections.notice(),
             connection=label(),
             checks=checks,
             **kwargs,
@@ -568,11 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     connections = ConnectionStore(data_dir / CONNECTIONS_NAME, env)
     if connections.error:
-        print(
-            f"연결 설정 파일을 읽지 못했습니다({connections.error}). "
-            "설정 페이지에서 다시 저장하세요.",
-            file=sys.stderr,
-        )
+        print(f"{connections.notice()} 설정 페이지에서 다시 저장하세요.", file=sys.stderr)
     submit = daemon_pool(settings.workers)
     worker = Worker(
         store,

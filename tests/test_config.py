@@ -6,6 +6,7 @@ from llm_lab.config import (
     OPTIONAL_VARS,
     REQUIRED_VARS,
     ConfigError,
+    MissingSettingsError,
     Settings,
     load_settings,
     settings_from_env,
@@ -326,3 +327,9 @@ def test_load_settings_without_env_file_when_asked(tmp_path, monkeypatch):
 
     assert load_settings(require_connection=False).base_url == ""
     assert load_settings("b", require_connection=False).base_url == ""
+
+
+@pytest.mark.parametrize("only", ["LLM_BASE_URL", "LLM_MODEL"])
+def test_half_filled_connection_is_refused_even_when_not_required(only):
+    with pytest.raises(MissingSettingsError, match="필수 설정이 없습니다"):
+        settings_from_env({only: "x"}, require_connection=False)

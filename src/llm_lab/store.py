@@ -355,6 +355,10 @@ class Store:
                 "UPDATE jobs SET state = ?, message = ? WHERE id = ?", (state, message, job_id)
             )
 
+    def set_job_connection(self, job_id: int, name: str) -> None:
+        with self._write() as db:
+            db.execute("UPDATE jobs SET connection = ? WHERE id = ?", (name, job_id))
+
     def stop(self, job_id: int) -> None:
         """처리 중인 작업을 멈춘다. 줄 서 있던 묶음은 건너뛰고, "이어서 처리"(retry)로 계속한다."""
         with self._write() as db:

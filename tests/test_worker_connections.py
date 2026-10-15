@@ -98,3 +98,36 @@ def test_deleted_connection_stops_the_job(tmp_path):
     assert store.job(job).message == MISSING_CONNECTION
     assert store.rows(job)[0].state == "pending"
     assert sent_a == [] and sent_b == []
+
+
+def test_retry_after_a_deleted_connection_uses_the_current_one(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from llm_lab.web import create_app
+
+    store, worker, connections, queued, sent_a, sent_b, made = setup(tmp_path)
+    job = new_job(store, "A")
+    worker.start(job)
+    connections.select("B")
+    connections.delete("A")
+    for task in queued:
+        task()
+    queued.clear()
+    client = TestClient(create_app(store, worker, connections), base_url="http://127.0.0.1")
+
+    client.post(f"/results/{job}/retry")
+    for task in queued:
+        task()
+
+    assert store.job(job).connection == "B"
+    assert len(sent_b) == 1 and sent_a == []
+    assert store.rows(job)[0].state == "done"
+
+
+def test_set_job_connection_records_the_name(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    job = new_job(store, "A")
+
+    store.set_job_connection(job, "B")
+
+    assert store.job(job).connection == "B"

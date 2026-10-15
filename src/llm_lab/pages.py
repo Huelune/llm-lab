@@ -1155,7 +1155,9 @@ def _connection_form(values: Mapping[str, str], editing: str | None, error: str)
 
     def secret(name: str, label: str) -> str:
         # 저장된 값은 화면에 내보내지 않는다. 수정 때 비워 두면 저장된 값을 쓴다
-        hint = "비워 두면 저장된 값을 씁니다" if editing else ""
+        hint = (
+            "비워 두면 저장된 값을 씁니다 (주소나 접속 방식을 바꾸면 다시 입력)" if editing else ""
+        )
         return (
             f'<label>{label}<input type="password" name="{name}" value="" '
             f'placeholder="{hint}" autocomplete="new-password"></label>'

@@ -76,11 +76,12 @@ def _parse_bool(key: str, value: str) -> bool:
 def settings_from_env(env: Mapping[str, str | None], require_connection: bool = True) -> Settings:
     """환경변수 매핑에서 Settings를 만든다. 빈 문자열은 없는 값으로 본다.
 
-    require_connection이 False면 LLM_BASE_URL·LLM_MODEL이 비어 있어도 오류 없이 ""로 둔다.
+    require_connection이 False면 LLM_BASE_URL·LLM_MODEL이 둘 다 비어 있을 때만 오류 없이 ""로
+    둔다. 하나만 있으면 반쯤 적은 설정이라 require_connection과 상관없이 오류다.
     """
     values = {key: (env.get(key) or "").strip() for key in (*REQUIRED_VARS, *OPTIONAL_VARS)}
     missing = [key for key in REQUIRED_VARS if not values[key]]
-    if missing and require_connection:
+    if missing and (require_connection or len(missing) < len(REQUIRED_VARS)):
         raise MissingSettingsError(
             f"필수 설정이 없습니다: {', '.join(missing)} (.env.example 참고)"
         )

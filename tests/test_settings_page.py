@@ -175,3 +175,27 @@ def test_check_button_shows_the_result_kind(tmp_path, monkeypatch):
     client.post("/settings/check", data={"name": ENV_NAME})
 
     assert "연결 확인: 인증 실패" in client.get("/settings").text
+
+
+def test_broken_connections_file_is_noticed_and_kept(tmp_path):
+    broken = b'{"connections": [{"api_key": "secret-broken"'
+    (tmp_path / "connections.json").write_bytes(broken)
+    client, connections = service(tmp_path)
+
+    html = client.get("/settings").text
+    client.post("/settings/save", data=FORM)
+
+    assert "연결 설정 파일을 읽지 못했습니다(JSONDecodeError)" in html
+    assert "connections.json.bad" in html
+    assert "secret" not in html and str(tmp_path) not in html
+    assert (tmp_path / "connections.json.bad").read_bytes() == broken
+    assert connections.get("게이트웨이 B") is not None
+
+
+def test_edit_form_hint_says_when_to_retype_secrets(tmp_path):
+    client, _ = service(tmp_path)
+    client.post("/settings/save", data=FORM)
+
+    form = client.get("/settings", params={"edit": "게이트웨이 B"}).text
+
+    assert "비워 두면 저장된 값을 씁니다 (주소나 접속 방식을 바꾸면 다시 입력)" in form

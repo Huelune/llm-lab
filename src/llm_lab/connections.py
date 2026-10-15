@@ -32,6 +32,7 @@ from llm_lab.probe import (
 ENV_NAME = ".env"
 _WRITE_FAILED = "연결 설정을 저장하지 못했습니다. 데이터 폴더에 쓸 수 있는지 확인하세요."
 _ENV_READ_ONLY = ".env 연결은 .env 파일에서 고칩니다"
+_ENV_RESERVED = ".env는 .env 파일의 연결 이름이라 쓸 수 없습니다."
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ def connection_from_form(form: Mapping[str, str], keep: Connection | None = None
         target = settings_from_env(
             {
                 "LLM_BASE_URL": form.get("base_url", ""),
+                "LLM_MODEL": form.get("model", "") or keep.model,
                 "LLM_CLIENT": form.get("client_kind", ""),
                 "LLM_API_KEY": form.get("api_key", "") or keep.api_key,
             },
@@ -149,6 +151,7 @@ class ConnectionStore:
         self._saved: list[Connection] = []
         self._current_name = ""
         self.error = ""
+        self._kept_bad = False
         self._load()
 
     def _load(self) -> None:
@@ -162,6 +165,19 @@ class ConnectionStore:
             self._saved = []
             self._current_name = ""
             self.error = type(exc).__name__
+            # 다음 저장이 원래 파일을 덮어쓰지 않게 옆으로 옮겨 둔다. 못 옮기면 그대로 둔다
+            try:
+                os.replace(self._path, self._path.with_name(self._path.name + ".bad"))
+                self._kept_bad = True
+            except OSError:
+                pass
+
+    def notice(self) -> str:
+        """파일을 읽지 못했으면 안내 한 줄 (오류 종류만, 경로·값 없이). 읽었으면 ""."""
+        if not self.error:
+            return ""
+        kept = f" 원래 파일은 {self._path.name}.bad로 남겨 두었습니다." if self._kept_bad else ""
+        return f"연결 설정 파일을 읽지 못했습니다({self.error}).{kept}"
 
     def _commit(self, saved: list[Connection], current_name: str) -> None:
         """새 상태를 파일에 먼저 쓰고, 성공하면 메모리에 반영한다. 실패는 안내만 남긴다."""
@@ -206,6 +222,8 @@ class ConnectionStore:
         with self._lock:
             if self._env and ENV_NAME in (original, connection.name):
                 raise ConfigError(_ENV_READ_ONLY)
+            if connection.name == ENV_NAME:
+                raise ConfigError(_ENV_RESERVED)
             if any(c.name == connection.name and c.name != original for c in self._all()):
                 raise ConfigError("같은 이름의 연결이 있습니다")
             saved = list(self._saved)
@@ -257,6 +275,8 @@ def check_connection(connection: Connection, base: Settings, make_client=get_cli
             timeout=_CHECK_TIMEOUT, max_retries=0
         )
         result = check_chat(client, connection.model)
+    except openai.APITimeoutError:
+        return "연결 실패(시간 초과)"
     except openai.APIError as exc:
         return _CHECK_KINDS.get(classify_error(exc)[0], "그 밖의 오류")
     except Exception:
