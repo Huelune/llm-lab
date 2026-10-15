@@ -241,7 +241,10 @@ def test_try_checks_the_form_without_saving(tmp_path, monkeypatch):
     assert connections.get("게이트웨이 B") is None and [c.name for c in connections.list()] == [
         ENV_NAME
     ]
-    assert 'formaction="/settings/try"' in page and "저장하지 않고 연결 확인" in page
+    assert (
+        'formaction="/settings/try"' in page
+        and '>연결 확인</button><a class="btn plain" href="/settings">취소</a>' in page
+    )
 
 
 def test_try_reuses_the_saved_key_when_editing_and_reports_form_errors(tmp_path, monkeypatch):

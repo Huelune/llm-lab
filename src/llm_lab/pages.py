@@ -1479,7 +1479,6 @@ def _connection_form(values: Mapping[str, str], editing: str | None, error: str)
     original = f'<input type="hidden" name="original" value="{escape(editing)}">' if editing else ""
     title = "연결 수정" if editing else "연결 추가"
     note = '<p class="hint">키·프로젝트 ID를 비워 두면 저장된 값을 씁니다.</p>' if editing else ""
-    cancel = '<a class="btn plain" href="/settings">취소</a>' if editing else ""
     return (
         '<form id="form" class="card" method="post" action="/settings/save">'
         f'<h2 style="margin-top:4px">{title}</h2>{note}'
@@ -1502,13 +1501,13 @@ def _connection_form(values: Mapping[str, str], editing: str | None, error: str)
         + "</label></div>"
         f'<div class="actions"><button class="btn primary" type="submit">저장</button>'
         '<button class="btn plain" type="submit" formaction="/settings/try" id="try">'
-        f"저장하지 않고 연결 확인</button>{cancel}"
+        '연결 확인</button><a class="btn plain" href="/settings">취소</a>'
         '<span class="sub" id="trial" role="status"></span></div></form>'
         f"<script>{TRY_SCRIPT}</script>"
     )
 
 
-# 저장하지 않고 연결 확인: 화면을 떠나지 않게 fetch로 보내 결과 한 줄만 보인다 (적은 키가 남는다)
+# 연결 확인(저장하지 않음): 화면을 떠나지 않게 fetch로 보내 결과 한 줄만 보인다 (적은 키가 남는다)
 TRY_SCRIPT = """
 document.getElementById('try').addEventListener('click', async (event) => {
   const form = event.target.form;
