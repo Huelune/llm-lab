@@ -1099,7 +1099,8 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     page = client.get("/results/1/summary").text
 
     assert "<title>작업 1 요약 · Polyspace 수정 제안</title>" in page
-    assert '<a href="/results/1/summary">요약 (캡처용)</a>' in client.get("/results/1").text
+    job = client.get("/results/1").text
+    assert '<a class="btn plain" href="/results/1/summary">요약 (캡처용)</a>' in job
     for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):
         assert secret not in page.split("<main>", 1)[1].split("<script>", 1)[0]
     # 대상별 판단: Red 3(확인 필요 3), Orange 1(수정 1), 합계 4
