@@ -23,10 +23,21 @@ uv sync
 | `uv run llm-probe --verbose` | 응답 원문 JSON까지 보여 줌 |
 | `uv run llm-probe --output probe-result.txt` | 화면과 같은 내용을 UTF-8 파일로도 저장 |
 | `uv run llm-probe --context` | 최대 입력 토큰을 직접 잼(몇 분 걸림) |
-| `uv run llm-probe --parallel 4` | 짧은 요청 4개(1~16)를 동시에 보내 성공·429·오류 수와 시간을 셈. 화면에 숫자만 나와 캡처해도 됨. 결과에 맞춰 `.env`의 `LLM_WORKERS`를 정함 |
 | `uv run llm-probe --profile 이름` | `.env.이름`의 설정으로 점검 |
 
 점검 화면에는 주소와 모델 이름이 나오므로 그대로 캡처해 보내지 않습니다.
+
+### 동시 요청 수(LLM_WORKERS) 정하기
+
+`llm-fix-server`가 LLM에 한꺼번에 보내는 요청 수는 `.env`의 `LLM_WORKERS`(1~16, 기본 2)입니다. 게이트웨이가 몇 개까지 받는지 먼저 잰 뒤 정합니다.
+
+| 명령 | 하는 일 |
+|---|---|
+| `uv run llm-probe --parallel 4` | 짧은 요청 4개(1~16)를 동시에 보내 성공·429·오류 수와 시간을 셈. 화면에 숫자만 나와 캡처해도 됨 |
+| `uv run llm-probe --parallel 8` | 4개에서 "모두 성공했습니다"가 나오면 수를 늘려 다시 잼 |
+| `uv run llm-probe --profile 이름 --parallel 4` | `.env.이름`의 설정(예: 회사 API)으로 잼 |
+
+화면 끝의 "판단:" 줄이 정할 값을 알려 줍니다. "모두 성공했습니다"가 나온 가장 큰 수를 `LLM_WORKERS`로 씁니다. 429가 나오거나 "줄을 세우는 것으로 보여"가 나오면 그보다 작게 둡니다.
 
 ## 수정 제안 서버 (llm-fix-server)
 
