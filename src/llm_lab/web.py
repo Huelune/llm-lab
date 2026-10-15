@@ -11,11 +11,12 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -117,11 +118,44 @@ def _row_json(row: Row) -> dict[str, Any]:
     }
 
 
+CROSS_SITE_REFUSED = "다른 사이트에서 보낸 요청이라 거부했습니다."
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+
+def _local(url: str) -> bool:
+    """이 서버의 주소(http://127.0.0.1 또는 localhost, 포트는 무관)인지."""
+    try:
+        parts = urlsplit(url)
+        return parts.scheme == "http" and parts.hostname in LOCAL_HOSTS
+    except ValueError:
+        return False
+
+
+def _cross_site(headers: Mapping[str, str]) -> bool:
+    """브라우저가 붙인 출처 헤더가 다른 사이트를 가리키는지. 헤더가 없으면(curl 등) 통과."""
+    fetch_site = headers.get("sec-fetch-site")
+    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+        return True
+    origin = headers.get("origin")
+    if origin is not None:
+        return not _local(origin)
+    referer = headers.get("referer")
+    return referer is not None and not _local(referer)
+
+
 def create_app(store: Store, worker: Worker, connections: ConnectionStore | None = None) -> FastAPI:
     """connections가 없으면 위쪽 막대에 연결을 보이지 않고, 분석 시작도 연결을 확인하지 않는다."""
     app = FastAPI(title="llm-fix-server")
     # DNS 리바인딩으로 다른 사이트가 이 페이지(회사 소스·diff)를 읽지 못하게 Host를 제한한다
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+
+    @app.middleware("http")
+    async def refuse_cross_site(request: Request, call_next):
+        # Host 제한은 다른 사이트의 폼이 127.0.0.1로 보내는 POST(연결 바꿔치기, 분석 시작)를
+        # 막지 못한다. 브라우저가 붙이는 출처 헤더를 보고 이 서버 밖에서 온 요청은 거부한다
+        if request.method not in ("GET", "HEAD") and _cross_site(request.headers):
+            return HTMLResponse(CROSS_SITE_REFUSED, status_code=403)
+        return await call_next(request)
 
     def label() -> str | None:
         """위쪽 막대의 현재 연결 이름. 연결이 없으면 "", 연결 기능이 없으면 None."""
@@ -531,6 +565,12 @@ def main(argv: list[str] | None = None) -> int:
     url = f"http://127.0.0.1:{args.port}/"
     profile_note = f"   프로필: {args.profile}" if args.profile else ""
     print(f"\n  접속 주소: {url}{profile_note}   (끄려면 Ctrl+C)\n")
+    if args.profile and not Path(f".env.{args.profile}").is_file():
+        # 이름을 잘못 적었으면 빈 프로필로 켜진 것이다
+        print(
+            f"  프로필 설정 파일(.env.{args.profile})이 없어 저장된 연결만 씁니다. "
+            "이름이 맞는지 확인하세요.\n"
+        )
     if connections.current() is None:
         print("  LLM 연결이 없습니다: 접속 주소의 설정에서 추가하세요\n")
     if not args.no_browser:

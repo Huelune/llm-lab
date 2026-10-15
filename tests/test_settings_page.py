@@ -86,12 +86,15 @@ def test_invalid_form_shows_the_reason(tmp_path):
 
 
 def test_env_connection_has_no_edit_or_delete(tmp_path):
-    client, _ = service(tmp_path)
+    client, connections = service(tmp_path)
 
     html = client.get("/settings").text
 
+    response = client.post("/settings/delete", data={"name": ENV_NAME})
+
     assert ".env 파일에서 고침" in html
-    assert client.post("/settings/delete", data={"name": ENV_NAME}).status_code == 200
+    assert response.status_code == 200 and ".env 연결은 .env 파일에서 고칩니다" in response.text
+    assert connections.get(ENV_NAME) is not None
 
 
 def test_no_connection_blocks_analysis_before_reading_the_excel(tmp_path):
@@ -104,3 +107,58 @@ def test_no_connection_blocks_analysis_before_reading_the_excel(tmp_path):
 
     assert "연결: 없음" in home and "설정에서 LLM 연결을 추가하세요" in home
     assert response.status_code == 400 and "LLM 연결이 없음" in response.text
+
+
+def test_changed_address_with_blank_key_asks_for_the_key(tmp_path):
+    client, connections = service(tmp_path)
+    client.post("/settings/save", data=FORM)
+
+    response = client.post(
+        "/settings/save",
+        data={
+            **FORM,
+            "api_key": "",
+            "base_url": "https://other.test/v1",
+            "original": "게이트웨이 B",
+        },
+    )
+
+    assert response.status_code == 200 and "키를 다시 입력하세요" in response.text
+    assert connections.get("게이트웨이 B").base_url == "https://llm.test/v1"
+
+
+def test_cross_site_posts_are_refused(tmp_path):
+    # 다른 사이트의 폼이 127.0.0.1로 보내는 요청(연결 바꿔치기, 분석 시작)을 막는다
+    client, connections = service(tmp_path)
+
+    evil = client.post("/settings/save", data=FORM, headers={"Origin": "http://evil.test"})
+    fetch = client.post(
+        "/results",
+        files={"excel": ("x.xlsx", b"x")},
+        data={"source_dir": str(tmp_path)},
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    referer = client.post(
+        "/settings/select", data={"name": ENV_NAME}, headers={"Referer": "http://evil.test/a"}
+    )
+
+    for response in (evil, fetch, referer):
+        assert response.status_code == 403
+        assert "다른 사이트에서 보낸 요청이라 거부했습니다." in response.text
+    assert connections.get("게이트웨이 B") is None
+
+
+def test_same_origin_posts_pass(tmp_path):
+    client, connections = service(tmp_path)
+    headers = {"Origin": "http://127.0.0.1:8000", "Sec-Fetch-Site": "same-origin"}
+
+    response = client.post("/settings/save", data=FORM, headers=headers, follow_redirects=False)
+    local = client.post(
+        "/settings/select",
+        data={"name": "게이트웨이 B"},
+        headers={"Referer": "http://localhost:8123/settings"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303 and local.status_code == 303
+    assert connections.current().name == "게이트웨이 B"

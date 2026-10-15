@@ -59,6 +59,24 @@ def test_blank_secrets_on_edit_keep_the_saved_ones():
     assert "secret" not in repr(edited).replace("secret-model", "")
 
 
+def test_changed_endpoint_does_not_reuse_the_saved_key():
+    # 저장된 키가 바뀐 주소로 새지 않게, 주소나 접속 방식을 바꾸면 키를 다시 받는다
+    saved = connection_from_form({**FORM, "project_id": "secret-project"})
+    blank = {**FORM, "api_key": "", "project_id": ""}
+
+    for changed in ({"base_url": "https://other.test/v1"}, {"client_kind": "azure"}):
+        with pytest.raises(ConfigError, match="키를 다시 입력하세요"):
+            connection_from_form({**blank, **changed}, keep=saved)
+    # 같은 주소를 다르게 적은 것(끝의 /)은 바뀐 것이 아니다
+    same = connection_from_form({**blank, "base_url": "https://llm.test/v1"}, keep=saved)
+    assert same.api_key == "secret-key" and same.project_id == "secret-project"
+    # 새 키를 적으면 바꿀 수 있고, 저장된 프로젝트 ID는 따라가지 않는다
+    moved = connection_from_form(
+        {**blank, "base_url": "https://other.test/v1", "api_key": "new-key"}, keep=saved
+    )
+    assert moved.api_key == "new-key" and moved.project_id == ""
+
+
 def test_store_adds_selects_edits_and_deletes(tmp_path):
     path = tmp_path / "connections.json"
     store = ConnectionStore(path)

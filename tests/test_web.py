@@ -843,11 +843,22 @@ def test_clear_with_profile_points_back_to_the_default_records(tmp_path, monkeyp
     )
 
 
-def test_main_starts_a_profile_without_its_env_file(tmp_path, monkeypatch):
-    # 연결은 설정 페이지에서 추가하므로 .env.NAME이 없어도 켜지고, 기록은 private/NAME에 둔다
+def test_main_starts_a_profile_without_its_env_file(tmp_path, monkeypatch, capsys):
+    # 연결은 설정 페이지에서 추가하므로 .env.NAME이 없어도 켜지고, 기록은 private/NAME에 둔다.
+    # 이름을 잘못 적었을 수 있으므로 한 줄로 알린다
     started, workers, _ = start_main(tmp_path, monkeypatch, ["--no-browser", "--profile", "b"])
 
     assert started and workers[0]["log_dir"] == Path("private/b/llm-logs")
+    note = "프로필 설정 파일(.env.b)이 없어 저장된 연결만 씁니다. 이름이 맞는지 확인하세요."
+    assert note in capsys.readouterr().out
+
+
+def test_main_with_the_profile_file_says_nothing_about_it(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env.b").write_text("LLM_MODEL=m\n", encoding="utf-8")
+
+    start_main(tmp_path, monkeypatch, ["--no-browser", "--profile", "b"])
+
+    assert "프로필 설정 파일" not in capsys.readouterr().out
 
 
 USE_C = b'#include "limits.h"\nint divide(int a, int b)\n{\n    return a / (b % LIMIT);\n}\n'

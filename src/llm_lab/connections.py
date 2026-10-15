@@ -80,11 +80,26 @@ def connection_from_settings(name: str, settings: Settings, read_only: bool) -> 
 def connection_from_form(form: Mapping[str, str], keep: Connection | None = None) -> Connection:
     """폼 값을 settings_from_env와 같은 규칙으로 검사해 Connection으로 만든다.
 
-    api_key·project_id가 비어 있고 keep이 있으면 keep의 값을 쓴다.
+    api_key·project_id가 비어 있고 keep이 있으면 keep의 값을 쓴다. 단 주소나 접속 방식이
+    바뀌었으면 저장된 키·프로젝트 ID를 새 곳으로 보내지 않는다 (키가 비어 있으면 다시 묻는다).
     """
     name = form.get("name", "").strip()
     if not name:
         raise ConfigError("연결 이름을 적으세요")
+    if keep is not None:
+        # 비교는 저장된 모양(settings_from_env 규칙)으로 한다. 주소·방식만 먼저 정리해 얻는다
+        target = settings_from_env(
+            {
+                "LLM_BASE_URL": form.get("base_url", ""),
+                "LLM_CLIENT": form.get("client_kind", ""),
+                "LLM_API_KEY": form.get("api_key", "") or keep.api_key,
+            },
+            require_connection=False,
+        )
+        if (target.base_url, target.client_kind) != (keep.base_url, keep.client_kind):
+            if not form.get("api_key", "").strip() and keep.api_key:
+                raise ConfigError("주소나 접속 방식을 바꾸면 키를 다시 입력하세요.")
+            keep = None
     settings = settings_from_env(
         {
             "LLM_BASE_URL": form.get("base_url", ""),
