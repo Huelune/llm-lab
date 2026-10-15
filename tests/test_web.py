@@ -127,7 +127,7 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     for color, label in [("red", "Red"), ("orange", "Orange"), ("blue", "수정안")]:
         assert f'<span class="badge {color}">{label}</span> <b>1</b>' in page
     assert '<span class="badge gray">제외 1</span>' in page
-    assert '<span class="add">+    return (b != 0) ? a / b : 0;</span>' in page
+    assert '<span class="add" data-ln="         3">+    return (b != 0) ? a / b : 0;</span>' in page
     assert "폴더에 missing.c이(가) 없음" in page
     assert 'type="checkbox" name="row" value="1"' in page
     assert 'data-kind="fix"' in page and 'data-kind="problem"' in page
@@ -1317,4 +1317,47 @@ def test_default_title_stays_within_80_characters():
     assert web._default_title("", "RTE") == "RTE"
     long = web._default_title("x" * 200 + ".xlsx", "RTE")
     assert len(long) == 80
-    assert long.endswith("…· RTE") or long.endswith("… · RTE")
+    assert long.endswith("… · RTE")
+
+
+def test_check_reports_targets_and_found_files_without_making_a_job(tmp_path):
+    client, store, sent = make_service(tmp_path)
+    folder = source_folder(tmp_path)
+
+    response = client.post(
+        "/check",
+        files=[("excel", ("rte.xlsx", EXCEL))],
+        data={"source_dir": str(folder), "kind": "rte", "choice": ["rte:Red", "rte:Orange"]},
+    )
+
+    data = response.json()
+    assert data["errors"] == []
+    assert "시트 RTE_Result: 대상 2행" in data["facts"]
+    assert "제외: Gray Check 1" in data["facts"]
+    assert "소스 파일 2개 중 1개를 폴더에서 찾음" in data["facts"]
+    assert data["warnings"][0].startswith("폴더에서 못 찾은 파일 1개 (대상 1행은")
+    assert store.jobs() == [] and sent == []  # 작업을 만들지도, LLM을 부르지도 않는다
+
+
+def test_check_lists_what_blocks_the_start(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    data = client.post(
+        "/check", data={"source_dir": str(tmp_path / "secret_missing"), "kind": "rte"}
+    ).json()
+
+    assert data["errors"] == [
+        "분석할 대상을 하나 이상 고르세요.",
+        "소스 폴더가 없습니다. 탐색기 주소창의 경로를 그대로 붙여넣으세요.",
+        "엑셀 파일을 고르세요.",
+    ]
+    assert "secret" not in str(data)  # 입력한 경로를 되풀이하지 않는다
+
+
+def test_home_page_has_the_check_button(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/").text
+
+    assert '<button class="btn plain" type="button" id="precheck">확인</button>' in page
+    assert 'id="precheck-result" aria-live="polite" hidden' in page

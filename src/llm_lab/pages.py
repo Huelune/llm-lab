@@ -244,6 +244,8 @@ pre.diff span { display: block; padding: 0 12px 0 9px; white-space: pre;
 pre.diff .add { background: var(--add); border-left-color: var(--green); }
 pre.diff .del { background: var(--del); border-left-color: var(--red); }
 pre.diff .hunk { color: var(--faint); }
+pre.diff span::before { content: attr(data-ln); color: var(--faint); margin-right: 12px;
+  user-select: none; }
 .howto { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 10px 16px; margin: 12px 0; font-size: 13px; box-shadow: var(--shadow); }
 .howto ol { margin: 6px 0 0; padding-left: 20px; }
@@ -262,6 +264,17 @@ pre.diff .hunk { color: var(--faint); }
 }
 .applybar .count { font-weight: 700; margin-right: auto; }
 .empty { color: var(--muted); padding: 14px 16px; margin: 0; }
+/* 분석 전 확인 결과: 줄마다 종류(막음·주의·확인됨)를 글자로도 밝힌다 */
+.precheck { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 12px; font-size: 13px; background: #fafbfc; }
+.precheck div { padding: 1px 0; }
+.precheck .bad { color: var(--red); }
+.precheck .bad::before { content: "막음 · "; font-weight: 700; }
+.precheck .warn { color: var(--amber); }
+.precheck .warn::before { content: "주의 · "; font-weight: 700; }
+.precheck .ok::before { content: "확인 · "; font-weight: 700; color: var(--green); }
+.precheck .info { color: var(--muted); }
+.precheck .hint { margin: 4px 0 0; }
 .card.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d68a; }
 /* 설정: 연결마다 한 줄 카드, 현재 연결은 왼쪽 띠, 추가·수정 양식은 두 칸 */
 .connrow { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
@@ -482,6 +495,47 @@ function syncChoices() {
 }
 syncChoices();
 window.addEventListener('pageshow', syncChoices);
+// 분석 전 확인: 서버가 엑셀과 폴더를 읽어 보고 개수만 돌려준다 (작업은 만들지 않는다)
+const precheck = document.getElementById('precheck');
+const precheckResult = document.getElementById('precheck-result');
+function showCheck(items, note) {
+  precheckResult.hidden = false;
+  precheckResult.replaceChildren();
+  items.forEach(([level, text]) => {
+    const line = document.createElement('div');
+    line.className = level;
+    line.textContent = text;
+    precheckResult.append(line);
+  });
+  if (note) {
+    const line = document.createElement('div');
+    line.className = 'hint';
+    line.textContent = note;
+    precheckResult.append(line);
+  }
+}
+if (precheck && analyze) {
+  precheck.addEventListener('click', async () => {
+    precheck.disabled = true;
+    showCheck([['info', '엑셀과 폴더를 읽는 중…']]);
+    try {
+      const response = await fetch('/check', {method: 'POST', body: new FormData(analyze)});
+      const data = await response.json();
+      const items = [
+        ...data.errors.map(text => ['bad', text]),
+        ...data.warnings.map(text => ['warn', text]),
+        ...data.facts.map(text => ['ok', text]),
+      ];
+      showCheck(items, data.errors.length ? '고친 뒤 다시 확인하세요.' : '');
+    } catch (e) {
+      showCheck([['bad', '확인하지 못했습니다. 서버가 켜져 있는지 보세요.']]);
+    } finally {
+      precheck.disabled = false;
+    }
+  });
+  // 입력을 바꾸면 지난 확인 결과는 맞지 않으므로 지운다
+  analyze.addEventListener('change', () => { precheckResult.hidden = true; });
+}
 // 폴더 찾기: 서버가 같은 PC에서 윈도우 폴더 선택 창을 띄우고 고른 경로를 돌려준다
 const pick = document.getElementById('pick-folder');
 if (pick) pick.addEventListener('click', async () => {
@@ -734,8 +788,13 @@ def index_page(
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
         + _kind_step()
         + '<div class="step"><div class="num">4</div><div><h3>분석 시작</h3>'
-        '<p class="hint">결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 있습니다</p>'
-        '<button class="btn primary" type="submit">분석 시작</button></div></div></form>'
+        '<p class="hint">"확인"은 작업을 만들지 않고 엑셀의 대상 행 수와 폴더에서 찾은 파일 수를 '
+        "미리 봅니다. 분석 시작을 누르면 결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 "
+        "있습니다</p>"
+        '<div class="actions"><button class="btn plain" type="button" id="precheck">확인</button>'
+        '<button class="btn primary" type="submit">분석 시작</button></div>'
+        '<div class="precheck" id="precheck-result" aria-live="polite" hidden></div>'
+        "</div></div></form>"
     )
     body = (
         f'<h1 class="app-title">{APP_NAME}</h1><p class="sub">{APP_TAGLINE}</p><h2>새 분석</h2>'
@@ -764,20 +823,34 @@ def results_page(items: list[tuple[Job, list[Row]]], *, connection: str | None =
     return page("작업 목록", body, connection=connection)
 
 
+HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
 def _diff(diff: str) -> str:
+    """diff를 화면용으로. 줄마다 원본·수정본 줄 번호(data-ln)를 단다 (머리 줄은 빈칸)."""
     lines = []
-    for number, line in enumerate(diff.split("\n")):
-        kind = ""
-        if number < 2:
-            kind = "hunk"  # --- a/…, +++ b/… 헤더
-        elif line.startswith("@@"):
+    old = new = old_left = new_left = 0
+    for line in diff.split("\n"):
+        kind, left, right = "", "", ""
+        hunk = HUNK.match(line)
+        if hunk:
             kind = "hunk"
+            old, new = int(hunk[1]), int(hunk[3])
+            old_left = int(hunk[2]) if hunk[2] is not None else 1
+            new_left = int(hunk[4]) if hunk[4] is not None else 1
+        elif old_left <= 0 and new_left <= 0:
+            kind = "hunk"  # --- a/…, +++ b/… 파일 머리 (파일이 여럿이면 여러 번)
         elif line.startswith("+"):
-            kind = "add"
+            kind, right = "add", str(new)
+            new, new_left = new + 1, new_left - 1
         elif line.startswith("-"):
-            kind = "del"
+            kind, left = "del", str(old)
+            old, old_left = old + 1, old_left - 1
+        elif not line.startswith("\\"):  # "\ No newline at end of file"은 번호가 없다
+            left, right = str(old), str(new)
+            old, new, old_left, new_left = old + 1, new + 1, old_left - 1, new_left - 1
         css = f' class="{kind}"' if kind else ""
-        lines.append(f"<span{css}>{escape(line)}</span>")
+        lines.append(f'<span{css} data-ln="{left:>5}{right:>5}">{escape(line)}</span>')
     return '<pre class="diff">' + "".join(lines) + "</pre>"
 
 

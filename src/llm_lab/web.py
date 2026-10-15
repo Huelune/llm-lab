@@ -86,6 +86,62 @@ def _new_row(kind: Kind, finding: Finding, match: Match) -> NewRow:
     return NewRow(finding, name, "pending", grp=kind.group_key(finding, name))
 
 
+def precheck(
+    excel: UploadFile | None, source_dir: str, kind: str, choice: list[str] | None
+) -> dict[str, list[str]]:
+    """분석 시작이 확인하는 것을 미리 본다: 종류·대상, 소스 폴더, 엑셀 시트와 대상 행, 찾은 파일.
+
+    작업을 만들 때와 같은 함수(read_sheet, load_from_folder)를 쓰므로 숫자가 분석 시작과 같다.
+    정의·호출자는 찾지 않는다(프로젝트 전체를 훑어 오래 걸린다).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    facts: list[str] = []
+    result = {"errors": errors, "warnings": warnings, "facts": facts}
+    sheet_kind = KINDS.get(kind)
+    if sheet_kind is None:
+        errors.append("분석할 시트 종류를 다시 고르세요.")
+        return result
+    prefix = f"{sheet_kind.name}:"
+    selected = {v.removeprefix(prefix) for v in choice or [] if v.startswith(prefix)}
+    selected &= set(sheet_kind.choices)
+    if sheet_kind.choices and not selected:
+        errors.append("분석할 대상을 하나 이상 고르세요.")
+    root = _source_root(source_dir)
+    if root is None:
+        errors.append("소스 폴더 경로를 입력하세요.")
+    elif not root.is_dir():
+        errors.append("소스 폴더가 없습니다. 탐색기 주소창의 경로를 그대로 붙여넣으세요.")
+    if excel is None or not excel.filename:
+        errors.append("엑셀 파일을 고르세요.")
+    if errors:
+        return result
+    try:
+        sheet = read_sheet(io.BytesIO(excel.file.read()), sheet_kind, selected)
+    except SheetError as exc:
+        errors.append(str(exc))
+        return result
+    facts.append(f"시트 {sheet.sheet}: 대상 {len(sheet.findings)}행")
+    if sheet.skipped:
+        skipped = ", ".join(f"{reason} {count}" for reason, count in sheet.skipped.items())
+        facts.append(f"제외: {skipped}")
+    if sheet.prepared.note:
+        facts.append(sheet.prepared.note)
+    if not sheet.findings:
+        errors.append("고른 대상에 해당하는 행이 없습니다. 대상이나 시트를 확인하세요.")
+        return result
+    matches, _ = load_from_folder(root, [f.file for f in sheet.findings])
+    missing = {path for path, match in matches.items() if match.source is None}
+    facts.append(f"소스 파일 {len(matches)}개 중 {len(matches) - len(missing)}개를 폴더에서 찾음")
+    if missing:
+        rows = sum(f.file in missing for f in sheet.findings)
+        warnings.append(
+            f"폴더에서 못 찾은 파일 {len(missing)}개 (대상 {rows}행은 '확인 필요'로 남습니다). "
+            "프로젝트 최상위 폴더를 골랐는지 보세요."
+        )
+    return result
+
+
 def _job_note(
     sheet: Sheet,
     definitions: int = 0,
@@ -228,6 +284,16 @@ def create_app(
         finally:
             picking.release()
         return JSONResponse({"path": chosen})
+
+    @app.post("/check")
+    def check_inputs(
+        excel: Annotated[UploadFile | None, File()] = None,
+        source_dir: Annotated[str, Form()] = "",
+        kind: Annotated[str, Form()] = "rte",
+        choice: Annotated[list[str] | None, Form()] = None,
+    ) -> dict[str, list[str]]:
+        """분석 시작 전 확인. 작업은 만들지 않고, 막는 문제·주의·확인된 개수를 돌려준다."""
+        return precheck(excel, source_dir, kind, choice)
 
     @app.post("/results")
     def create_job(
