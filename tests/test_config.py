@@ -309,3 +309,20 @@ def test_follow_ups_default_to_two_and_read_llm_follow_ups():
 def test_follow_ups_must_be_a_whole_number_from_0_to_3(bad):
     with pytest.raises(ConfigError, match="LLM_FOLLOW_UPS"):
         settings_from_env({**VALID, "LLM_FOLLOW_UPS": bad})
+
+
+def test_settings_without_a_connection_are_allowed_when_asked():
+    settings = settings_from_env({"LLM_WORKERS": "4"}, require_connection=False)
+
+    assert settings.base_url == "" and settings.model == "" and settings.workers == 4
+    with pytest.raises(ConfigError):
+        settings_from_env({"LLM_WORKERS": "4"})
+
+
+def test_load_settings_without_env_file_when_asked(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for key in ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    assert load_settings(require_connection=False).base_url == ""
+    assert load_settings("b", require_connection=False).base_url == ""

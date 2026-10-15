@@ -73,11 +73,14 @@ def _parse_bool(key: str, value: str) -> bool:
         raise ConfigError(f"{key}은 true 또는 false여야 합니다: {value!r}") from None
 
 
-def settings_from_env(env: Mapping[str, str | None]) -> Settings:
-    """환경변수 매핑에서 Settings를 만든다. 빈 문자열은 없는 값으로 본다."""
+def settings_from_env(env: Mapping[str, str | None], require_connection: bool = True) -> Settings:
+    """환경변수 매핑에서 Settings를 만든다. 빈 문자열은 없는 값으로 본다.
+
+    require_connection이 False면 LLM_BASE_URL·LLM_MODEL이 비어 있어도 오류 없이 ""로 둔다.
+    """
     values = {key: (env.get(key) or "").strip() for key in (*REQUIRED_VARS, *OPTIONAL_VARS)}
     missing = [key for key in REQUIRED_VARS if not values[key]]
-    if missing:
+    if missing and require_connection:
         raise MissingSettingsError(
             f"필수 설정이 없습니다: {', '.join(missing)} (.env.example 참고)"
         )
@@ -98,7 +101,7 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
     client_kind = values["LLM_CLIENT"].lower() or "openai"
     if client_kind not in CLIENT_KINDS:
         raise ConfigError(f"LLM_CLIENT은 openai 또는 azure여야 합니다: {values['LLM_CLIENT']!r}")
-    if client_kind == "azure" and not values["LLM_API_KEY"]:
+    if client_kind == "azure" and values["LLM_BASE_URL"] and not values["LLM_API_KEY"]:
         raise ConfigError("LLM_CLIENT=azure면 LLM_API_KEY가 필요합니다 (api-key 헤더로 보냄)")
 
     workers = DEFAULT_WORKERS
@@ -134,13 +137,14 @@ def settings_from_env(env: Mapping[str, str | None]) -> Settings:
     )
 
 
-def load_settings(profile: str | None = None) -> Settings:
+def load_settings(profile: str | None = None, require_connection: bool = True) -> Settings:
     """현재 디렉터리의 .env를 읽고, 비어 있지 않은 OS 환경변수를 우선 적용한다.
 
     profile을 주면 .env 대신 .env.<profile>을 읽는다 (같은 폴더에서 설정을 둘 쓸 때).
+    require_connection이 False면 설정 파일이 없어도, 연결 값이 비어 있어도 오류 없이 만든다.
     """
     path = Path(f".env.{profile}") if profile else Path(".env")
-    if profile and not path.is_file():
+    if profile and require_connection and not path.is_file():
         raise ConfigError(f"프로필 설정 파일이 없습니다: {path} (.env.example을 복사해 만드세요)")
     merged: dict[str, str | None] = {}
     if path.is_file():
@@ -150,7 +154,7 @@ def load_settings(profile: str | None = None) -> Settings:
             raise ConfigError(".env를 UTF-8로 저장하세요 (현재 인코딩을 읽을 수 없음)") from None
     merged.update({key: value for key, value in os.environ.items() if value and value.strip()})
     try:
-        return settings_from_env(merged)
+        return settings_from_env(merged, require_connection)
     except MissingSettingsError as exc:
         if path.is_file():
             raise
