@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from llm_lab.config import ConfigError, Settings, load_settings
 from llm_lab.connections import (
     ENV_NAME,
+    ENV_READ_ONLY,
     ConnectionStore,
     check_connection,
     connection_from_form,
@@ -434,7 +435,7 @@ def _add_settings_routes(
         if target is None:
             return settings_html(error="없는 연결입니다")
         if target.read_only:
-            return settings_html(error=".env 연결은 .env 파일에서 고칩니다")
+            return settings_html(error=ENV_READ_ONLY)
         return settings_html(editing=edit)
 
     @app.post("/settings/save")

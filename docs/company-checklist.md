@@ -41,7 +41,7 @@
 
 - [ ] 선택 항목(`LLM_TIMEOUT`, `LLM_VERIFY_SSL`, `LLM_ENABLE_THINKING`, `LLM_API_VERSION`, `LLM_WORKERS`, `LLM_FOLLOW_UPS`)은 `.env.example`의 설명을 보고 필요할 때만 채웁니다.
 - [ ] 키와 프로젝트 ID는 채팅이나 스크린샷에 올리지 않습니다.
-- [ ] `.env` 대신 설정 페이지(`/settings`)에서도 LLM 연결을 넣을 수 있습니다. `.env`의 연결은 `.env`라는 이름으로 함께 보입니다.
+- [ ] `.env` 대신 설정 페이지(`/settings`)에서도 LLM 연결을 넣을 수 있습니다. `.env`의 연결은 "기본 연결"이라는 이름으로 함께 보입니다.
 
 ## 2. 되는지 파악하기
 

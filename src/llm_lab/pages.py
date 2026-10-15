@@ -1116,7 +1116,7 @@ def _connection_row(connection: Connection, is_current: bool, check: str) -> str
             '<button class="btn plain" type="submit">현재 연결로</button></form>'
         )
     if connection.read_only:
-        buttons.append('<span class="hint">.env 파일에서 고침</span>')
+        buttons.append('<span class="hint">여기서는 바꿀 수 없음</span>')
     else:
         buttons.append(
             f'<a class="btn plain" href="/settings?edit={quote(connection.name)}#form">수정</a>'

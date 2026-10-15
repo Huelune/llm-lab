@@ -29,10 +29,15 @@ from llm_lab.probe import (
     classify_error,
 )
 
-ENV_NAME = ".env"
+# .env의 연결. 비개발자가 쓰는 화면이라 "기본 연결"로 부른다.
+# 예전 작업에 적힌 ".env"도 같은 연결이다
+ENV_NAME = "기본 연결"
+LEGACY_ENV_NAME = ".env"
 _WRITE_FAILED = "연결 설정을 저장하지 못했습니다. 데이터 폴더에 쓸 수 있는지 확인하세요."
-_ENV_READ_ONLY = ".env 연결은 .env 파일에서 고칩니다"
-_ENV_RESERVED = ".env는 .env 파일의 연결 이름이라 쓸 수 없습니다."
+ENV_READ_ONLY = _ENV_READ_ONLY = (
+    "기본 연결은 여기서 바꿀 수 없습니다. 서버를 설치한 담당자가 설정 파일에서 바꿉니다."
+)
+_ENV_RESERVED = "'기본 연결'은 정해진 이름이라 쓸 수 없습니다."
 
 
 @dataclass(frozen=True)
@@ -200,6 +205,8 @@ class ConnectionStore:
         return ([self._env] if self._env else []) + self._saved
 
     def _find(self, name: str) -> Connection | None:
+        if name == LEGACY_ENV_NAME and self._env:
+            name = ENV_NAME
         return next((c for c in self._all() if c.name == name), None)
 
     def _current(self) -> Connection | None:
@@ -222,7 +229,7 @@ class ConnectionStore:
         with self._lock:
             if self._env and ENV_NAME in (original, connection.name):
                 raise ConfigError(_ENV_READ_ONLY)
-            if connection.name == ENV_NAME:
+            if connection.name in (ENV_NAME, LEGACY_ENV_NAME):
                 raise ConfigError(_ENV_RESERVED)
             if any(c.name == connection.name and c.name != original for c in self._all()):
                 raise ConfigError("같은 이름의 연결이 있습니다")

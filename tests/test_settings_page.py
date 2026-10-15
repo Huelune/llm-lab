@@ -92,8 +92,12 @@ def test_env_connection_has_no_edit_or_delete(tmp_path):
 
     response = client.post("/settings/delete", data={"name": ENV_NAME})
 
-    assert ".env 파일에서 고침" in html
-    assert response.status_code == 200 and ".env 연결은 .env 파일에서 고칩니다" in response.text
+    assert "여기서는 바꿀 수 없음" in html and ".env" not in html
+    assert (
+        response.status_code == 200
+        and "기본 연결은 여기서 바꿀 수 없습니다. 서버를 설치한 담당자가 설정 파일에서 바꿉니다."
+        in response.text
+    )
     assert connections.get(ENV_NAME) is not None
 
 

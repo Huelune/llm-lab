@@ -1171,7 +1171,7 @@ def test_summary_page_has_no_connection_name(tmp_path):
     job_html = client.get("/results/1").text
     summary_html = client.get("/results/1/summary").text
 
-    assert "연결: .env" in job_html and "연결 .env" in job_html
+    assert "연결: 기본 연결" in job_html and "연결 기본 연결" in job_html
     assert "연결:" not in summary_html
 
 

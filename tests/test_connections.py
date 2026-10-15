@@ -110,9 +110,9 @@ def test_env_connection_is_listed_first_and_read_only(tmp_path):
     store.save(connection_from_form({**FORM, "name": "A"}))
     assert [c.name for c in store.list()] == [ENV_NAME, "A"]
     assert store.current().name == ENV_NAME
-    with pytest.raises(ConfigError, match=".env"):
+    with pytest.raises(ConfigError, match="기본 연결은"):
         store.save(connection_from_form({**FORM, "name": ENV_NAME}), original=ENV_NAME)
-    with pytest.raises(ConfigError, match=".env"):
+    with pytest.raises(ConfigError, match="기본 연결은"):
         store.delete(ENV_NAME)
     file_text = (tmp_path / "connections.json").read_text(encoding="utf-8")
     assert ENV_NAME not in file_text and "secret-env" not in file_text
@@ -205,7 +205,7 @@ def test_good_file_has_no_notice(tmp_path):
 def test_env_name_is_refused_even_without_an_env_connection(tmp_path):
     store = ConnectionStore(tmp_path / "connections.json")
 
-    with pytest.raises(ConfigError, match="^.env는 .env 파일의 연결 이름이라 쓸 수 없습니다.$"):
+    with pytest.raises(ConfigError, match="^'기본 연결'은 정해진 이름이라 쓸 수 없습니다.$"):
         store.save(connection_from_form({**FORM, "name": ENV_NAME}))
     assert store.list() == []
 
@@ -227,3 +227,15 @@ def test_check_connection_reports_a_timeout():
 
     assert check_connection(connection, base, lambda s: make_client(slow)) == "연결 실패(시간 초과)"
     assert check_connection(connection, base, lambda s: make_client(refused)) == "연결 실패"
+
+
+def test_env_connection_is_called_the_default_connection_and_old_name_still_finds_it(tmp_path):
+    # 비개발자가 쓰는 화면이라 .env 대신 "기본 연결"로 부른다. 예전 작업에 적힌 ".env"도 찾는다
+    settings = Settings(base_url="https://env.test/v1", api_key="secret-env", model="m")
+    env = connection_from_settings(ENV_NAME, settings, read_only=True)
+    store = ConnectionStore(tmp_path / "connections.json", env)
+
+    assert ENV_NAME == "기본 연결"
+    assert store.get(".env") is env
+    with pytest.raises(ConfigError, match="정해진 이름"):
+        store.save(connection_from_form({**FORM, "name": ".env"}))
