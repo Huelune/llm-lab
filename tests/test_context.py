@@ -66,6 +66,27 @@ def test_context_switches_to_max_completion_tokens_when_server_asks(capsys):
     assert "16,000토큰은 통과, 32,000토큰은 거부" in out
 
 
+def test_context_counts_output_limit_error_as_accepted(capsys):
+    # 추론형 모델은 생각에 토큰을 쓰므로 1토큰 한도에서는 답을 못 끝낸다.
+    # 이 오류는 프롬프트를 다 읽은 뒤에 나므로 그 크기는 받아들여진 것이다
+    def handler(request):
+        words = len(request_json(request)["messages"][0]["content"].split())
+        if words > 20_000:
+            return error(400, VLLM_LIMIT_MESSAGE)
+        return error(
+            400,
+            "Could not finish the message because max_tokens or model output limit was "
+            "reached. Please try again with higher max_tokens.",
+        )
+
+    code = probe.run_context(make_client(handler), SETTINGS)
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Could not finish" not in out
+    assert "16,000토큰은 통과, 32,000토큰은 거부" in out
+
+
 def test_context_reports_lower_bound_when_everything_passes(capsys):
     handler, sent = limited_server(10**9)
 

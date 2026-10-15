@@ -452,6 +452,18 @@ def run_context(client: OpenAI, settings: Settings, *, output: TextIO | None = N
                 limit_name = "max_completion_tokens"
                 start = time.perf_counter()
                 response = _one_token(client, settings.model, size, limit_name)
+        except openai.BadRequestError as exc:
+            # 추론형 모델은 1토큰 한도로는 답을 못 끝낸다. 이 오류는 프롬프트를 다 읽은 뒤에 나므로
+            # 그 크기는 받아들여진 것이다 (한도를 늘리면 생각 토큰만 낭비한다)
+            if "output limit was reached" not in str(exc):
+                emit(f"약 {size:,}토큰  거부(400)  {_server_message(exc, limit=600)}")
+                rejected = size
+                break
+            emit(
+                f"약 {size:,}토큰  통과  답은 출력 한도에 걸림  {time.perf_counter() - start:.2f}s"
+            )
+            passed = size
+            continue
         except openai.APIStatusError as exc:
             # 게이트웨이가 감싼 메시지는 길고 숫자가 뒤쪽에 있으므로 넉넉히 보여준다
             emit(f"약 {size:,}토큰  거부({exc.status_code})  {_server_message(exc, limit=600)}")
