@@ -277,21 +277,26 @@ pre.diff .hunk { color: var(--faint); }
 .fields label { display: block; font-size: 12.5px; color: var(--muted); }
 .fields label input, .fields label select { margin-top: 3px; color: var(--text); }
 @media (max-width: 700px) { .fields { grid-template-columns: 1fr; } }
-/* 작업 목록: 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음 */
+/* 작업 목록: 이름(링크)·종류·연결·모델·시작·대상·판단·진행·결과 보기, 대상과 판단은 배지 묶음 */
 .jobs td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
-.jobs .jobno { color: var(--faint); font-variant-numeric: tabular-nums; }
 .jobs .jobname a { font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
-.jobs .jobname .sub { margin: 2px 0 0; font-size: 12px; }
 .jobs .tags { line-height: 26px; }
 .jobs .go { text-align: right; white-space: nowrap; }
-/* 좁은 화면에서는 번호·판단·결과 보기 칸을 숨긴다 (엑셀 이름이 결과로 가는 링크다) */
-@media (max-width: 800px) {
-  .jobs th:nth-child(4), .jobs td:nth-child(4) { display: none; }
+/* 좁은 화면에서는 연결·모델·시작, 더 좁으면 종류·대상·결과 보기도 숨긴다
+   (이름·판단·진행은 남고, 이름이 결과로 가는 링크다) */
+@media (max-width: 900px) {
+  .jobs th:nth-child(3), .jobs td:nth-child(3), .jobs th:nth-child(4), .jobs td:nth-child(4),
+  .jobs th:nth-child(5), .jobs td:nth-child(5) { display: none; }
 }
 @media (max-width: 560px) {
-  .jobs th:nth-child(1), .jobs td:nth-child(1), .jobs th:nth-child(6), .jobs td:nth-child(6) {
-    display: none; }
+  .jobs th:nth-child(2), .jobs td:nth-child(2), .jobs th:nth-child(6), .jobs td:nth-child(6),
+  .jobs th:nth-child(9), .jobs td:nth-child(9) { display: none; }
 }
+/* 작업 화면 머리: 제목 아래 접힌 이름 바꾸기 */
+.pagehead .rename { margin: 2px 0 6px; font-size: 13px; }
+.pagehead .rename summary { cursor: pointer; color: var(--muted); }
+.pagehead .rename form { display: flex; gap: 6px; margin-top: 6px; max-width: 420px; }
+.pagehead .rename input { flex: 1 1 auto; min-width: 0; }
 """
 
 # 탭, 걸러 보기, 수정 고르기(겹치는 수정은 함께 못 고름), 명령 복사, 폴더 찾기.
