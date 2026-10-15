@@ -30,7 +30,10 @@ from llm_lab.csource import (
 from llm_lab.fixer import FixError, make_request, split_lines
 from llm_lab.kinds import KINDS
 from llm_lab.sources import DecodeError, decode_source
-from llm_lab.store import Store
+from llm_lab.store import Store, StoreError
+
+# 예전(정수 작업 ID) DB를 만나면 찍는 안내
+OLD_DB = "예전 작업 기록 형식입니다. 서버를 끈 뒤 uv run llm-fix-server --clear all 을 실행하세요."
 
 MIN_PREFIX = 4  # --job에 적는 작업 ID 앞부분의 최소 글자 수
 AMBIGUOUS = "여러 작업이 맞습니다. 더 길게 적으세요."
@@ -217,6 +220,10 @@ def main() -> int:
     db = Path("private") / (args.profile or "") / "fixer.db"
     try:
         screen = summarize(db, args.job, args.pattern)
+    except StoreError:
+        clear_screen()
+        print(OLD_DB)
+        return 1
     except Exception as exc:
         clear_screen()
         print(f"요약하지 못했습니다: {type(exc).__name__}")

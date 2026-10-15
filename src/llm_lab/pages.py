@@ -461,6 +461,12 @@ if (analyze) analyze.addEventListener('submit', () => {
 // 다시 읽을 때는 주소의 #(탭·카드), 걸러 보기, 펼친 '자세히', 스크롤이 남는다
 const live = document.querySelector('main[data-refresh]');
 async function poll() {
+  // 이름 바꾸기 등 입력 칸에 적는 중이면 적던 글이 지워지지 않게 다시 읽지 않고 다음 차례에 본다
+  const typing = document.activeElement && document.activeElement.closest('form');
+  if (typing || document.querySelector('details.rename[open]')) {
+    setTimeout(poll, Number(live.dataset.refresh) * 1000);
+    return;
+  }
   try {
     const response = await fetch(location.pathname, {cache: 'no-store'});
     const found = (await response.text()).match(/data-version="(\\w+)"/);

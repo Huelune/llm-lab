@@ -528,3 +528,32 @@ def test_prefix_is_matched_against_the_database_when_there_is_one(tmp_path):
 
     assert f"작업 {job[:8]}의 대화 기록이 없습니다" in screen
     assert peek.newest_db_job(tmp_path / "fixer.db") == job
+
+
+OLD_DB_MESSAGE = (
+    "예전 작업 기록 형식입니다. 서버를 끈 뒤 uv run llm-fix-server --clear all 을 실행하세요."
+)
+
+
+def old_format_db(tmp_path):
+    import sqlite3
+    from contextlib import closing
+
+    (tmp_path / "private").mkdir()
+    with closing(sqlite3.connect(tmp_path / "private" / "fixer.db")) as db:
+        db.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, created_at TEXT)")
+        db.execute("INSERT INTO jobs VALUES (7, '2026-01-01T00:00:00')")
+        db.execute("PRAGMA user_version = 5")
+        db.commit()
+
+
+def test_old_format_database_says_what_to_do(tmp_path, monkeypatch, capsys):
+
+    old_format_db(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(peek, "clear_screen", lambda: None)
+    for argv in ([], ["--job", "0007"]):
+        monkeypatch.setattr(sys, "argv", ["peek", *argv])
+        assert peek.main() == 1
+        out = capsys.readouterr().out
+        assert out.strip() == OLD_DB_MESSAGE

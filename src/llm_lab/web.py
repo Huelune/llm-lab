@@ -489,7 +489,7 @@ def create_app(
         if connections is not None and job.connection and connections.get(job.connection) is None:
             current = connections.current()
             if current is not None:
-                store.set_job_connection(job_id, current.name)
+                store.set_job_connection(job_id, current.name, current.model)
         store.retry(job_id)
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)

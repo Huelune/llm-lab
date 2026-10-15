@@ -1,5 +1,7 @@
 """worker가 작업에 기록된 연결로 요청한다."""
 
+import json
+
 from fake_llm import MODEL, make_client, scripted
 from rte_fixtures import CALC_C, finding, fix_answer
 
@@ -40,7 +42,7 @@ def setup(tmp_path):
     return store, worker, connections, queued, sent_a, sent_b, made
 
 
-def new_job(store, connection):
+def new_job(store, connection, settings=None):
     return store.create_job(
         "x.xlsx",
         "RTE_Result",
@@ -48,6 +50,7 @@ def new_job(store, connection):
         [SOURCE],
         [NewRow(finding(), "calc.c", "pending")],
         connection=connection,
+        settings=settings,
     )
 
 
@@ -106,7 +109,7 @@ def test_retry_after_a_deleted_connection_uses_the_current_one(tmp_path):
     from llm_lab.web import create_app
 
     store, worker, connections, queued, sent_a, sent_b, made = setup(tmp_path)
-    job = new_job(store, "A")
+    job = new_job(store, "A", settings={"connection": "A", "model": MODEL, "x": 1})
     worker.start(job)
     connections.select("B")
     connections.delete("A")
@@ -120,6 +123,7 @@ def test_retry_after_a_deleted_connection_uses_the_current_one(tmp_path):
         task()
 
     assert store.job(job).connection == "B"
+    assert json.loads(store.job(job).settings) == {"connection": "B", "model": "model-b", "x": 1}
     assert len(sent_b) == 1 and sent_a == []
     assert store.rows(job)[0].state == "done"
 
@@ -128,6 +132,6 @@ def test_set_job_connection_records_the_name(tmp_path):
     store = Store(tmp_path / "fixer.db")
     job = new_job(store, "A")
 
-    store.set_job_connection(job, "B")
+    store.set_job_connection(job, "B", "model-b")
 
     assert store.job(job).connection == "B"

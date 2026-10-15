@@ -104,3 +104,9 @@ def test_summary_page_has_neutral_title_and_no_names():
     assert "<title>작업 요약 · RTE · 01234567 · LLM Test Advisor</title>" in html
     assert "secret" not in html
     assert "게이트웨이" not in html
+
+
+def test_auto_refresh_waits_while_a_form_is_being_typed_in():
+    # 처리 중 자동 새로 고침이 이름 바꾸기 칸에 적던 글을 지우지 않는다
+    assert "document.activeElement.closest('form')" in pages.SCRIPT
+    assert "document.querySelector('details.rename[open]')" in pages.SCRIPT

@@ -143,6 +143,12 @@ class Store:
                 )
             if 0 < version < SCHEMA_VERSION:
                 raise StoreError(OLD_FORMAT)
+            # 판 번호가 없는(0) DB라도 jobs.id가 정수면 UUID 이전 형식이다
+            id_type = db.execute(
+                "SELECT type FROM pragma_table_info('jobs') WHERE name = 'id'"
+            ).fetchone()
+            if version == 0 and id_type is not None and id_type[0].upper() != "TEXT":
+                raise StoreError(OLD_FORMAT)
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -358,9 +364,20 @@ class Store:
         with self._write() as db:
             db.execute("UPDATE jobs SET title = ? WHERE id = ?", (title, job_id))
 
-    def set_job_connection(self, job_id: str, name: str) -> None:
+    def set_job_connection(self, job_id: str, name: str, model: str) -> None:
+        """작업의 연결을 바꾼다. 기록한 설정이 있으면 그 연결·모델도 같이 바꾼다."""
         with self._write() as db:
-            db.execute("UPDATE jobs SET connection = ? WHERE id = ?", (name, job_id))
+            found = db.execute("SELECT settings FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            settings = found[0] if found else ""
+            if settings:
+                settings = json.dumps(
+                    {**json.loads(settings), "connection": name, "model": model},
+                    ensure_ascii=False,
+                )
+            db.execute(
+                "UPDATE jobs SET connection = ?, settings = ? WHERE id = ?",
+                (name, settings, job_id),
+            )
 
     def stop(self, job_id: str) -> None:
         """처리 중인 작업을 멈춘다. 줄 서 있던 묶음은 건너뛰고, "이어서 처리"(retry)로 계속한다."""

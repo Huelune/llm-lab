@@ -374,3 +374,13 @@ def test_old_integer_database_is_refused(tmp_path):
 
     with pytest.raises(StoreError, match="예전 작업 기록 형식"):
         Store(path)
+
+
+def test_unversioned_database_with_an_integer_jobs_table_is_refused(tmp_path):
+    path = tmp_path / "fixer.db"
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, created_at TEXT)")
+        db.commit()
+
+    with pytest.raises(StoreError, match="예전 작업 기록 형식"):
+        Store(path)

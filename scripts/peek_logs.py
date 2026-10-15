@@ -36,7 +36,10 @@ from llm_lab.followups import (
     need_names,
 )
 from llm_lab.sources import DecodeError, decode_source
-from llm_lab.store import Job, Store
+from llm_lab.store import OLD_FORMAT, Job, Store, StoreError
+
+# 예전(정수 작업 ID) DB를 만나면 찍는 안내
+OLD_DB = "예전 작업 기록 형식입니다. 서버를 끈 뒤 uv run llm-fix-server --clear all 을 실행하세요."
 
 LOG_NAME = re.compile(r"_job([0-9a-f-]{36})_row\d+(?:-\d+)?\.md$")
 MIN_PREFIX = 4  # --job에 적는 작업 ID 앞부분의 최소 글자 수
@@ -71,9 +74,12 @@ def db_job_ids(db: Path | None) -> list[str] | None:
         return None
     try:
         with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as connection:
-            return [row[0] for row in connection.execute("SELECT id FROM jobs")]
+            ids = [row[0] for row in connection.execute("SELECT id FROM jobs")]
     except sqlite3.Error:
         return None
+    if any(not isinstance(i, str) for i in ids):
+        raise StoreError(OLD_FORMAT)
+    return ids
 
 
 def find_job(prefix: str, ids: list[str]) -> tuple[str | None, str | None]:
@@ -633,6 +639,8 @@ def newest_db_job(db: Path | None) -> str | None:
             ).fetchone()
     except sqlite3.Error:
         return None
+    if found and not isinstance(found[0], str):
+        raise StoreError(OLD_FORMAT)
     return found[0] if found else None
 
 
@@ -774,6 +782,10 @@ def main() -> int:
     try:
         temp = Path(os.environ.get("TEMP") or tempfile.gettempdir())
         screen = summarize(folder, args.job, args.pattern, data / "fixer.db", temp)
+    except StoreError:
+        clear_screen()
+        print(OLD_DB)
+        return 1
     except Exception as exc:
         clear_screen()
         print(f"요약하지 못했습니다: {type(exc).__name__}")

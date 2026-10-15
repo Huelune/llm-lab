@@ -1261,6 +1261,39 @@ def test_summary_page_has_no_connection_name(tmp_path):
     assert "연결:" not in summary_html
 
 
+def test_job_settings_never_hold_secrets(tmp_path):
+    env = connection_from_settings(
+        ENV_NAME,
+        Settings(
+            base_url="https://llm.test/v1",
+            api_key="s3cr3t-api-key",
+            model=MODEL,
+            project_id="s3cr3t-project",
+        ),
+        True,
+    )
+    connections = ConnectionStore(tmp_path / "connections.json", env)
+    client, store, _ = make_service(tmp_path, fix_answer(), connections=connections)
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+    (job,) = store.jobs()
+
+    assert set(json.loads(job.settings)) == {
+        "connection",
+        "model",
+        "kind",
+        "mode",
+        "choices",
+        "follow_ups",
+        "source_root",
+        "excel",
+    }
+    api = client.get(f"/api/results/{job.id}").text
+    # 작업 폴더 경로에 secret-key가 들어 있을 수 있어 경로에 없을 값을 쓴다
+    for secret in ("s3cr3t-api-key", "s3cr3t-project"):
+        assert secret not in job.settings
+        assert secret not in api
+
+
 def test_summary_page_of_a_missing_job_is_404(tmp_path):
     client, _, _ = make_service(tmp_path)
 
