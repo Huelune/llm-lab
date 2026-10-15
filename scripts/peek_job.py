@@ -1,6 +1,6 @@
 """llm-fix-server 작업 하나가 정의·호출자를 왜 못 붙였는지 개수로만 센다 (읽기만 한다).
 
-    uv run python scripts/peek_job.py [파일·이름 패턴] [--job 작업 번호] [--profile 이름]
+    uv run python scripts/peek_job.py [파일·이름 패턴] [--job 작업 ID 앞부분] [--profile 이름]
 
 --job을 빼면 가장 최근 작업을 본다. 패턴(예: rte)을 주면 그 글자가 든 파일과 이름을 따로 센다.
 작업 DB에 저장된 것을 세고, 묶음마다 요청을 다시 만들어 무엇이 붙는지 센다(LLM은 부르지 않는다).
@@ -32,6 +32,10 @@ from llm_lab.kinds import KINDS
 from llm_lab.sources import DecodeError, decode_source
 from llm_lab.store import Store
 
+MIN_PREFIX = 4  # --job에 적는 작업 ID 앞부분의 최소 글자 수
+AMBIGUOUS = "여러 작업이 맞습니다. 더 길게 적으세요."
+NOT_FOUND = "작업을 찾지 못했습니다. --job에 작업 ID 앞부분을 적으세요."
+
 
 def _has(name: str, pattern: str | None) -> bool:
     return bool(pattern) and pattern.casefold() in name.casefold()
@@ -60,15 +64,30 @@ def _rescan(root: Path, pattern: str | None) -> Counter[str]:
     return counts
 
 
-def facts(db: Path, job_id: int | None = None, pattern: str | None = None) -> list[tuple[str, int]]:
+def facts(
+    db: Path, job_id: str | None = None, pattern: str | None = None
+) -> list[tuple[str, int | str]]:
+    """job_id는 작업 ID 앞부분(4자 이상) 또는 전체. 없으면 가장 최근 작업.
+
+    못 찾으면 LookupError(안내 문구)."""
     store = Store(db)
-    job = store.job(job_id) if job_id is not None else next(iter(store.jobs(limit=1)), None)
-    if job is None:
-        raise LookupError("작업 없음")
+    if job_id is None:
+        job = next(iter(store.jobs(limit=1)), None)
+        if job is None:
+            raise LookupError(NOT_FOUND)
+    else:
+        prefix = job_id.strip().casefold()
+        found = [
+            j
+            for j in store.jobs(limit=1_000_000)
+            if len(prefix) >= MIN_PREFIX and j.id.casefold().startswith(prefix)
+        ]
+        if len(found) != 1:
+            raise LookupError(AMBIGUOUS if found else NOT_FOUND)
+        job = found[0]
     definitions = store.definitions(job.id)
     sources = store.sources(job.id)
     counts: Counter[str] = Counter()
-    counts["job"] = job.id
     counts["stored_files"] = len(sources)
     counts["stored_definitions"] = sum(
         1 for d in definitions if d.kind not in ("caller", "caller_ref")
@@ -119,7 +138,6 @@ def facts(db: Path, job_id: int | None = None, pattern: str | None = None) -> li
         fresh_callers = callers_for(found, texts, targets)
         counts["fresh_callers"] = sum(1 for d in fresh_callers if d.kind == "caller")
     keys = (
-        "job",
         "stored_files",
         "stored_definitions",
         "stored_callers",
@@ -140,18 +158,18 @@ def facts(db: Path, job_id: int | None = None, pattern: str | None = None) -> li
         "fresh_pattern_names_defined",
         "fresh_callers",
     )
-    return [(key, counts[key]) for key in keys]
+    return [("job", job.id), *((key, counts[key]) for key in keys)]
 
 
-def summarize(db: Path, job_id: int | None = None, pattern: str | None = None) -> list[str]:
+def summarize(db: Path, job_id: str | None = None, pattern: str | None = None) -> list[str]:
     if not db.is_file():
         return ["작업 DB가 없습니다. 서버를 켠 프로젝트 폴더에서 실행하세요."]
     try:
         f = dict(facts(db, job_id, pattern))
-    except LookupError:
-        return ["작업이 없습니다. 작업 번호를 확인하세요."]
+    except LookupError as exc:
+        return [str(exc)]
     lines = [
-        f"작업 {f['job']}: 저장된 파일 {f['stored_files']}개, "
+        f"작업 {str(f['job'])[:8]}: 저장된 파일 {f['stored_files']}개, "
         f"참고 정의 {f['stored_definitions']}개, 호출자 조각 {f['stored_callers']}개",
         f"다시 만든 요청: 묶음 {f['groups']}개, 정의가 붙는 묶음 {f['groups_with_definitions']}개, "
         f"호출자가 붙는 묶음 {f['groups_with_callers']}개, 못 만든 묶음 {f['groups_failed']}개",
@@ -193,7 +211,7 @@ def clear_screen() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="peek_job", description="작업 점검 (개수만)")
     parser.add_argument("pattern", nargs="?", help="파일·이름 패턴 (예: rte)")
-    parser.add_argument("--job", type=int, help="작업 번호 (빼면 가장 최근)")
+    parser.add_argument("--job", help="작업 ID 앞부분 4자 이상 (빼면 가장 최근)")
     parser.add_argument("--profile", help="llm-fix-server --profile 이름")
     args = parser.parse_args()
     db = Path("private") / (args.profile or "") / "fixer.db"

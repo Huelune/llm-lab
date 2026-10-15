@@ -135,3 +135,32 @@ def test_fresh_scan_shows_what_a_new_job_would_attach(tmp_path):
     screen = "\n".join(peek.summarize(tmp_path / "private" / "fixer.db", pattern="rte"))
     assert "지금 코드로 작업을 새로 만들면" in screen
     assert "secret" not in screen.casefold()
+
+
+def test_job_is_found_by_an_id_prefix(tmp_path):
+    db = make_job(tmp_path)
+    job = Store(db).jobs(limit=1)[0].id
+
+    for prefix in (job[:8], job[:4].upper(), job):
+        screen = "\n".join(peek.summarize(db, job_id=prefix, pattern="rte"))
+        assert f"작업 {job[:8]}: 저장된 파일" in screen
+        assert job not in screen
+        assert "secret" not in screen.casefold()
+
+
+def test_prefix_that_matches_several_or_none_says_what_to_do(tmp_path):
+    db = make_job(tmp_path)
+    store = Store(db)
+    first = store.jobs(limit=1)[0].id
+    # 앞 4자가 같은 작업을 직접 넣어 모호한 앞부분을 만든다
+    import sqlite3
+
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "INSERT INTO jobs (id, created_at, excel_name, sheet, skipped, state) "
+            "VALUES (?, 'x', 'x', 'x', 0, 'done')",
+            (first[:6] + "ffffff-0000-4000-8000-000000000000"[: 36 - 6],),
+        )
+    assert peek.summarize(db, job_id=first[:4]) == [peek.AMBIGUOUS]
+    assert peek.summarize(db, job_id="zzzz") == [peek.NOT_FOUND]
+    assert peek.summarize(db, job_id=first[:3]) == [peek.NOT_FOUND]

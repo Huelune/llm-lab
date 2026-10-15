@@ -1,14 +1,14 @@
 """llm-fix-server 대화 기록(private/llm-logs)에서 작업 하나의 판단과 "직접 수정" 행을 센다.
 되묻기(LLM이 정의를 더 달라고 한 것)도 센다.
 
-    uv run python scripts/peek_logs.py [파일 이름 패턴] [--job 작업 번호] [--profile 이름]
+    uv run python scripts/peek_logs.py [파일 이름 패턴] [--job 작업 ID 앞부분] [--profile 이름]
 
 --job을 빼면 가장 최근 작업을 본다. 패턴(예: rte)을 주면 다른 파일을 고친 수정 행 가운데 파일
 이름에 그 글자가 든 것을 따로 센다(대소문자 무시).
 
 화면은 캡처해서 회사 밖(Claude)으로 보낸다. 그래서 개수와 정해 둔 글만 찍는다. 파일·함수 이름, 경로,
 코드, LLM이 쓴 이유, 패턴 글자, 오류 원문은 찍지 않는다. 직접 수정 이유의 원문과 이름이 나오는
-자리는 임시 폴더의 peek_logs_jobN.txt에만 쓴다. 그 파일은 회사 PC에서만 본다.
+자리는 임시 폴더의 peek_logs_job<ID 앞 8자>.txt에만 쓴다. 그 파일은 회사 PC에서만 본다.
 """
 
 from __future__ import annotations
@@ -38,7 +38,10 @@ from llm_lab.followups import (
 from llm_lab.sources import DecodeError, decode_source
 from llm_lab.store import Job, Store
 
-LOG_NAME = re.compile(r"_job(\d+)_row\d+(?:-\d+)?\.md$")
+LOG_NAME = re.compile(r"_job([0-9a-f-]{36})_row\d+(?:-\d+)?\.md$")
+MIN_PREFIX = 4  # --job에 적는 작업 ID 앞부분의 최소 글자 수
+AMBIGUOUS = "여러 작업이 맞습니다. 더 길게 적으세요."
+NOT_FOUND = "작업을 찾지 못했습니다. --job에 작업 ID 앞부분을 적으세요."
 FENCE = re.compile(r"^(`{3,})[^\n`]*\n(.*?)\n\1$", re.S | re.M)
 BLOCK_HEAD = re.compile(r"^```c\n// (editable caller: |editable: |reference only: )?(\S+) ", re.M)
 CODE_BLOCK = re.compile(r"^```c\n(.*?)\n```$", re.S | re.M)
@@ -48,9 +51,38 @@ SHOWN_CALLS = 2  # 화면에 모양을 찍는 호출 이름 수 (나머지는 �
 DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
-def newest_job(folder: Path) -> int | None:
-    jobs = [int(m.group(1)) for path in folder.glob("*.md") if (m := LOG_NAME.search(path.name))]
-    return max(jobs, default=None)
+def newest_job(folder: Path) -> str | None:
+    """기록 파일 이름의 시각이 가장 늦은 작업 ID."""
+    found = [
+        (path.name, m.group(1)) for path in folder.glob("*.md") if (m := LOG_NAME.search(path.name))
+    ]
+    return max(found, default=(None, None))[1]
+
+
+def log_job_ids(folder: Path) -> list[str]:
+    """기록 파일이 있는 작업 ID (중복 없이)."""
+    ids = {m.group(1) for path in folder.glob("*.md") if (m := LOG_NAME.search(path.name))}
+    return sorted(ids)
+
+
+def db_job_ids(db: Path | None) -> list[str] | None:
+    """작업 DB의 작업 ID (읽기 전용). DB가 없거나 못 읽으면 None."""
+    if db is None or not db.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as connection:
+            return [row[0] for row in connection.execute("SELECT id FROM jobs")]
+    except sqlite3.Error:
+        return None
+
+
+def find_job(prefix: str, ids: list[str]) -> tuple[str | None, str | None]:
+    """앞부분(4자 이상)이 맞는 작업 ID 하나. 못 찾거나 여럿이면 (None, 안내 문구)."""
+    prefix = prefix.strip().casefold()
+    found = [i for i in ids if len(prefix) >= MIN_PREFIX and i.casefold().startswith(prefix)]
+    if len(found) == 1:
+        return found[0], None
+    return None, AMBIGUOUS if found else NOT_FOUND
 
 
 def _first_fence(text: str) -> str | None:
@@ -58,12 +90,12 @@ def _first_fence(text: str) -> str | None:
     return match.group(2) if match else None
 
 
-def read_logs(folder: Path, job: int) -> list[tuple[str, dict]]:
+def read_logs(folder: Path, job: str) -> list[tuple[str, dict]]:
     """작업의 묶음마다 (마지막으로 보낸 사용자 메시지, 받은 답 JSON). 못 읽은 기록은 뺀다."""
     return [(user, answer) for _, user, answer in read_log_files(folder, job)]
 
 
-def read_log_files(folder: Path, job: int) -> list[tuple[Path, str, dict]]:
+def read_log_files(folder: Path, job: str) -> list[tuple[Path, str, dict]]:
     """read_logs와 같고, 기록 파일 경로를 앞에 붙인다."""
     found = []
     for path in sorted(folder.glob(f"*_job{job}_row*.md")):
@@ -142,7 +174,7 @@ def _received(talk: list[tuple[str, str]]) -> set[str]:
     return got
 
 
-def received_names(folder: Path, job: int) -> list[set[str]]:
+def received_names(folder: Path, job: str) -> list[set[str]]:
     """read_logs의 묶음마다 되물어 받은 이름."""
     return [
         _received(_conversation(path.read_text(encoding="utf-8", errors="replace")))
@@ -155,7 +187,7 @@ def _decided(answer: dict) -> dict[object, object]:
     return {item.get("number"): item.get("decision") for item in items if isinstance(item, dict)}
 
 
-def follow_up_counts(folder: Path, job: int) -> dict[str, int]:
+def follow_up_counts(folder: Path, job: str) -> dict[str, int]:
     """작업의 되묻기를 센다: 되물은 묶음, 횟수별 묶음, 요청한 이름의 처리, 판단이 바뀐 행.
 
     화면의 묶음 수와 같은 기록(read_log_files가 읽은 것)만 센다.
@@ -196,7 +228,7 @@ def follow_up_counts(folder: Path, job: int) -> dict[str, int]:
     return {key: counts[key] for key in keys}
 
 
-def reused_count(folder: Path, job: int) -> int:
+def reused_count(folder: Path, job: str) -> int:
     """저장된 답을 다시 써서 LLM을 부르지 않은 묶음의 기록 수 (보낸 내용이 없다)."""
     return sum(
         1
@@ -267,7 +299,7 @@ def other_file_fixes(logs: list[tuple[str, dict]], pattern: str | None = None) -
 EDITABLE_HEAD = re.compile(r"^// (editable caller: |editable: )(\S+) ", re.M)
 
 
-def other_file_places(folder: Path, job: int) -> dict[str, int]:
+def other_file_places(folder: Path, job: str) -> dict[str, int]:
     """다른 파일을 고친 수정 행을, 고친 파일이 어떻게 보내졌는지로 센다 (한 행이 여러 칸에).
 
     caller: 호출자 조각 / definition: 첫 요청의 정의 / asked: 되물어 받은 정의 / other: 그 밖.
@@ -491,14 +523,15 @@ def unfound_calls(reasons: list[Reason], texts: dict[str, str]) -> list[Call]:
 
 def write_detail(
     path: Path,
-    job: int,
+    job: str,
     names: list[str],
     reasons: list[Reason],
     calls: list[Call] | None,
 ) -> None:
     """직접 수정 판단의 이유 원문과, 정의를 못 찾은 호출 이름이 나오는 자리. 회사 PC에서만 본다."""
     lines = [
-        f"작업 {job} 직접 수정 판단 {len(reasons)}개 - 회사 PC에서만 보고 밖으로 보내지 않습니다.",
+        f"작업 {job[:8]} 직접 수정 판단 {len(reasons)}개"
+        " - 회사 PC에서만 보고 밖으로 보내지 않습니다.",
         "",
     ]
     for number, call in enumerate(calls or [], start=1):
@@ -589,21 +622,23 @@ def manual_checks(logs: list[tuple[str, dict]]) -> list[tuple[str, int]]:
     return ranked + ([("그 밖", other)] if other else [])
 
 
-def newest_db_job(db: Path | None) -> int | None:
-    """작업 DB의 가장 최근 작업 번호. DB가 없거나 못 읽으면 None."""
+def newest_db_job(db: Path | None) -> str | None:
+    """작업 DB의 가장 최근 작업 ID. DB가 없거나 못 읽으면 None."""
     if db is None or not db.is_file():
         return None
     try:
         with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as connection:
-            found = connection.execute("SELECT MAX(id) FROM jobs").fetchone()
+            found = connection.execute(
+                "SELECT id FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
     except sqlite3.Error:
         return None
-    return found[0] if found and found[0] is not None else None
+    return found[0] if found else None
 
 
 def _reason_lines(
     folder: Path,
-    job: int,
+    job: str,
     logs: list[tuple[str, dict]],
     stored: Job,
     store: Store,
@@ -635,7 +670,7 @@ def _reason_lines(
         if len(calls) > SHOWN_CALLS:
             lines.append(f"  나머지 {len(calls) - SHOWN_CALLS}개는 자세한 목록에 있습니다.")
     if detail is not None and reasons:
-        name = f"peek_logs_job{job}.txt"
+        name = f"peek_logs_job{job[:8]}.txt"
         names = [path.name for path, _, _ in read_log_files(folder, job)]
         write_detail(detail / name, job, names, reasons, calls)
         lines.append(f"자세한 목록(회사 PC에서만 보기): %TEMP%\\{name}")
@@ -644,26 +679,34 @@ def _reason_lines(
 
 def summarize(
     folder: Path,
-    job: int | None = None,
+    job: str | None = None,
     pattern: str | None = None,
     db: Path | None = None,
     detail: Path | None = None,
 ) -> list[str]:
+    """job은 작업 ID 앞부분(4자 이상) 또는 전체. 없으면 가장 최근 작업."""
     if job is None:
         # 작업 DB의 최근 작업을 먼저 본다. 기록 파일만 보면 기록이 없는 최근 작업을 건너뛴다
         job = newest_db_job(db) or (newest_job(folder) if folder.is_dir() else None)
-    if job is None:
-        return ["대화 기록이 없습니다. 서버를 켠 프로젝트 폴더에서 실행하세요."]
+        if job is None:
+            return ["대화 기록이 없습니다. 서버를 켠 프로젝트 폴더에서 실행하세요."]
+    else:
+        ids = db_job_ids(db)
+        if ids is None:
+            ids = log_job_ids(folder) if folder.is_dir() else []
+        job, message = find_job(job, ids)
+        if job is None:
+            return [message or NOT_FOUND]
     logs = read_logs(folder, job) if folder.is_dir() else []
     reused = reused_count(folder, job) if folder.is_dir() else 0
     if not logs and reused:
         return [
-            f"작업 {job}: 묶음 {reused}개 모두 저장된 답을 다시 썼습니다(LLM을 부르지 않음).",
-            "처음 답을 만든 작업 번호를 --job으로 주거나, 저장된 답을 지우고 다시 돌리세요.",
+            f"작업 {job[:8]}: 묶음 {reused}개 모두 저장된 답을 다시 썼습니다(LLM을 부르지 않음).",
+            "처음 답을 만든 작업 ID를 --job으로 주거나, 저장된 답을 지우고 다시 돌리세요.",
         ]
     if not logs:
         return [
-            f"작업 {job}의 대화 기록이 없습니다.",
+            f"작업 {job[:8]}의 대화 기록이 없습니다.",
             "아직 처리 중이거나, LLM을 부르기 전에 끝났거나, 서버를 --profile로 켰으면 같은 "
             "--profile을 붙이세요.",
         ]
@@ -676,7 +719,7 @@ def summarize(
     manual_groups = sum(1 for _, answer in logs if "manual" in _decisions(answer))
     follow = follow_up_counts(folder, job)
     lines = [
-        f"작업 {job}: 묶음 {len(logs)}개 (마지막 요청 기준), 저장된 답 재사용 묶음 {reused}개",
+        f"작업 {job[:8]}: 묶음 {len(logs)}개 (마지막 요청 기준), 저장된 답 재사용 묶음 {reused}개",
         "판단 행: " + " / ".join(f"{label} {decided[key]}" for key, label in DECISIONS),
         f"정의가 상한({MAX_DEFINITIONS}개)까지 붙은 묶음: {capped} / {len(logs)}, "
         f"직접 수정이 나온 묶음: {manual_groups}",
@@ -723,7 +766,7 @@ def clear_screen() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="peek_logs", description="대화 기록 요약 (개수만)")
     parser.add_argument("pattern", nargs="?", help="파일 이름 패턴 (예: rte)")
-    parser.add_argument("--job", type=int, help="작업 번호 (빼면 가장 최근)")
+    parser.add_argument("--job", help="작업 ID 앞부분 4자 이상 (빼면 가장 최근)")
     parser.add_argument("--profile", help="llm-fix-server --profile 이름")
     args = parser.parse_args()
     data = Path("private") / (args.profile or "")
