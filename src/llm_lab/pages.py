@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -565,19 +566,60 @@ def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
             if decided[key]
         )
         when = job.created_at[5:16].replace("T", " ")
+        model = _settings(job).get("model") or "-"
         lines.append(
-            f'<tr><td class="jobno">{job.id}</td>'
-            f'<td class="jobname"><a href="/results/{job.id}">{escape(job.excel_name)}</a>'
-            f'<div class="sub">{escape(kind.title)} · {escape(when)}</div></td>'
+            f'<tr><td class="jobname"><a href="/results/{job.id}">'
+            f"{escape(job.title or job.excel_name)}</a></td>"
+            f"<td>{escape(kind.title)}</td><td>{escape(job.connection or '-')}</td>"
+            f"<td>{escape(str(model))}</td><td>{escape(when)}</td>"
             f'<td class="tags">{labels}</td><td class="tags">{verdicts}</td>'
             f"<td>{_job_badge(job, rows)}</td>"
             f'<td class="go"><a href="/results/{job.id}">결과 보기 →</a></td></tr>'
         )
     return (
-        '<div class="card table jobs"><table><tr><th style="width:52px">번호</th>'
-        '<th>엑셀</th><th>대상</th><th>판단</th><th style="width:110px">상태</th>'
-        '<th style="width:96px"></th></tr>' + "".join(lines) + "</table></div>"
+        '<div class="card table jobs"><table><tr><th>이름</th><th>종류</th><th>연결</th>'
+        "<th>모델</th><th>시작</th><th>대상</th><th>판단</th>"
+        '<th style="width:110px">진행</th><th style="width:96px"></th></tr>'
+        + "".join(lines)
+        + "</table></div>"
     )
+
+
+def _settings(job: Job) -> dict:
+    """작업을 만들 때 기록한 설정. 비었거나 깨졌으면 빈 사전이다."""
+    try:
+        data = json.loads(job.settings) if job.settings else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _settings_card(job: Job) -> str:
+    settings = _settings(job)
+    if not settings:
+        return (
+            '<div class="card"><h3>작업 설정</h3><p class="empty">기록된 설정이 없습니다.</p></div>'
+        )
+    kind = KINDS.get(job.kind)
+    modes = {value: label for value, label, _ in kind.modes} if kind else {}
+    choices = settings.get("choices")
+    follow_ups = settings.get("follow_ups")
+    facts = [
+        ("연결", settings.get("connection")),
+        ("모델", settings.get("model")),
+        ("시트 종류", kind.title if kind else settings.get("kind")),
+        ("처리 방식", modes.get(settings.get("mode"), settings.get("mode"))),
+        ("분석 대상", ", ".join(map(str, choices)) if isinstance(choices, list) else None),
+        ("되묻기 횟수", None if follow_ups is None else str(follow_ups)),
+        ("소스 폴더", settings.get("source_root")),
+        ("엑셀 파일", settings.get("excel")),
+        ("시작 시각", job.created_at[:16].replace("T", " ")),
+    ]
+    rows = "".join(
+        f"<tr><td>{escape(name)}</td><td>{escape(str(value)) if value else '-'}</td></tr>"
+        for name, value in facts
+    )
+    return f'<div class="card"><h3>작업 설정</h3><table>{rows}</table></div>'
 
 
 def _kind_step() -> str:
@@ -1000,6 +1042,10 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
     body = (
         '<div class="pagehead"><div>'
         f"<h1>{escape(job.title or job.excel_name)} {_job_badge(job, rows)}</h1>"
+        '<details class="rename"><summary>이름 바꾸기</summary>'
+        f'<form method="post" action="/results/{job.id}/rename">'
+        f'<input type="text" name="title" value="{escape(job.title)}" maxlength="80" required> '
+        '<button class="btn plain" type="submit">저장</button></form></details>'
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
         + (f" · 연결 {escape(job.connection)}" if job.connection else "")
@@ -1032,8 +1078,9 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
             f'<form class="retry" method="post" action="/results/{job.id}/retry">'
             f'<button class="btn plain" type="submit">{label}</button></form>'
         )
+    body += _settings_card(job)
     body += _chips(kind, job, rows)
-    title = f"작업 {job.id} 결과 · {job.excel_name}"
+    title = job.title or job.excel_name
     if not rows:
         body += '<div class="card"><p class="empty">분석할 행이 없습니다.</p></div>'
         return page(title, body, refresh=not finished, connection=connection)
@@ -1323,8 +1370,9 @@ def summary_page(job: Job, rows: list[Row]) -> str:
         f'<tr><td>{escape(name)}</td><td class="num">{escape(value)}</td></tr>'
         for name, value in facts
     )
+    summary_title = f"작업 요약 · {kind.title} · {job.id[:8]}"
     body = (
-        f'<div class="summary-page"><h1>작업 {job.id} 요약 · {escape(kind.title)}</h1>'
+        f'<div class="summary-page"><h1>{escape(summary_title)}</h1>'
         '<p class="sub">숫자와 표준 용어만 보입니다(엑셀·파일·함수 이름, 경로, 코드, 이유 없음). '
         f'이 화면은 그대로 캡처해 보내도 됩니다. <a href="/results/{job.id}">결과 화면으로</a></p>'
         '<div class="grid2">'
@@ -1333,4 +1381,4 @@ def summary_page(job: Job, rows: list[Row]) -> str:
         + _count_table("검사 종류별", dict(checks), keys)
         + "</div>"
     )
-    return page(f"작업 {job.id} 요약", body, refresh=not finished)
+    return page(summary_title, body, refresh=not finished)

@@ -120,7 +120,7 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     jid = job_id(tmp_path)
     assert response.headers["location"] == f"/results/{jid}"
     page = client.get(f"/results/{jid}").text
-    assert f"<title>작업 {jid} 결과 · rte.xlsx · LLM Test Advisor</title>" in page
+    assert "<title>rte.xlsx · RTE · LLM Test Advisor</title>" in page
     assert "RTE · 시트 RTE_Result" in page
     assert "제외: Gray Check 1" in page  # 작업 메모
     assert '<span class="badge green">완료</span>' in page
@@ -241,8 +241,9 @@ def test_results_list_page(tmp_path):
     jid = job_id(tmp_path)
     assert f'href="/results/{jid}">결과 보기' in page
     assert "rte.xlsx" in page
-    # 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음
-    assert '<div class="sub">RTE · ' in page
+    # 이름·종류·연결·모델 칸, 대상과 판단은 배지 묶음
+    assert "<th>이름</th><th>종류</th><th>연결</th><th>모델</th>" in page
+    assert "<td>RTE</td>" in page
     assert (
         '<td class="tags"><span class="badge red">Red 1</span> '
         '<span class="badge orange">Orange 1</span></td>'
@@ -429,7 +430,7 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert "함께 보낸 행: 엑셀 3행" in page and "함께 보낸 행: 엑셀 2행" in page
     assert page.count('<pre class="diff">') == 1  # 같은 묶음의 diff는 첫 행에만
     assert "같은 묶음의 수정입니다 (엑셀 2행과 같음)." in page
-    assert '<div class="sub">MISRA C:2012 · ' in client.get("/results").text
+    assert "<td>MISRA C:2012</td>" in client.get("/results").text
 
     patch = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1", "2"]})
 
@@ -1214,7 +1215,7 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     jid = job_id(tmp_path)
     page = client.get(f"/results/{jid}/summary").text
 
-    assert f"<title>작업 {jid} 요약 · LLM Test Advisor</title>" in page
+    assert f"<title>작업 요약 · RTE · {jid[:8]} · LLM Test Advisor</title>" in page
     job = client.get(f"/results/{jid}").text
     assert f'<a class="btn plain" href="/results/{jid}/summary">요약 (캡처용)</a>' in job
     for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):
@@ -1290,3 +1291,11 @@ def test_export_keeps_formula_like_text_as_text(tmp_path):
     assert sheet.cell(2, 9).value == "=1+1  이유"
     assert sheet.cell(2, 9).data_type == "s"
     assert sheet.cell(2, 10).data_type == "s"
+
+
+def test_default_title_stays_within_80_characters():
+    assert web._default_title("rte.xlsx", "RTE") == "rte.xlsx · RTE"
+    assert web._default_title("", "RTE") == "RTE"
+    long = web._default_title("x" * 200 + ".xlsx", "RTE")
+    assert len(long) == 80
+    assert long.endswith("…· RTE") or long.endswith("… · RTE")

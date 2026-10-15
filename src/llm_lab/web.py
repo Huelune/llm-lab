@@ -65,6 +65,20 @@ RECENT_JOBS = 10  # 첫 화면에 보여줄 최근 작업 수
 LISTED_JOBS = 100  # 작업 목록 화면에 보여줄 작업 수
 
 
+TITLE_MAX = 80
+
+
+def _default_title(excel_name: str, kind_title: str) -> str:
+    """작업 이름의 기본값. 엑셀 이름이 길면 줄여서 전체가 80자 안에 들게 한다."""
+    if not excel_name:
+        return kind_title
+    tail = f" · {kind_title}"
+    room = TITLE_MAX - len(tail)
+    if len(excel_name) > room:
+        excel_name = excel_name[: max(room - 1, 0)] + "…"
+    return excel_name + tail
+
+
 def _new_row(kind: Kind, finding: Finding, match: Match) -> NewRow:
     if match.source is None:
         return NewRow(finding, None, "no_source", match.reason)
@@ -313,7 +327,7 @@ def create_app(
             definitions=[*definitions, *callers],
             context="" if data is None else json.dumps(data, ensure_ascii=False),
             connection=current.name if current else "",
-            title=f"{excel_name} · {sheet_kind.title}",
+            title=_default_title(excel_name, sheet_kind.title),
             settings={
                 "connection": current.name if current else "",
                 "model": current.model if current else worker.model,
