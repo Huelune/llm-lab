@@ -109,7 +109,7 @@ def test_counts_manual_rows_by_what_was_sent(tmp_path):
     screen = "\n".join(peek.summarize(tmp_path, pattern="rte"))
 
     assert "작업 00000003: 묶음 7개" in screen
-    assert "수정 1 / 수정 불필요 1 / 직접 수정 5" in screen
+    assert "수정안 1 / 수정 불필요 1 / 직접 수정 5" in screen
     assert peek.other_file_fixes(peek.read_logs(tmp_path, uid(3)), pattern="rte") == (1, 1)
 
 
@@ -356,7 +356,7 @@ def test_counts_follow_ups_without_showing_names(tmp_path):
     assert "  상한으로 못 보냄 0, 찾을 수 없었음 0" in screen
     assert max(width(line) for line in screen.splitlines()) <= 118
     assert "되묻기 뒤 판단이 바뀐 행: 1" in screen
-    assert "판단 행: 수정 1 / 수정 불필요 1 / 직접 수정 0" in screen
+    assert "판단 행: 수정안 1 / 수정 불필요 1 / 직접 수정 0" in screen
     assert "secret" not in screen.casefold()
     assert len(screen.splitlines()) <= 40
     assert max(len(line) for line in screen.splitlines()) <= 118

@@ -130,7 +130,7 @@ def test_writes_conversation_log_for_each_row(tmp_path):
     assert "You review the Polyspace Code Prover run-time checks" in text  # 시스템 메시지 그대로
     assert "    3|     return a / b;" in text  # 보낸 코드 그대로
     assert "(b != 0) ? a / b : 0;" in text  # 받은 응답 그대로
-    assert "- 결과: 수정 - b가 0일 때를 검사합니다." in text
+    assert "- 결과: 수정안 - b가 0일 때를 검사합니다." in text
     assert API_KEY not in text
 
 
@@ -189,7 +189,7 @@ def test_group_goes_out_in_one_request_and_each_row_gets_its_decision(tmp_path):
     assert path.name.endswith(f"_job{job_id}_row2.md")  # 묶음의 가장 작은 엑셀 행
     text = path.read_text(encoding="utf-8")
     assert f"# 작업 {job_id} · RTE · 엑셀 5·2행" in text
-    assert "- 결과: 엑셀 5행 수정 - b가 0일 때를 검사합니다.\n" in text
+    assert "- 결과: 엑셀 5행 수정안 - b가 0일 때를 검사합니다.\n" in text
     assert "- 결과: 엑셀 2행 수정 불필요 - 범위가 보장됨\n" in text
 
 

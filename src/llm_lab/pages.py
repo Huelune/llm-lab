@@ -32,11 +32,11 @@ ROW_STATES = {
     "error": "오류",
     "no_source": "소스 없음",
 }
-DECISIONS = {"fix": "수정", "no_fix": "수정 불필요", "manual": "직접 수정"}
+DECISIONS = {"fix": "수정안", "no_fix": "수정 불필요", "manual": "직접 수정"}
 # 화면의 분류. "직접 수정"은 LLM이 고쳐야 한다고 봤지만 사람이 정해야 하는 행(diff 없음),
 # "확인 필요"는 오류와 소스 없음처럼 사용자가 손봐야 하는 행이다
 KIND_LABELS = {
-    "fix": "수정",
+    "fix": "수정안",
     "nofix": "수정 불필요",
     "manual": "직접 수정",
     "problem": "확인 필요",
@@ -59,7 +59,7 @@ STYLE = """
   --brand-bg: #ebf1fd; --ink: #18202e; --red: #c0262d; --red-bg: #fdecec;
   --orange: #b25600; --orange-bg: #fff1e2; --green: #1a7f43; --green-bg: #e5f5ec;
   --gray-bg: #eef1f5; --amber: #8a5a00; --amber-bg: #fff6da; --add: #e3f6e8; --del: #fde9eb;
-  --radius: 10px; --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .04);
+  --radius: 6px; --shadow: none;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -97,7 +97,7 @@ h2 { font-size: 15px; margin: 24px 0 10px; }
   border-bottom: 1px solid var(--line); }
 .step:first-child { padding-top: 4px; }
 .step:last-child { border-bottom: 0; padding-bottom: 4px; }
-.step .num { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--brand-bg);
+.step .num { flex: none; width: 22px; height: 22px; border-radius: 4px; background: var(--gray-bg);
   color: var(--brand); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
 .step > div + div { flex: 1; min-width: 0; }
 .step h3 { margin: 2px 0; font-size: 14.5px; }
@@ -135,7 +135,7 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .card.table tr:hover td { background: #fafbfd; }
 .list td:last-child, .list th { white-space: nowrap; }
-.badge { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 12px;
+.badge { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: 12px;
   font-weight: 700; line-height: 20px; white-space: nowrap; }
 .badge.red { color: var(--red); background: var(--red-bg); }
 .badge.orange { color: var(--orange); background: var(--orange-bg); }
@@ -177,7 +177,7 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap;
 .tabs button.on { color: var(--brand); border-bottom-color: var(--brand); }
 .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
 .filters button { font: inherit; font-size: 12px; border: 1px solid var(--line-strong);
-  background: #fff; border-radius: 999px; padding: 3px 11px; cursor: pointer;
+  background: #fff; border-radius: 4px; padding: 3px 10px; cursor: pointer;
   color: var(--muted); }
 .filters button:hover { color: var(--text); }
 .filters button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -197,6 +197,11 @@ td.num, th.num { text-align: right; width: 64px; white-space: nowrap;
 .summary-page .box { max-height: none; }
 .summary-page .box td.num, .summary-page .box th.num { width: 76px; white-space: nowrap; }
 .box h3 { font-size: 12px; margin: 2px 8px 6px; color: var(--muted); }
+/* 집계 표의 행은 눌러서 거른다. 고른 행은 파랗게 남는다 */
+.box tr[data-pick] { cursor: pointer; }
+.box tr[data-pick]:hover td { background: var(--gray-bg); }
+.box tr[data-pick].on td { background: var(--brand-bg); color: var(--brand); font-weight: 700; }
+.filters .shown { color: var(--muted); font-size: 12px; align-self: center; }
 /* 칸 폭을 고정해 긴 요약·검사·위치는 줄이고, 맨 끝 "보기"가 카드 밖으로 밀리지 않게 한다 */
 .list table { table-layout: fixed; }
 .list td.summary, .list td.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -254,7 +259,7 @@ pre.diff .hunk { color: var(--faint); }
 .applybar { position: sticky; bottom: 0; background: var(--ink); color: #fff;
   border-radius: var(--radius) var(--radius) 0 0; padding: 10px 16px; display: flex; gap: 10px;
   align-items: center; flex-wrap: wrap; margin-top: 12px; font-size: 13px;
-  box-shadow: 0 -4px 16px rgba(16, 24, 40, .12); }
+}
 .applybar .count { font-weight: 700; margin-right: auto; }
 .empty { color: var(--muted); padding: 14px 16px; margin: 0; }
 .card.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d68a; }
@@ -300,9 +305,9 @@ const toggle = document.getElementById('toggle-all');
 const submit = document.getElementById('download');
 function refresh() {
   const n = boxes.filter(b => b.checked).length;
-  if (count) count.textContent = `적용할 수정 ${n}개 선택됨 (수정 ${boxes.length}개 중)`;
+  if (count) count.textContent = `적용할 수정안 ${n}개 선택됨 (수정안 ${boxes.length}개 중)`;
   const allPicked = auto.length && auto.every(b => b.checked);
-  if (toggle) toggle.textContent = allPicked ? '모두 해제' : '수정 모두 선택';
+  if (toggle) toggle.textContent = allPicked ? '모두 해제' : '수정안 모두 선택';
   if (submit) submit.disabled = n === 0;
   mirrors.forEach(m => {
     const box = boxes.find(b => b.value === m.dataset.mirror);
@@ -368,20 +373,49 @@ function remember(name, value) {
 function forget(name) {
   try { sessionStorage.removeItem(name + ':' + location.pathname); } catch (e) {}
 }
-// 걸러 보기: 고른 종류를 기억했다가 다시 읽은 뒤에도 그 종류만 보인다
+// 걸러 보기: 판단 단추, 검사·파일(집계 표의 행)을 함께 건다. 다시 읽은 뒤에도 남는다
 const filters = [...document.querySelectorAll('[data-filter]')];
-function applyFilter(kind) {
-  filters.forEach(b => b.classList.toggle('on', b.dataset.filter === kind));
+const picks = [...document.querySelectorAll('[data-pick]')];
+const shown = document.getElementById('shown');
+const reset = document.getElementById('filter-reset');
+const everything = {kind: 'all', check: '', file: ''};
+let view = {...everything};
+function applyFilter() {
+  filters.forEach(b => b.classList.toggle('on', b.dataset.filter === view.kind));
+  picks.forEach(r => r.classList.toggle('on', view[r.dataset.pick] === r.dataset.value));
+  let n = 0, all = 0;
   document.querySelectorAll('[data-kind]').forEach(item => {
-    item.hidden = kind !== 'all' && item.dataset.kind !== kind;
+    item.hidden = (view.kind !== 'all' && item.dataset.kind !== view.kind)
+      || (view.check !== '' && item.dataset.check !== view.check)
+      || (view.file !== '' && item.dataset.file !== view.file);
+    if (item.tagName === 'TR') { all++; if (!item.hidden) n++; }
   });
+  const narrowed = view.kind !== 'all' || view.check !== '' || view.file !== '';
+  if (shown) shown.textContent = narrowed ? `표시 ${n} / 전체 ${all}` : '';
+  if (reset) reset.hidden = !narrowed;
+  remember('filter', JSON.stringify(view));
 }
-filters.forEach(button => button.addEventListener('click', () => {
-  applyFilter(button.dataset.filter);
-  remember('filter', button.dataset.filter);
+filters.forEach(b => b.addEventListener('click', () => {
+  view.kind = b.dataset.filter;
+  applyFilter();
 }));
-const savedFilter = recall('filter');
-if (savedFilter && filters.some(b => b.dataset.filter === savedFilter)) applyFilter(savedFilter);
+picks.forEach(r => {
+  const pick = () => {
+    const key = r.dataset.pick;
+    view[key] = view[key] === r.dataset.value ? '' : r.dataset.value;
+    applyFilter();
+  };
+  r.addEventListener('click', pick);
+  r.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
+  });
+});
+if (reset) reset.addEventListener('click', () => { view = {...everything}; applyFilter(); });
+try {
+  const saved = JSON.parse(recall('filter') || 'null');
+  if (saved && typeof saved === 'object') view = {...everything, ...saved};
+} catch (e) {}
+if (filters.length) applyFilter();
 // 펼쳐 둔 '자세히'는 다시 읽은 뒤에도 펼친다
 const folds = [...document.querySelectorAll('details')];
 (recall('open') || '').split(' ').filter(Boolean).forEach(i => {
@@ -536,6 +570,20 @@ def _progress(rows: list[Row]) -> tuple[int, int]:
     """(끝난 행 수, 전체 행 수)."""
     done = sum(row.state not in ("pending", "running") for row in rows)
     return done, len(rows)
+
+
+def _row_states(rows: list[Row]) -> str:
+    """처리 중 작업의 행 상태별 개수와 지금 처리 중인 엑셀 행 (DB에 있는 값만)."""
+    states = Counter(row.state for row in rows)
+    parts = [
+        f"{ROW_STATES[state]} {states[state]}"
+        for state in ROW_STATES
+        if states[state] or state in ("pending", "running", "done")
+    ]
+    running = sorted(row.finding.row for row in rows if row.state == "running")
+    if running:
+        parts.append(f"지금 엑셀 {', '.join(str(number) for number in running)}행")
+    return " · ".join(parts)
 
 
 def _job_badge(job: Job, rows: list[Row]) -> str:
@@ -811,7 +859,7 @@ def _chips(kind: Kind, job: Job, rows: list[Row]) -> str:
     return '<div class="chips">' + " ".join(parts) + "</div>"
 
 
-def _group_table(title: str, groups: dict[str, Counter], mono: bool) -> str:
+def _group_table(title: str, groups: dict[str, Counter], mono: bool, field: str) -> str:
     css = ' class="mono"' if mono else ""
     lines = []
     for name, counts in sorted(groups.items(), key=lambda item: (-item[1]["all"], item[0])):
@@ -820,10 +868,13 @@ def _group_table(title: str, groups: dict[str, Counter], mono: bool) -> str:
             for key in ("all", "fix", "nofix", "manual", "problem")
         )
         # 긴 이름(MISRA 규칙 문장)은 CSS가 한 줄로 줄이므로 전체는 title로 보인다
-        lines.append(f'<tr><td{css} title="{escape(name)}">{escape(name)}</td>{cells}</tr>')
+        lines.append(
+            f'<tr data-pick="{field}" data-value="{escape(name)}" tabindex="0">'
+            f'<td{css} title="{escape(name)}">{escape(name)}</td>{cells}</tr>'
+        )
     return (
         f'<div class="box"><h3>{title}</h3><table><tr><th></th><th class="num">전체</th>'
-        '<th class="num">수정</th><th class="num">불필요</th><th class="num">직접 수정</th>'
+        '<th class="num">수정안</th><th class="num">불필요</th><th class="num">직접 수정</th>'
         '<th class="num">확인 필요</th></tr>' + "".join(lines) + "</table></div>"
     )
 
@@ -839,8 +890,8 @@ def _groups(job: Job, rows: list[Row]) -> str:
             counts[kind] += 1
     return (
         '<div class="grid2">'
-        + _group_table("검사 종류별", by_check, mono=False)
-        + _group_table("파일별", by_file, mono=True)
+        + _group_table("검사 종류별", by_check, mono=False, field="check")
+        + _group_table("파일별", by_file, mono=True, field="file")
         + "</div>"
     )
 
@@ -854,6 +905,11 @@ def _filters(rows: list[Row]) -> str:
     for kind, label in buttons:
         on = ' class="on"' if kind == "all" else ""
         html.append(f'<button type="button" data-filter="{kind}"{on}>{escape(label)}</button>')
+    # 표시 건수와 초기화는 스크립트가 채운다 (검사·파일은 집계 표의 행을 눌러 고른다)
+    html.append(
+        '<span class="shown" id="shown"></span>'
+        '<button type="button" id="filter-reset" hidden>필터 초기화</button>'
+    )
     return '<div class="filters">' + "".join(html) + "</div>"
 
 
@@ -906,7 +962,9 @@ def _overview_row(
     badge = _badge(sheet_kind.color(label), label, finding.note)
     css = ' class="problem"' if kind == "problem" else ""
     return (
-        f'<tr data-kind="{kind}"{css}><td>{box}</td><td>{finding.row}</td><td>{badge}</td>'
+        f'<tr data-kind="{kind}" data-check="{escape(finding.check)}" '
+        f'data-file="{escape(_file_label(job, row))}"{css}><td>{box}</td><td>{finding.row}</td>'
+        f"<td>{badge}</td>"
         f'<td class="check" title="{escape(finding.check)}">{escape(finding.check)}</td>'
         f'<td class="mono">{escape(_file_label(job, row))}:{line}</td>'
         f"<td>{_status_badge(row)}</td>"
@@ -974,7 +1032,7 @@ def _detail_card(
             body.append(
                 f'<p class="excluded">{_badge("blue", "다른 파일 수정")} '
                 f"{escape(', '.join(files))}도 고칩니다. 그 함수를 부르는 모든 곳의 동작이 "
-                '바뀌므로 "수정 모두 선택"이 고르지 않습니다. 보고 직접 체크하세요.</p>'
+                '바뀌므로 "수정안 모두 선택"이 고르지 않습니다. 보고 직접 체크하세요.</p>'
             )
         body.append(f'<div class="reason">{escape(row.result.reason)}</div>')
         # 같은 묶음의 수정 행은 수정이 똑같으므로 diff는 묶음의 첫 수정 행에만 보인다
@@ -1001,7 +1059,8 @@ def _detail_card(
             f'<div class="problem-box"><div class="what">{escape(summary)}</div>{todo}{more}</div>'
         )
     return (
-        f'<div class="item band-{kind.color(label)}" id="row-{row.id}" data-kind="{_kind(row)}">'
+        f'<div class="item band-{kind.color(label)}" id="row-{row.id}" data-kind="{_kind(row)}" '
+        f'data-check="{escape(finding.check)}" data-file="{escape(_file_label(job, row))}">'
         f'{head}<div class="body">{"".join(body)}</div></div>'
     )
 
@@ -1028,6 +1087,8 @@ def _howto(base: str | None) -> str:
         '<div class="howto"><b>패치 적용 방법</b> — 내려받은 fixes.patch를 아래 폴더에 두고 '
         f'차례로 실행하세요.<ol><li>폴더: <code class="folder">{escape(folder)}</code></li>'
         f"{steps('')}</ol>"
+        '<p class="hint">--check 통과는 패치를 적용할 수 있다는 뜻일 뿐입니다. 위반이 '
+        "없어졌는지는 Polyspace를 다시 돌려 확인하세요.</p>"
         "<details><summary>되돌리기</summary>적용한 것과 같은 fixes.patch로, 같은 폴더에서 "
         "차례로 실행하면 패치 전으로 돌아갑니다. 적용한 뒤 그 줄을 손으로 고쳤으면 확인 단계에서 "
         f"멈춥니다.<ol>{steps(' -R')}</ol></details></div>"
@@ -1062,6 +1123,7 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
             f'<div class="progress"><div style="width:{percent}%"></div></div>'
             f'<p class="sub"><span class="spinner"></span>{done}/{total} 처리 · '
             "5초마다 새로 고칩니다</p>"
+            f'<p class="sub">{_row_states(rows)}</p>'
             f'<form class="retry" method="post" action="/results/{job.id}/stop">'
             '<button class="btn plain" type="submit">멈춤</button></form>'
         )
@@ -1116,7 +1178,7 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
             f"{_howto(base)}"
             '<div class="applybar"><span class="count" id="count"></span>'
             f"{note}"
-            '<button class="btn ghost" type="button" id="toggle-all">수정 모두 선택</button>'
+            '<button class="btn ghost" type="button" id="toggle-all">수정안 모두 선택</button>'
             '<button class="btn primary" type="submit" id="download">패치 내려받기</button>'
             "</div></form>"
         )
@@ -1361,7 +1423,7 @@ def summary_page(job: Job, rows: list[Row]) -> str:
         conflicts, picked, manual = _selection(kind, rows) if rows else ({}, set(), set())
         fixes = [r for r in rows if r.result is not None and r.result.decision == "fix"]
         facts += [
-            ("수정 모두 선택이 고르는 수정", str(len(picked))),
+            ("수정안 모두 선택이 고르는 수정안", str(len(picked))),
             ("같은 줄 겹침으로 다음 차례", str(len(conflicts) - len(picked) - len(manual))),
             ("직접 골라야 하는 수정", str(len(manual))),
             ("다른 파일 수정", str(sum(_edits_other_files(r) for r in fixes))),

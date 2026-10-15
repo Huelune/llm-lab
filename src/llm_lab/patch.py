@@ -27,7 +27,7 @@ class PatchConflict(PatchError):
         more = f" 외 {len(pairs) - 3}쌍" if len(pairs) > 3 else ""
         super().__init__(
             f"같은 줄을 고치는 수정이 함께 골라졌습니다: {listed}{more}. "
-            "겹치는 행 가운데 하나만 체크하거나, '수정 모두 선택'을 다시 누르세요."
+            "겹치는 행 가운데 하나만 체크하거나, '수정안 모두 선택'을 다시 누르세요."
         )
         self.pairs = pairs
 
