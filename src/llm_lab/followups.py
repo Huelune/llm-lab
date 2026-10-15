@@ -155,10 +155,10 @@ class IndexCache:
         self._build = build
         self._keep = keep
         self._lock = threading.Lock()
-        self._items: OrderedDict[int, ProjectIndex | None] = OrderedDict()
+        self._items: OrderedDict[str, ProjectIndex | None] = OrderedDict()
 
     def get(
-        self, job_id: int, root: str, texts: Mapping[str, str] | None = None
+        self, job_id: str, root: str, texts: Mapping[str, str] | None = None
     ) -> ProjectIndex | None:
         """작업의 색인. 소스 폴더가 없거나 읽다 실패하면 None.
 

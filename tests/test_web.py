@@ -36,6 +36,11 @@ from llm_lab.store import NewRow, Store
 from llm_lab.worker import Worker
 
 
+def job_id(tmp_path) -> str:
+    """테스트가 만든 첫 작업의 ID (UUID)."""
+    return Store(tmp_path / "fixer.db").jobs()[-1].id
+
+
 def run_now(task):
     task()
 
@@ -112,9 +117,10 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     response = upload(client, EXCEL, folder)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/results/1"
-    page = client.get("/results/1").text
-    assert "<title>작업 1 결과 · rte.xlsx · LLM Test Advisor</title>" in page
+    jid = job_id(tmp_path)
+    assert response.headers["location"] == f"/results/{jid}"
+    page = client.get(f"/results/{jid}").text
+    assert f"<title>작업 {jid} 결과 · rte.xlsx · LLM Test Advisor</title>" in page
     assert "RTE · 시트 RTE_Result" in page
     assert "제외: Gray Check 1" in page  # 작업 메모
     assert '<span class="badge green">완료</span>' in page
@@ -129,10 +135,43 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert 'data-copy="git -c core.autocrlf=false apply --check fixes.patch"' in page
     assert 'data-copy="git -c core.autocrlf=false apply -R --check fixes.patch"' in page
     assert 'data-copy="git -c core.autocrlf=false apply -R fixes.patch"' in page
-    assert 'action="/results/1/fixes.patch"' in page
+    assert f'action="/results/{jid}/fixes.patch"' in page
     assert 'id="toggle-all"' in page  # 수정 모두 선택
     assert "data-refresh=" not in page
     assert len(sent) == 1  # 소스가 없는 행은 LLM에 보내지 않는다
+
+
+def test_job_urls_use_uuid_and_numbers_are_404(tmp_path):
+    client, store, _ = make_service(tmp_path, fix_answer("no_fix"))
+    folder = source_folder(tmp_path)
+    upload(client, rte_excel(rte_row("Orange Check", line=3)), folder)
+    (job,) = store.jobs()
+
+    assert len(job.id) == 36
+    assert client.get(f"/results/{job.id}").status_code == 200
+    assert client.get("/results/1").status_code == 404
+    assert job.title.endswith(" · RTE")
+    settings = json.loads(job.settings)
+    assert settings["kind"] == "rte" and settings["choices"] == ["Orange", "Red"]
+
+
+def test_rename_job(tmp_path):
+    client, store, _ = make_service(tmp_path, fix_answer("no_fix"))
+    folder = source_folder(tmp_path)
+    upload(client, rte_excel(rte_row("Orange Check", line=3)), folder)
+    (job,) = store.jobs()
+
+    response = client.post(
+        f"/results/{job.id}/rename", data={"title": "<b>계산 모듈</b>"}, follow_redirects=False
+    )
+    page = client.get(f"/results/{job.id}").text
+
+    assert response.status_code == 303
+    assert "&lt;b&gt;계산 모듈&lt;/b&gt;" in page
+    assert client.post(f"/results/{job.id}/rename", data={"title": " "}).status_code == 400
+    too_long = client.post(f"/results/{job.id}/rename", data={"title": "가" * 81})
+    assert too_long.status_code == 400 and "이름은 1~80자로 적으세요." in too_long.text
+    assert client.post("/results/1/rename", data={"title": "x"}).status_code == 404
 
 
 def test_top_counts_keep_every_target_even_at_zero(tmp_path):
@@ -141,7 +180,8 @@ def test_top_counts_keep_every_target_even_at_zero(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
     assert '<span class="badge red">Red</span> <b>0</b>' in page
     assert '<span class="badge orange">Orange</span> <b>1</b>' in page
 
@@ -174,7 +214,8 @@ def test_result_json(tmp_path):
     folder = source_folder(tmp_path)
     upload(client, EXCEL, folder)
 
-    data = client.get("/api/results/1").json()
+    jid = job_id(tmp_path)
+    data = client.get(f"/api/results/{jid}").json()
 
     assert (data["state"], data["kind"], data["note"]) == (
         "done",
@@ -197,7 +238,8 @@ def test_results_list_page(tmp_path):
     page = client.get("/results").text
 
     assert "<title>작업 목록 · LLM Test Advisor</title>" in page
-    assert 'href="/results/1">결과 보기' in page
+    jid = job_id(tmp_path)
+    assert f'href="/results/{jid}">결과 보기' in page
     assert "rte.xlsx" in page
     # 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음
     assert '<div class="sub">RTE · ' in page
@@ -225,7 +267,8 @@ def test_download_patch_for_chosen_rows(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     upload(client, EXCEL, source_folder(tmp_path))
 
-    response = client.post("/results/1/fixes.patch", data={"row": ["1"]})
+    jid = job_id(tmp_path)
+    response = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1"]})
 
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="fixes.patch"'
@@ -238,9 +281,10 @@ def test_patch_needs_a_chosen_fix(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     upload(client, EXCEL, source_folder(tmp_path))
 
-    assert client.post("/results/1/fixes.patch", data={}).status_code == 400
+    jid = job_id(tmp_path)
+    assert client.post(f"/results/{jid}/fixes.patch", data={}).status_code == 400
     # 소스 없는 행
-    assert client.post("/results/1/fixes.patch", data={"row": ["2"]}).status_code == 400
+    assert client.post(f"/results/{jid}/fixes.patch", data={"row": ["2"]}).status_code == 400
 
 
 def test_overlapping_fixes_conflict(tmp_path):
@@ -252,7 +296,8 @@ def test_overlapping_fixes_conflict(tmp_path):
     )
     upload(client, excel, source_folder(tmp_path))
 
-    response = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
+    jid = job_id(tmp_path)
+    response = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1", "2"]})
 
     assert response.status_code == 409
     assert "행 2와 행 3" in response.text
@@ -263,7 +308,8 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     client, _, _ = make_service(tmp_path, submit=queued.append)
     upload(client, EXCEL, source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     # 새로 고침은 스크립트가 하고(location.reload), 보고 있던 탭은 주소의 #으로 남긴다.
     # 내용 지문이 바뀔 때만 다시 읽고, 걸러 보기와 펼친 '자세히'도 기억한다
@@ -281,23 +327,24 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     assert 'type="checkbox"' not in page
     assert len(queued) == 1
     # 내용이 그대로면 지문도 같아 다시 읽지 않는다
-    assert client.get("/results/1").text == page
+    assert client.get(f"/results/{jid}").text == page
 
 
 def test_stopped_job_can_be_retried(tmp_path):
     client, store, _ = make_service(tmp_path, error(401, "invalid key"), fix_answer())
     upload(client, EXCEL, source_folder(tmp_path))
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
     assert '<span class="badge red">멈춤</span>' in page
     assert "[인증]" in page
-    assert 'action="/results/1/retry"' in page
+    assert f'action="/results/{jid}/retry"' in page
     assert ">이어서 처리</button>" in page
 
-    response = client.post("/results/1/retry", follow_redirects=False)
+    response = client.post(f"/results/{jid}/retry", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/results/1"
-    assert store.job(1).state == "done"
+    assert response.headers["location"] == f"/results/{jid}"
+    assert store.job(jid).state == "done"
 
 
 def test_unknown_job_is_404(tmp_path):
@@ -312,7 +359,8 @@ def test_excel_without_red_or_orange_rows(tmp_path):
 
     upload(client, rte_excel(rte_row("Gray Check")), source_folder(tmp_path))
 
-    assert "분석할 행이 없습니다" in client.get("/results/1").text
+    jid = job_id(tmp_path)
+    assert "분석할 행이 없습니다" in client.get(f"/results/{jid}").text
     assert sent == []
 
 
@@ -365,14 +413,15 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
 
     assert response.status_code == 303
     assert len(sent) == 1  # 같은 줄의 두 행을 한 번에 보냈다
-    job = store.job(1)
+    jid = job_id(tmp_path)
+    job = store.job(jid)
     assert (job.kind, job.sheet) == ("misra", "MISRA_Result")
     assert (
         job.note == "조건 시트: 규칙 5개 · 제외: 적용 안 함 (조건 시트) 1, Advisory (고르지 않음) 1"
         " · 참고 정의 1개"
     )
     assert json.loads(job.context)["10.4"] == ["Required", True]
-    page = client.get("/results/1").text
+    page = client.get(f"/results/{jid}").text
     assert "MISRA C:2012 · 시트 MISRA_Result" in page
     assert '<span class="badge red">Mandatory</span> <b>1</b>' in page
     assert '<span class="badge orange">Required</span> <b>1</b>' in page
@@ -382,7 +431,7 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert "같은 묶음의 수정입니다 (엑셀 2행과 같음)." in page
     assert '<div class="sub">MISRA C:2012 · ' in client.get("/results").text
 
-    patch = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
+    patch = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1", "2"]})
 
     assert patch.status_code == 200  # 같은 수정은 하나로 합쳐 겹침이 아니다
     assert patch.content.count(b"+    return (b != 0) ? a / b : 0;\n") == 1
@@ -399,9 +448,10 @@ def test_rte_job_sends_one_function_together(tmp_path):
     prompt = sent[0]["messages"][1]["content"]
     assert "Finding 1:\n- TYPE: Red Check\n" in prompt  # 줄 순서: 1번 줄의 Red가 먼저
     assert "Finding 2:\n- TYPE: Orange Check\n" in prompt
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
     assert "함께 보낸 행: 엑셀 3행" in page and "함께 보낸 행: 엑셀 2행" in page
-    patch = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
+    patch = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1", "2"]})
     assert patch.status_code == 200  # 같은 수정은 하나로 합쳐 겹침이 아니다
 
 
@@ -412,7 +462,8 @@ def test_no_fix_row_in_a_mixed_group_does_not_claim_the_shared_fix(tmp_path):
         client, MISRA_EXCEL, source_folder(tmp_path), "misra", ["misra:Required", "misra:Mandatory"]
     )
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     assert page.count('<pre class="diff">') == 1  # 엑셀 2행(fix)의 diff
     assert "같은 묶음의 수정입니다" not in page  # 엑셀 3행은 no_fix라 공유 수정 안내가 없다
@@ -423,22 +474,23 @@ def test_running_job_can_be_stopped_and_continued(tmp_path):
     queued = []
     client, store, _ = make_service(tmp_path, fix_answer(), submit=queued.append)
     upload(client, EXCEL, source_folder(tmp_path))
-    assert 'action="/results/1/stop"' in client.get("/results/1").text
+    jid = job_id(tmp_path)
+    assert f'action="/results/{jid}/stop"' in client.get(f"/results/{jid}").text
 
-    response = client.post("/results/1/stop", follow_redirects=False)
+    response = client.post(f"/results/{jid}/stop", follow_redirects=False)
 
     assert response.status_code == 303
-    assert store.job(1).state == "stopped"
-    page = client.get("/results/1").text
+    assert store.job(jid).state == "stopped"
+    page = client.get(f"/results/{jid}").text
     assert "멈춘 작업입니다." in page
     assert ">이어서 처리</button>" in page
     assert "data-refresh=" not in page
 
-    client.post("/results/1/retry")
+    client.post(f"/results/{jid}/retry")
     for task in list(queued):
         task()
 
-    assert store.job(1).state == "done"
+    assert store.job(jid).state == "done"
 
 
 def test_stopped_job_still_gives_a_patch_for_finished_rows(tmp_path):
@@ -450,10 +502,11 @@ def test_stopped_job_still_gives_a_patch_for_finished_rows(tmp_path):
     upload(client, excel, source_folder(tmp_path))
 
     queued[0]()  # 첫 묶음(엑셀 2행)만 처리하고
-    client.post("/results/1/stop")  # 멈춘다
+    jid = job_id(tmp_path)
+    client.post(f"/results/{jid}/stop")  # 멈춘다
 
-    assert 'action="/results/1/fixes.patch"' in client.get("/results/1").text
-    response = client.post("/results/1/fixes.patch", data={"row": ["1"]})
+    assert f'action="/results/{jid}/fixes.patch"' in client.get(f"/results/{jid}").text
+    response = client.post(f"/results/{jid}/fixes.patch", data={"row": ["1"]})
     assert response.status_code == 200
     assert b"+    return (b != 0) ? a / b : 0;\n" in response.content
 
@@ -471,7 +524,8 @@ def test_kind_decides_which_fixes_are_picked_automatically(tmp_path, monkeypatch
     )
     upload(client, excel, source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     assert 'name="row" value="2" data-auto="1"' in page
     assert 'name="row" value="1" data-auto="0"' in page
@@ -620,7 +674,8 @@ def test_folder_path_copied_with_quotes_is_accepted(tmp_path):
     folder = source_folder(tmp_path)
 
     assert upload(client, EXCEL, f'"{folder}"').status_code == 303
-    assert store.job(1).source_root == str(folder)
+    jid = job_id(tmp_path)
+    assert store.job(jid).source_root == str(folder)
 
 
 def test_home_suggests_recent_folders(tmp_path):
@@ -695,7 +750,8 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     upload(client, EXCEL, source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     assert 'data-tab="overview"' in page and 'data-tab="detail"' in page
     assert "한눈에 보기" in page and "자세히 보기" in page
@@ -719,7 +775,8 @@ def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
     client, _, _ = make_service(tmp_path, answer(("manual", reason)))
     upload(client, rte_excel(rte_row("Red Check")), source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     assert '<span class="badge orange">직접 수정</span> <b>1</b>' in page  # 맨 위 줄
     assert '<th class="num">직접 수정</th>' in page  # 검사 종류별·파일별 표
@@ -738,13 +795,14 @@ def test_row_errors_read_as_what_happened_and_what_to_do(tmp_path):
     client, _, _ = make_service(tmp_path, wrong, wrong)
     upload(client, EXCEL, source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     assert '<span class="badge amber">확인 필요</span>' in page
     assert "LLM이 고칠 위치를 정확히 짚지 못했습니다." in page
     assert '<div class="todo">할 일: ' in page
     assert "<details><summary>자세히 (개발자용)</summary>" in page
-    assert "_job1_row2.md" in page  # 이 행의 대화 기록 파일
+    assert f"_job{jid}_row2.md" in page  # 이 행의 대화 기록 파일
 
 
 def test_conflicting_fixes_are_marked_and_red_is_picked_first(tmp_path):
@@ -755,7 +813,8 @@ def test_conflicting_fixes_are_marked_and_red_is_picked_first(tmp_path):
     )
     upload(client, excel, source_folder(tmp_path))
 
-    page = client.get("/results/1").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}").text
 
     # Red(엑셀 3행)가 먼저 골라지고, 같은 줄을 고치는 Orange(엑셀 2행)는 이번엔 제외
     assert 'name="row" value="2" data-auto="1" data-conflicts="1"' in page
@@ -885,10 +944,11 @@ def test_job_sends_definitions_from_other_files_and_notes_the_count(tmp_path):
     content = sent[0]["messages"][1]["content"]
     assert "```c\n// editable: inc/limits.h line 1\n    1| #define LIMIT 4\n```" in content
     assert "UNUSED" not in content
-    job = store.job(1)
+    jid = job_id(tmp_path)
+    job = store.job(jid)
     # calc.c 자신의 divide 정의도 저장된다(긴 파일에서 함수만 보낼 때 쓴다). 메모는 저장한 수다
     assert "참고 정의 2개" in job.note and "못 읽은 파일 1개" in job.note
-    assert [d.name for d in store.definitions(1)] == ["LIMIT", "divide"]
+    assert [d.name for d in store.definitions(jid)] == ["LIMIT", "divide"]
 
 
 def test_note_counts_each_definition_body_once_even_with_several_names(tmp_path):
@@ -901,7 +961,8 @@ def test_note_counts_each_definition_body_once_even_with_several_names(tmp_path)
 
     content = sent[0]["messages"][1]["content"]
     assert content.count("typedef enum { MODE_A, MODE_B } mode_t;") == 1
-    assert "참고 정의 3개" in store.job(1).note  # LIMIT, 열거 몸체 1개, divide
+    jid = job_id(tmp_path)
+    assert "참고 정의 3개" in store.job(jid).note  # LIMIT, 열거 몸체 1개, divide
 
 
 def test_definitions_inside_the_sent_code_are_stored_but_not_sent(tmp_path):
@@ -909,9 +970,10 @@ def test_definitions_inside_the_sent_code_are_stored_but_not_sent(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    assert [d.name for d in store.definitions(1)] == ["divide"]
+    jid = job_id(tmp_path)
+    assert [d.name for d in store.definitions(jid)] == ["divide"]
     assert "Definitions from other places" not in sent[0]["messages"][1]["content"]
-    assert "참고 정의 1개" in store.job(1).note
+    assert "참고 정의 1개" in store.job(jid).note
 
 
 def test_home_offers_rte_modes_with_guard_checked(tmp_path):
@@ -931,10 +993,11 @@ def test_job_keeps_the_chosen_mode_and_defaults_to_guard(tmp_path):
         client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path), mode="rte:root_cause"
     )
 
-    assert json.loads(store.job(1).context) == {"mode": "guard"}
-    assert store.job(1).note.startswith("가드 허용")
-    assert json.loads(store.job(2).context) == {"mode": "root_cause"}
-    assert store.job(2).note.startswith("근본 원인만")
+    second, first = store.jobs()
+    assert json.loads(first.context) == {"mode": "guard"}
+    assert first.note.startswith("가드 허용")
+    assert json.loads(second.context) == {"mode": "root_cause"}
+    assert second.note.startswith("근본 원인만")
     assert "a guard is acceptable" in sent[0]["messages"][0]["content"]
     assert "Never make such a change" in sent[1]["messages"][0]["content"]
 
@@ -965,8 +1028,9 @@ def test_project_folder_supplies_definitions_from_sibling_folders(tmp_path):
     assert "#define api_scale(v) drv_scale(v)" in content
     assert "int drv_scale(int v)" in content
     assert "common/drv.c" in content and "../" not in content
-    assert store.rows(1)[0].file_name == "app/src/calc.c"
-    assert "참고 폴더" not in store.job(1).note
+    jid = job_id(tmp_path)
+    assert store.rows(jid)[0].file_name == "app/src/calc.c"
+    assert "참고 폴더" not in store.job(jid).note
 
 
 def test_home_asks_for_the_whole_project_folder(tmp_path):
@@ -1019,10 +1083,11 @@ def test_rte_job_stores_definition_files_and_sends_them_editable(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check", line=4)), top)
 
-    assert "common/drv.c" in store.sources(1)
+    jid = job_id(tmp_path)
+    assert "common/drv.c" in store.sources(jid)
     content = sent[0]["messages"][1]["content"]
     assert "// editable: common/drv.c lines 1-4\n    1| int drv_scale(int v)" in content
-    (row,) = store.rows(1)
+    (row,) = store.rows(jid)
     assert row.result.decision == "fix"
     assert [edit.file for edit in row.result.edits] == ["common/drv.c"]
 
@@ -1043,7 +1108,8 @@ def test_misra_job_stores_definition_files_like_rte(tmp_path):
     )
 
     # MISRA도 붙인 정의를 고칠 수 있으므로 그 파일 원문을 작업에 저장한다
-    assert {"app/src/calc.c", "common/drv.c"} <= set(store.sources(1))
+    jid = job_id(tmp_path)
+    assert {"app/src/calc.c", "common/drv.c"} <= set(store.sources(jid))
 
 
 @needs_git
@@ -1056,13 +1122,14 @@ def test_other_file_fix_is_not_auto_picked_shows_a_chip_and_patches_the_project(
     client, store, _ = make_service(tmp_path, answer(("fix", REASON), edits=[drv_fix]))
     app, top = project_with_shared_code(tmp_path)
     upload(client, rte_excel(rte_row("Orange Check", line=4)), top)
-    (row,) = store.rows(1)
+    jid = job_id(tmp_path)
+    (row,) = store.rows(jid)
 
-    page = client.get("/results/1").text
+    page = client.get(f"/results/{jid}").text
 
     assert "다른 파일 수정" in page
     assert f'name="row" value="{row.id}" data-auto="0"' in page
-    patch = client.post("/results/1/fixes.patch", data={"row": [str(row.id)]}).content
+    patch = client.post(f"/results/{jid}/fixes.patch", data={"row": [str(row.id)]}).content
     assert b"--- a/common/drv.c\n+++ b/common/drv.c\n" in patch
     git_apply(top, patch)
     assert b"return v + 2;" in (top / "common" / "drv.c").read_bytes()
@@ -1087,8 +1154,9 @@ def test_rte_job_sends_callers_and_notes_the_count(tmp_path):
     content = sent[0]["messages"][1]["content"]
     assert "Callers of divide()" in content
     assert "// editable caller: app/src/main.c lines 1-5 (in update())" in content
-    assert "app/src/main.c" in store.sources(1)
-    assert "호출자 조각 1개" in store.job(1).note
+    jid = job_id(tmp_path)
+    assert "app/src/main.c" in store.sources(jid)
+    assert "호출자 조각 1개" in store.job(jid).note
 
 
 def test_job_without_callers_keeps_its_note(tmp_path):
@@ -1096,7 +1164,8 @@ def test_job_without_callers_keeps_its_note(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    assert "호출자 조각" not in store.job(1).note
+    jid = job_id(tmp_path)
+    assert "호출자 조각" not in store.job(jid).note
     assert "Callers of" not in sent[0]["messages"][1]["content"]
 
 
@@ -1107,8 +1176,9 @@ def test_line_outside_a_function_stores_no_callers(tmp_path):
 
     upload(client, rte_excel(rte_row("Orange Check", line=1)), top)
 
-    assert [d for d in store.definitions(1) if d.kind.startswith("caller")] == []
-    assert "호출자 조각" not in store.job(1).note
+    jid = job_id(tmp_path)
+    assert [d for d in store.definitions(jid) if d.kind.startswith("caller")] == []
+    assert "호출자 조각" not in store.job(jid).note
 
 
 def test_name_used_without_a_call_is_stored_but_not_counted_as_a_fragment(tmp_path):
@@ -1118,9 +1188,10 @@ def test_name_used_without_a_call_is_stored_but_not_counted_as_a_fragment(tmp_pa
 
     upload(client, rte_excel(rte_row("Orange Check")), top)
 
-    refs = [d for d in store.definitions(1) if d.kind == "caller_ref"]
+    jid = job_id(tmp_path)
+    refs = [d for d in store.definitions(jid) if d.kind == "caller_ref"]
     assert [(d.name, d.file, d.text) for d in refs] == [("divide", "", "1")]
-    assert "호출자 조각 1개" in store.job(1).note and "못 읽은 파일" not in store.job(1).note
+    assert "호출자 조각 1개" in store.job(jid).note and "못 읽은 파일" not in store.job(jid).note
     assert (
         "without a call in 1 place (possibly function pointers)"
         in (sent[0]["messages"][1]["content"])
@@ -1140,11 +1211,12 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     )
     upload(client, excel, source_folder(tmp_path))
 
-    page = client.get("/results/1/summary").text
+    jid = job_id(tmp_path)
+    page = client.get(f"/results/{jid}/summary").text
 
-    assert "<title>작업 1 요약 · LLM Test Advisor</title>" in page
-    job = client.get("/results/1").text
-    assert '<a class="btn plain" href="/results/1/summary">요약 (캡처용)</a>' in job
+    assert f"<title>작업 {jid} 요약 · LLM Test Advisor</title>" in page
+    job = client.get(f"/results/{jid}").text
+    assert f'<a class="btn plain" href="/results/{jid}/summary">요약 (캡처용)</a>' in job
     for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):
         assert secret not in page.split("<main>", 1)[1].split("<script>", 1)[0]
     # 대상별 판단: Red 3(확인 필요 3), Orange 1(수정 1), 합계 4
@@ -1168,8 +1240,9 @@ def test_summary_page_has_no_connection_name(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer(), connections=connections)
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    job_html = client.get("/results/1").text
-    summary_html = client.get("/results/1/summary").text
+    jid = job_id(tmp_path)
+    job_html = client.get(f"/results/{jid}").text
+    summary_html = client.get(f"/results/{jid}/summary").text
 
     assert "연결: 기본 연결" in job_html and "연결 기본 연결" in job_html
     assert "연결:" not in summary_html
@@ -1185,11 +1258,14 @@ def test_results_export_to_excel_one_line_per_row(tmp_path):
     client, _, _ = make_service(tmp_path, fix_answer())
     upload(client, EXCEL, source_folder(tmp_path))
 
-    assert 'href="/results/1/results.xlsx">엑셀로 내보내기' in client.get("/results/1").text
-    response = client.get("/results/1/results.xlsx")
+    jid = job_id(tmp_path)
+    assert (
+        f'href="/results/{jid}/results.xlsx">엑셀로 내보내기' in client.get(f"/results/{jid}").text
+    )
+    response = client.get(f"/results/{jid}/results.xlsx")
 
     assert response.status_code == 200
-    assert 'filename="job1-results.xlsx"' in response.headers["content-disposition"]
+    assert f'filename="job{jid}-results.xlsx"' in response.headers["content-disposition"]
     sheet = load_workbook(io.BytesIO(response.content)).active
     rows = [[cell.value for cell in line] for line in sheet.iter_rows()]
     assert rows[0][:3] == ["엑셀 행", "대상", "검사"] and rows[0][-1] == "diff"
@@ -1207,7 +1283,8 @@ def test_export_keeps_formula_like_text_as_text(tmp_path):
     client, _, _ = make_service(tmp_path, answer(("fix", "=1+1 \x01 이유"), edits=[DIVIDE_FIX]))
     upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
 
-    data = client.get("/results/1/results.xlsx").content
+    jid = job_id(tmp_path)
+    data = client.get(f"/results/{jid}/results.xlsx").content
 
     sheet = load_workbook(io.BytesIO(data)).active
     assert sheet.cell(2, 9).value == "=1+1  이유"

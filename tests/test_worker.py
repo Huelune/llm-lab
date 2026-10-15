@@ -112,8 +112,10 @@ def test_unexpected_failure_marks_row_error(tmp_path):
     assert store.job(job_id).state == "done"
 
 
-def logs(tmp_path) -> list[str]:
-    return [path.read_text(encoding="utf-8") for path in sorted((tmp_path / "logs").glob("*.md"))]
+def logs(tmp_path, job_id: str = "") -> list[str]:
+    """대화 기록 파일의 글. job_id를 주면 그 작업의 것만."""
+    pattern = f"*_job{job_id}_*.md" if job_id else "*.md"
+    return [path.read_text(encoding="utf-8") for path in sorted((tmp_path / "logs").glob(pattern))]
 
 
 def test_writes_conversation_log_for_each_row(tmp_path):
@@ -143,8 +145,9 @@ def test_log_for_reused_result_says_llm_was_not_called(tmp_path):
     worker.start(second)
 
     assert len(sent) == 1
-    assert "LLM에 보낸 요청이 없습니다." in logs(tmp_path)[-1]
-    assert "- 결과: 이전 결과 재사용 - LLM을 부르지 않음" in logs(tmp_path)[-1]
+    (text,) = logs(tmp_path, second)
+    assert "LLM에 보낸 요청이 없습니다." in text
+    assert "- 결과: 이전 결과 재사용 - LLM을 부르지 않음" in text
 
 
 def test_log_records_row_error_and_fatal_stop(tmp_path):

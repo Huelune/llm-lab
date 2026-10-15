@@ -21,7 +21,7 @@ def render(
     exchanges, outcomes=("수정 - b가 0일 때를 검사합니다.",), extra_body=None, findings=None
 ):
     return render_log(
-        job_id=3,
+        job_id="3",
         kind="RTE",
         findings=findings or [finding()],
         source_name="calc.c",
@@ -79,13 +79,16 @@ def test_log_records_errors_and_calls_that_never_happened():
     assert "LLM에 보낸 요청이 없습니다." in reused
 
 
+JOB = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+
 def test_write_log_never_overwrites(tmp_path):
-    first = write_log(tmp_path / "logs", 3, 2, "a")
-    second = write_log(tmp_path / "logs", 3, 2, "b")
+    first = write_log(tmp_path / "logs", JOB, 2, "a")
+    second = write_log(tmp_path / "logs", JOB, 2, "b")
 
     assert first != second
     assert first.read_text(encoding="utf-8") == "a"
     assert second.read_text(encoding="utf-8") == "b"
-    assert re.fullmatch(r"\d{8}-\d{6}_job3_row2\.md", first.name)
+    assert re.fullmatch(rf"\d{{8}}-\d{{6}}_job{JOB}_row2\.md", first.name)
     # 같은 초에 다시 쓰면 -2가 붙고, 초가 바뀌었으면 시각이 다르다
-    assert re.fullmatch(r"\d{8}-\d{6}_job3_row2(-2)?\.md", second.name)
+    assert re.fullmatch(rf"\d{{8}}-\d{{6}}_job{JOB}_row2(-2)?\.md", second.name)

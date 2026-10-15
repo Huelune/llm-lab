@@ -171,7 +171,7 @@ def create_app(
         current = connections.current()
         return current.name if current else ""
 
-    def job_or_404(job_id: int) -> Job:
+    def job_or_404(job_id: str) -> Job:
         job = store.job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="작업이 없습니다")
@@ -286,16 +286,17 @@ def create_app(
                         continue
         data = sheet.prepared.data
         # 처리 방식 라디오 값은 "종류:방식"이다. 고른 종류의 것이 없으면 첫 방식이 기본값이다
-        mode_label = ""
+        mode_label = mode_value = ""
         if sheet_kind.modes:
             wanted = {
                 value.removeprefix(prefix) for value in mode or [] if value.startswith(prefix)
             }
             chosen = next((m for m in sheet_kind.modes if m[0] in wanted), sheet_kind.modes[0])
-            mode_label = chosen[1]
+            mode_value, mode_label = chosen[0], chosen[1]
             data = {**(data if isinstance(data, dict) else {}), "mode": chosen[0]}
+        excel_name = excel.filename or ""
         job_id = store.create_job(
-            excel.filename or "",
+            excel_name,
             sheet.sheet,
             sum(sheet.skipped.values()),
             files,
@@ -312,18 +313,29 @@ def create_app(
             definitions=[*definitions, *callers],
             context="" if data is None else json.dumps(data, ensure_ascii=False),
             connection=current.name if current else "",
+            title=f"{excel_name} · {sheet_kind.title}",
+            settings={
+                "connection": current.name if current else "",
+                "model": current.model if current else worker.model,
+                "kind": sheet_kind.name,
+                "mode": mode_value,
+                "choices": sorted(selected),
+                "follow_ups": worker.follow_ups,
+                "source_root": str(root),
+                "excel": excel_name,
+            },
         )
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
 
     @app.get("/results/{job_id}", response_class=HTMLResponse)
-    def job_view(job_id: int) -> str:
+    def job_view(job_id: str) -> str:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         return job_page(job, rows, _base(job, rows), connection=label())
 
     @app.get("/results/{job_id}/results.xlsx")
-    def export_excel(job_id: int) -> Response:
+    def export_excel(job_id: str) -> Response:
         job = job_or_404(job_id)
         return Response(
             export_workbook(job, store.rows(job_id)),
@@ -332,11 +344,11 @@ def create_app(
         )
 
     @app.get("/results/{job_id}/summary", response_class=HTMLResponse)
-    def job_summary(job_id: int) -> str:
+    def job_summary(job_id: str) -> str:
         return summary_page(job_or_404(job_id), store.rows(job_id))
 
     @app.post("/results/{job_id}/fixes.patch")
-    def download_patch(job_id: int, row: Annotated[list[int] | None, Form()] = None) -> Response:
+    def download_patch(job_id: str, row: Annotated[list[int] | None, Form()] = None) -> Response:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         wanted = set(row or [])
@@ -372,14 +384,26 @@ def create_app(
             headers={"Content-Disposition": 'attachment; filename="fixes.patch"'},
         )
 
+    @app.post("/results/{job_id}/rename")
+    def rename(job_id: str, title: Annotated[str, Form()] = "") -> Response:
+        job_or_404(job_id)
+        title = title.strip()
+        if not 1 <= len(title) <= 80:
+            page = error_page(
+                "이름을 바꿀 수 없음", "이름은 1~80자로 적으세요.", connection=label()
+            )
+            return HTMLResponse(page, status_code=400)
+        store.rename_job(job_id, title)
+        return RedirectResponse(f"/results/{job_id}", status_code=303)
+
     @app.post("/results/{job_id}/stop")
-    def stop(job_id: int) -> Response:
+    def stop(job_id: str) -> Response:
         job_or_404(job_id)
         store.stop(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
 
     @app.post("/results/{job_id}/retry")
-    def retry(job_id: int) -> Response:
+    def retry(job_id: str) -> Response:
         job = job_or_404(job_id)
         # 작업의 연결이 지워졌으면 지금 고른 연결로 이어서 처리한다 (멈춤 안내가 시킨 대로)
         if connections is not None and job.connection and connections.get(job.connection) is None:
@@ -391,7 +415,7 @@ def create_app(
         return RedirectResponse(f"/results/{job_id}", status_code=303)
 
     @app.get("/api/results/{job_id}")
-    def job_json(job_id: int) -> dict[str, Any]:
+    def job_json(job_id: str) -> dict[str, Any]:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
         base = _base(job, rows)

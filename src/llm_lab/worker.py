@@ -88,7 +88,7 @@ class Worker:
         self._clients: dict[str, tuple[str, OpenAI]] = {}
         self._clients_lock = threading.Lock()
 
-    def start(self, job_id: int) -> None:
+    def start(self, job_id: str) -> None:
         """작업의 pending 행을 묶음으로 모아, 중요한 대상부터 묶음마다 하나씩 제출한다."""
         job = self.store.job(job_id)
         if job is None:
@@ -131,7 +131,7 @@ class Worker:
                 cached = self._clients[connection.name] = (fingerprint, client)
         return cached[1], connection.model
 
-    def _run(self, job_id: int, row_ids: list[int]) -> None:
+    def _run(self, job_id: str, row_ids: list[int]) -> None:
         try:
             self._process(job_id, row_ids)
         except Exception:  # 작업자 스레드의 예외는 아무 데도 보이지 않으므로 남긴다
@@ -144,7 +144,7 @@ class Worker:
                 self.store.set_row(row_id, "error", error=message)
             self.store.finish_if_done(job_id)
 
-    def _process(self, job_id: int, row_ids: list[int]) -> None:
+    def _process(self, job_id: str, row_ids: list[int]) -> None:
         job = self.store.job(job_id)
         # 다시 시도를 거듭 누르면 같은 묶음이 두 번 제출되므로, 먼저 가져간 작업자만 처리한다
         if job is None or job.state != "running" or not self.store.claim_rows(row_ids):
@@ -220,7 +220,7 @@ class Worker:
                 self.store.set_row(row.id, "done", result=result)
         self.store.finish_if_done(job_id)
 
-    def _asker(self, job_id: int, root: str, rounds: list[Asked], used: dict[str, str]) -> Ask:
+    def _asker(self, job_id: str, root: str, rounds: list[Asked], used: dict[str, str]) -> Ask:
         """되물은 이름을 작업의 프로젝트 색인에서 찾는 함수.
 
         보낸 정의는 작업에 남기지 않는다(대화 기록에 남는다). 남기면 같은 작업의 다른 묶음 첫 요청에
@@ -259,7 +259,7 @@ class Worker:
 
         return ask
 
-    def _restore(self, job_id: int, root: str, files: list[tuple[str, str]]) -> bool:
+    def _restore(self, job_id: str, root: str, files: list[tuple[str, str]]) -> bool:
         """저장된 답이 기댄 파일을 작업에 둔다. 그 파일이 그때와 다르거나 없으면 False."""
         stored = self.store.sources(job_id)
         missing: list[SourceFile] = []
@@ -279,7 +279,7 @@ class Worker:
 
     def _save_log(
         self,
-        job_id: int,
+        job_id: str,
         kind: Kind,
         findings: list[Finding],
         source_name: str,

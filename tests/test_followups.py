@@ -214,26 +214,26 @@ def test_index_cache_builds_each_job_once_and_keeps_two(tmp_path):
     built: list[Path] = []
     cache = IndexCache(build=lambda root, texts: built.append(root) or ProjectIndex(root, {}))
 
-    threads = [threading.Thread(target=cache.get, args=(1, str(tmp_path))) for _ in range(8)]
+    threads = [threading.Thread(target=cache.get, args=("1", str(tmp_path))) for _ in range(8)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     assert len(built) == 1
 
-    cache.get(2, str(tmp_path))
-    cache.get(3, str(tmp_path))
-    cache.get(1, str(tmp_path))  # 2개만 두므로 1은 다시 만든다
+    cache.get("2", str(tmp_path))
+    cache.get("3", str(tmp_path))
+    cache.get("1", str(tmp_path))  # 2개만 두므로 1은 다시 만든다
     assert len(built) == 4
-    assert cache.get(9, str(tmp_path / "gone")) is None
-    assert cache.get(8, "") is None
+    assert cache.get("9", str(tmp_path / "gone")) is None
+    assert cache.get("8", "") is None
 
 
 def test_index_cache_passes_the_job_texts_to_the_build(tmp_path):
     seen: list[dict] = []
     cache = IndexCache(build=lambda root, texts: seen.append(texts) or ProjectIndex(root, {}))
 
-    cache.get(1, str(tmp_path), {"a.c": "int a;"})
-    cache.get(2, str(tmp_path))
+    cache.get("1", str(tmp_path), {"a.c": "int a;"})
+    cache.get("2", str(tmp_path))
 
     assert seen == [{"a.c": "int a;"}, {}]

@@ -98,17 +98,17 @@ def test_one_request_per_function_and_middle_fixes_are_left_to_people(tmp_path):
 
     assert upload(client, EXCEL, source_folder(tmp_path)).status_code == 303
 
-    job = store.job(1)
+    (job,) = store.jobs()
     assert (job.kind, job.sheet, job.state) == ("codemetrics", "Metrics_Result", "done")
     assert len(sent) == 2  # 함수마다 한 번, Fail이 든 grade부터
     first = sent[0]["messages"][1]["content"]
     assert "Replace lines 3-15 of src/grade.c" in first
     assert "Finding 2:\n- check: Number of Calling Functions" in first
     assert sent[0]["response_format"]["json_schema"]["schema"]["required"] == ["findings", "code"]
-    decisions = [(row.finding.row, row.result.decision) for row in store.rows(1) if row.result]
+    decisions = [(row.finding.row, row.result.decision) for row in store.rows(job.id) if row.result]
     assert decisions == [(2, "fix"), (3, "no_fix"), (4, "fix")]
 
-    page = client.get("/results/1").text
+    page = client.get(f"/results/{job.id}").text
     assert "값 24 · 기준 10 · 조건 시트: Fail (고칠 것)" in page
     assert "조건 시트: 지표 3개" in page
     assert 'name="row" value="1" data-auto="1"' in page  # Fail
@@ -122,18 +122,20 @@ def test_unchosen_stages_are_not_sent(tmp_path):
 
     upload(client, EXCEL, source_folder(tmp_path), choices=["codemetrics:Fail"])
 
+    (job,) = store.jobs()
     assert len(sent) == 1
-    assert [row.finding.row for row in store.rows(1)] == [2]
-    assert "Conditional Pass (고르지 않음) 2" in store.job(1).note
+    assert [row.finding.row for row in store.rows(job.id)] == [2]
+    assert "Conditional Pass (고르지 않음) 2" in job.note
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git 없음")
 def test_patch_applies_byte_for_byte_to_cp949_and_crlf_files(tmp_path):
-    client, _, _ = make_service(tmp_path, *ANSWERS)
+    client, store, _ = make_service(tmp_path, *ANSWERS)
     folder = source_folder(tmp_path)
     upload(client, EXCEL, folder)
+    (job,) = store.jobs()
 
-    response = client.post("/results/1/fixes.patch", data={"row": ["1", "3"]})
+    response = client.post(f"/results/{job.id}/fixes.patch", data={"row": ["1", "3"]})
     assert response.status_code == 200
     (folder / "fixes.patch").write_bytes(response.content)
     for args in (["--check"], []):

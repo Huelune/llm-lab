@@ -22,7 +22,7 @@ def _fence(text: str, lang: str = "text") -> str:
 
 def render_log(
     *,
-    job_id: int,
+    job_id: str,
     kind: str,
     findings: list[Finding],
     source_name: str,
@@ -80,7 +80,7 @@ def render_log(
     return "\n".join(lines) + "\n"
 
 
-def write_log(folder: Path, job_id: int, row: int, text: str) -> Path:
+def write_log(folder: Path, job_id: str, row: int, text: str) -> Path:
     """시각_job작업_row엑셀행.md로 저장한다. row는 묶음의 가장 작은 엑셀 행이다.
 
     같은 이름이 있으면 -2, -3을 붙여 덮어쓰지 않는다.

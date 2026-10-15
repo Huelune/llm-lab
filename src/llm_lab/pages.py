@@ -999,7 +999,7 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
     note = f'<p class="sub">{escape(job.note)}</p>' if job.note else ""
     body = (
         '<div class="pagehead"><div>'
-        f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
+        f"<h1>{escape(job.title or job.excel_name)} {_job_badge(job, rows)}</h1>"
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
         + (f" · 연결 {escape(job.connection)}" if job.connection else "")
