@@ -118,7 +118,7 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert "RTE · 시트 RTE_Result" in page
     assert "제외: Gray Check 1" in page  # 작업 메모
     assert '<span class="badge green">완료</span>' in page
-    for color, label in [("red", "Red"), ("orange", "Orange"), ("blue", "수정")]:
+    for color, label in [("red", "Red"), ("orange", "Orange"), ("blue", "수정안")]:
         assert f'<span class="badge {color}">{label}</span> <b>1</b>' in page
     assert '<span class="badge gray">제외 1</span>' in page
     assert '<span class="add">+    return (b != 0) ? a / b : 0;</span>' in page
@@ -129,6 +129,12 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert 'data-copy="git -c core.autocrlf=false apply --check fixes.patch"' in page
     assert 'data-copy="git -c core.autocrlf=false apply -R --check fixes.patch"' in page
     assert 'data-copy="git -c core.autocrlf=false apply -R fixes.patch"' in page
+    # --check 통과는 적용 가능일 뿐, 고쳐졌는지는 Polyspace로 확인한다
+    assert "--check 통과는 패치를 적용할 수 있다는 뜻일 뿐입니다" in page
+    # 목록 행과 카드는 검사·파일을 달고 있어, 집계 표의 행을 눌러 거를 수 있다
+    assert 'data-check="Division by zero" data-file="src/calc.c"' in page
+    assert '<tr data-pick="file" data-value="src/calc.c" tabindex="0">' in page
+    assert 'id="shown"' in page and 'id="filter-reset" hidden' in page
     assert 'action="/results/1/fixes.patch"' in page
     assert 'id="toggle-all"' in page  # 수정 모두 선택
     assert "data-refresh=" not in page
@@ -205,7 +211,9 @@ def test_results_list_page(tmp_path):
         '<td class="tags"><span class="badge red">Red 1</span> '
         '<span class="badge orange">Orange 1</span></td>'
     ) in page
-    verdicts = '<span class="badge blue">수정 1</span> <span class="badge amber">확인 필요 1</span>'
+    verdicts = (
+        '<span class="badge blue">수정안 1</span> <span class="badge amber">확인 필요 1</span>'
+    )
     assert verdicts in page
     assert '<span class="badge green">완료</span>' in page
     assert '<a class="btn primary" href="/">새 분석</a>' in page
@@ -271,6 +279,8 @@ def test_running_job_page_refreshes_and_shows_progress(tmp_path):
     assert "remember('filter'" in page and "remember('open'" in page
     assert 'http-equiv="refresh"' not in page
     assert '<span class="spinner"></span>1/2 처리 · 5초마다 새로 고칩니다' in page
+    # 행 상태별 개수 (처리 중 행이 없으면 지금 처리 중인 엑셀 행은 안 보인다)
+    assert '<p class="sub">대기 1 · 처리 중 0 · 완료 0 · 소스 없음 1</p>' in page
     assert "location.reload()" in page
     assert "location.hash" in page and "replaceState" in page
     # 다시 읽기 전에 스크롤 위치를 저장했다가 되돌리고, "보기"로 간 카드는 강조한다
@@ -703,7 +713,8 @@ def test_result_page_has_overview_and_detail_tabs(tmp_path):
     # Division by zero: 전체 2, 수정 1, 수정 불필요 0, 직접 수정 0, 확인 필요 1
     # 긴 이름(MISRA 규칙 문장)은 한 줄로 줄이고 전체는 title로 보인다
     assert (
-        '<tr><td title="Division by zero">Division by zero</td><td class="num">2</td>'
+        '<tr data-pick="check" data-value="Division by zero" tabindex="0">'
+        '<td title="Division by zero">Division by zero</td><td class="num">2</td>'
         '<td class="num">1</td><td class="num">0</td><td class="num">0</td>'
         '<td class="num">1</td></tr>'
     ) in page
@@ -724,7 +735,8 @@ def test_manual_row_is_counted_separately_and_not_selectable(tmp_path):
     assert '<span class="badge orange">직접 수정</span> <b>1</b>' in page  # 맨 위 줄
     assert '<th class="num">직접 수정</th>' in page  # 검사 종류별·파일별 표
     assert (
-        '<tr><td title="Division by zero">Division by zero</td><td class="num">1</td>'
+        '<tr data-pick="check" data-value="Division by zero" tabindex="0">'
+        '<td title="Division by zero">Division by zero</td><td class="num">1</td>'
         '<td class="num">0</td><td class="num">0</td><td class="num">1</td>'
         '<td class="num">0</td></tr>'
     ) in page
@@ -1155,7 +1167,7 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     assert "<td>Rule 10.4</td>" in page
     assert "<td>기타 검사</td>" in page
     assert '<tr><td>제외한 행</td><td class="num">1</td></tr>' in page
-    assert '<tr><td>수정 모두 선택이 고르는 수정</td><td class="num">1</td></tr>' in page
+    assert '<tr><td>수정안 모두 선택이 고르는 수정안</td><td class="num">1</td></tr>' in page
     assert "data-refresh=" not in page
 
 
@@ -1195,7 +1207,14 @@ def test_results_export_to_excel_one_line_per_row(tmp_path):
     assert rows[0][:3] == ["엑셀 행", "대상", "검사"] and rows[0][-1] == "diff"
     by_row = {line[0]: line for line in rows[1:]}
     fixed, missing = by_row[2], by_row[3]
-    assert fixed[1:7] == ["Orange", "Division by zero", r"C:\proj\src\calc.c", 3, "divide", "수정"]
+    assert fixed[1:7] == [
+        "Orange",
+        "Division by zero",
+        r"C:\proj\src\calc.c",
+        3,
+        "divide",
+        "수정안",
+    ]
     assert fixed[8] == REASON
     assert "+    return (b != 0) ? a / b : 0;" in fixed[9]
     assert missing[6] == "확인 필요" and "할 일:" in missing[8]

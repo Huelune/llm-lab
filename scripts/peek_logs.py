@@ -45,7 +45,7 @@ CODE_BLOCK = re.compile(r"^```c\n(.*?)\n```$", re.S | re.M)
 CODE_RANGE = re.compile(r"^Code \(lines (\d+)-(\d+) of (.+?)[;)]", re.M)
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # 한글이 붙은 이름(예: 이름을)에서도 이름만
 SHOWN_CALLS = 2  # 화면에 모양을 찍는 호출 이름 수 (나머지는 자세한 목록에)
-DECISIONS = (("fix", "수정"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
+DECISIONS = (("fix", "수정안"), ("no_fix", "수정 불필요"), ("manual", "직접 수정"))
 
 
 def newest_job(folder: Path) -> int | None:
