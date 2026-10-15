@@ -5,27 +5,27 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterable, Iterator
+import uuid
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from llm_lab.csource import Definition
 from llm_lab.fixer import FixResult
 from llm_lab.polyspace import Finding
 from llm_lab.sources import SourceFile
 
-# 표 구조를 바꾸면 올리고 옛 DB를 옮기는 코드를 넣는다. PRAGMA user_version에 적는다.
-# 2: jobs.source_root (소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 '')
-# 3: jobs.kind·note·context (시트 종류, 작업 메모, 작업 정보 JSON), rows.grp (묶음)
-# 4: definitions (분석 대상 파일이 쓰는 다른 곳의 정의)
-# 5: jobs.connection (작업을 만들 때 쓴 LLM 연결 이름)
-SCHEMA_VERSION = 5
+# 표 구조를 바꾸면 올린다. PRAGMA user_version에 적는다. 예전 DB는 옮기지 않고 거절한다.
+# 6: UUID 작업 키(jobs.id TEXT), jobs.title·settings (작업 이름, 작업을 만들 때 기록한 설정 JSON)
+SCHEMA_VERSION = 6
+OLD_FORMAT = "예전 작업 기록 형식입니다. uv run llm-fix-server --clear all 뒤 다시 켜세요."
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
-    id INTEGER PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
     excel_name TEXT NOT NULL,
     sheet TEXT NOT NULL,
@@ -36,10 +36,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind TEXT NOT NULL DEFAULT 'rte',
     note TEXT NOT NULL DEFAULT '',
     context TEXT NOT NULL DEFAULT '',
-    connection TEXT NOT NULL DEFAULT ''
+    connection TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    settings TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS files (
-    job_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
     name TEXT NOT NULL,
     text TEXT NOT NULL,
     encoding TEXT NOT NULL,
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE TABLE IF NOT EXISTS rows (
     id INTEGER PRIMARY KEY,
-    job_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
     finding TEXT NOT NULL,
     file_name TEXT,
     state TEXT NOT NULL,
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS cache (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS definitions (
-    job_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
     file TEXT NOT NULL,
@@ -75,15 +77,6 @@ CREATE TABLE IF NOT EXISTS definitions (
 );
 """
 
-# 예전 DB에 없을 수 있는 칸 (표, 칸, 정의). 켤 때 없으면 기본값으로 더한다.
-ADDED_COLUMNS = [
-    ("jobs", "source_root", "TEXT NOT NULL DEFAULT ''"),
-    ("jobs", "kind", "TEXT NOT NULL DEFAULT 'rte'"),
-    ("jobs", "note", "TEXT NOT NULL DEFAULT ''"),
-    ("jobs", "context", "TEXT NOT NULL DEFAULT ''"),
-    ("jobs", "connection", "TEXT NOT NULL DEFAULT ''"),
-    ("rows", "grp", "TEXT NOT NULL DEFAULT ''"),
-]
 # 사용자가 "멈춤"을 눌러 멈춘 작업의 메시지. 화면은 치명 오류로 멈춘 작업과 다르게 보인다.
 USER_STOP = "사용자가 멈췄습니다."
 
@@ -94,7 +87,7 @@ class StoreError(Exception):
 
 @dataclass(frozen=True)
 class Job:
-    id: int
+    id: str
     created_at: str
     excel_name: str
     sheet: str
@@ -106,12 +99,14 @@ class Job:
     note: str = ""  # 작업 메모 한 줄 (조건 시트 요약, 뺀 행의 이유별 개수)
     context: str = ""  # 종류가 엑셀 전체에서 읽은 작업 정보 (JSON, 없으면 '')
     connection: str = ""  # 작업을 만들 때 쓴 LLM 연결 이름. 옛 작업은 '' (현재 연결)
+    title: str = ""  # 작업 이름 (사용자가 붙이거나 고친다. 없으면 '')
+    settings: str = ""  # 작업을 만들 때 기록한 설정 (JSON, 없으면 '')
 
 
 @dataclass(frozen=True)
 class Row:
     id: int
-    job_id: int
+    job_id: str
     finding: Finding
     file_name: str | None  # 짝지은 업로드 파일 이름
     state: str  # pending / running / done / error / no_source
@@ -146,13 +141,10 @@ class Store:
                     f"{path}은(는) 새 버전 프로그램이 만든 DB입니다 "
                     f"(DB {version}, 프로그램 {SCHEMA_VERSION}). git pull로 코드를 받으세요."
                 )
+            if 0 < version < SCHEMA_VERSION:
+                raise StoreError(OLD_FORMAT)
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            # 예전 버전 DB: 그 뒤에 생긴 칸을 더한다
-            for table, column, definition in ADDED_COLUMNS:
-                columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
-                if column not in columns:
-                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -183,13 +175,18 @@ class Store:
         context: str = "",
         definitions: Iterable[Definition] = (),
         connection: str = "",
-    ) -> int:
+        title: str = "",
+        settings: Mapping[str, Any] | None = None,
+    ) -> str:
         state = "running" if any(row.state == "pending" for row in rows) else "done"
         with self._write() as db:
-            cursor = db.execute(
-                "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state, source_root, "
-                "kind, note, context, connection) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            job_id = str(uuid.uuid4())
+            db.execute(
+                "INSERT INTO jobs (id, created_at, excel_name, sheet, skipped, state, "
+                "source_root, kind, note, context, connection, title, settings) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
+                    job_id,
                     _now(),
                     excel_name,
                     sheet,
@@ -200,10 +197,10 @@ class Store:
                     note,
                     context,
                     connection,
+                    title,
+                    json.dumps(settings, ensure_ascii=False) if settings else "",
                 ),
             )
-            job_id = cursor.lastrowid
-            assert job_id is not None
             db.executemany(
                 "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
@@ -232,14 +229,16 @@ class Store:
             )
         return job_id
 
-    def job(self, job_id: int) -> Job | None:
+    def job(self, job_id: str) -> Job | None:
         with self._db() as db:
             found = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return Job(**dict(found)) if found else None
 
     def jobs(self, limit: int = 20) -> list[Job]:
         with self._db() as db:
-            found = db.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            found = db.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [Job(**dict(row)) for row in found]
 
     def recent_roots(self, limit: int = 10) -> list[str]:
@@ -247,12 +246,12 @@ class Store:
         with self._db() as db:
             found = db.execute(
                 "SELECT source_root FROM jobs WHERE source_root != '' "
-                "GROUP BY source_root ORDER BY MAX(id) DESC LIMIT ?",
+                "GROUP BY source_root ORDER BY MAX(rowid) DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [row["source_root"] for row in found]
 
-    def rows(self, job_id: int) -> list[Row]:
+    def rows(self, job_id: str) -> list[Row]:
         with self._db() as db:
             found = db.execute("SELECT * FROM rows WHERE job_id = ? ORDER BY id", (job_id,))
             return [self._row(row) for row in found.fetchall()]
@@ -274,7 +273,7 @@ class Store:
             grp=record["grp"],
         )
 
-    def source(self, job_id: int, name: str) -> SourceFile:
+    def source(self, job_id: str, name: str) -> SourceFile:
         with self._db() as db:
             found = db.execute(
                 "SELECT * FROM files WHERE job_id = ? AND name = ?", (job_id, name)
@@ -288,7 +287,7 @@ class Store:
             sha256=found["sha256"],
         )
 
-    def sources(self, job_id: int) -> dict[str, SourceFile]:
+    def sources(self, job_id: str) -> dict[str, SourceFile]:
         """작업에 저장한 모든 파일 (이름 → 원문)."""
         with self._db() as db:
             found = db.execute("SELECT * FROM files WHERE job_id = ?", (job_id,)).fetchall()
@@ -304,7 +303,7 @@ class Store:
             for record in found
         }
 
-    def definitions(self, job_id: int) -> list[Definition]:
+    def definitions(self, job_id: str) -> list[Definition]:
         """작업에 저장한 다른 곳의 정의. 이름·파일·줄 순서."""
         with self._db() as db:
             found = db.execute(
@@ -314,7 +313,7 @@ class Store:
             ).fetchall()
         return [Definition(**dict(record)) for record in found]
 
-    def add_files(self, job_id: int, files: Iterable[SourceFile]) -> None:
+    def add_files(self, job_id: str, files: Iterable[SourceFile]) -> None:
         """작업에 없는 파일만 더한다. 있는 파일은 분석 당시 원문을 지킨다."""
         with self._write() as db:
             db.executemany(
@@ -349,17 +348,21 @@ class Store:
             db.execute(f"UPDATE rows SET state = 'running' WHERE id IN ({marks})", row_ids)
             return True
 
-    def set_job(self, job_id: int, state: str, message: str = "") -> None:
+    def set_job(self, job_id: str, state: str, message: str = "") -> None:
         with self._write() as db:
             db.execute(
                 "UPDATE jobs SET state = ?, message = ? WHERE id = ?", (state, message, job_id)
             )
 
-    def set_job_connection(self, job_id: int, name: str) -> None:
+    def rename_job(self, job_id: str, title: str) -> None:
+        with self._write() as db:
+            db.execute("UPDATE jobs SET title = ? WHERE id = ?", (title, job_id))
+
+    def set_job_connection(self, job_id: str, name: str) -> None:
         with self._write() as db:
             db.execute("UPDATE jobs SET connection = ? WHERE id = ?", (name, job_id))
 
-    def stop(self, job_id: int) -> None:
+    def stop(self, job_id: str) -> None:
         """처리 중인 작업을 멈춘다. 줄 서 있던 묶음은 건너뛰고, "이어서 처리"(retry)로 계속한다."""
         with self._write() as db:
             db.execute(
@@ -367,7 +370,7 @@ class Store:
                 (USER_STOP, job_id),
             )
 
-    def finish_if_done(self, job_id: int) -> None:
+    def finish_if_done(self, job_id: str) -> None:
         """남은 pending·running 행이 없으면 작업을 done으로 바꾼다.
 
         running 작업과, 사용자가 멈춘 작업(stopped, 메시지 USER_STOP)이 대상이다. 마지막 묶음이
@@ -384,7 +387,7 @@ class Store:
                 (job_id, USER_STOP, job_id),
             )
 
-    def retry(self, job_id: int) -> None:
+    def retry(self, job_id: str) -> None:
         """오류 행을 다시 pending으로 돌리고 작업을 running으로 되살린다."""
         with self._write() as db:
             db.execute(
@@ -394,11 +397,13 @@ class Store:
             )
             db.execute("UPDATE jobs SET state = 'running', message = '' WHERE id = ?", (job_id,))
 
-    def recover(self) -> list[int]:
+    def recover(self) -> list[str]:
         """서비스를 켤 때: running 행을 pending으로 되돌리고 이어서 처리할 작업 id를 돌려준다."""
         with self._write() as db:
             db.execute("UPDATE rows SET state = 'pending' WHERE state = 'running'")
-            found = db.execute("SELECT id FROM jobs WHERE state = 'running' ORDER BY id")
+            found = db.execute(
+                "SELECT id FROM jobs WHERE state = 'running' ORDER BY created_at, rowid"
+            )
             return [row["id"] for row in found.fetchall()]
 
     def cache_entry(self, key: str) -> tuple[list[FixResult], list[tuple[str, str]]] | None:

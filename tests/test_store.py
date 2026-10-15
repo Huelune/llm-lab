@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import closing
 
@@ -23,7 +24,7 @@ FINDING = Finding(
 RESULT = FixResult("fix", "이유", (Edit(0, 3, "y"),), "diff")
 
 
-def make_job(store: Store, *states: str) -> int:
+def make_job(store: Store, *states: str) -> str:
     rows = [NewRow(FINDING, "calc.c" if s != "no_source" else None, s) for s in states]
     return store.create_job("rte.xlsx", "RTE_Result", 3, [SOURCE], rows)
 
@@ -238,45 +239,25 @@ def test_refuses_database_from_newer_version(tmp_path):
 
 def test_job_keeps_source_folder_and_recent_folders_come_newest_first(tmp_path):
     store = Store(tmp_path / "fixer.db")
-    for root in ["C:/work/a", "C:/work/b", "C:/work/a"]:
+    ids = [
         store.create_job("rte.xlsx", "RTE_Result", 0, [], [], source_root=root)
-    store.create_job("rte.xlsx", "RTE_Result", 0, [], [])  # 폴더 없이 만든 예전 방식 작업
+        for root in ["C:/work/a", "C:/work/b", "C:/work/a"]
+    ]
+    no_folder = store.create_job("rte.xlsx", "RTE_Result", 0, [], [])  # 폴더 없이 만든 작업
 
-    assert store.job(1).source_root == "C:/work/a"
-    assert store.job(4).source_root == ""
+    assert store.job(ids[0]).source_root == "C:/work/a"
+    assert store.job(no_folder).source_root == ""
     assert store.recent_roots() == ["C:/work/a", "C:/work/b"]
 
 
-def test_database_from_schema_1_gets_source_folder_column(tmp_path):
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
+def test_old_schema_database_is_refused(tmp_path, version):
     path = tmp_path / "fixer.db"
-    job_id = make_job(Store(path), "pending")
-    with closing(sqlite3.connect(path)) as db:  # 첫 배포의 jobs 표에는 이 칸이 없었다
-        db.execute("ALTER TABLE jobs DROP COLUMN source_root")
-        db.execute("PRAGMA user_version = 1")
-        db.commit()
+    Store(path)
+    set_user_version(path, version)
 
-    store = Store(path)
-
-    assert user_version(path) == SCHEMA_VERSION == 5
-    assert store.job(job_id).source_root == ""
-
-
-def test_database_from_schema_2_gets_kind_note_context_and_group_columns(tmp_path):
-    path = tmp_path / "fixer.db"
-    job_id = make_job(Store(path), "pending")
-    with closing(sqlite3.connect(path)) as db:  # 스키마 2에는 이 칸들이 없었다
-        for table, column in [("jobs", "kind"), ("jobs", "note"), ("jobs", "context")]:
-            db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
-        db.execute("ALTER TABLE rows DROP COLUMN grp")
-        db.execute("PRAGMA user_version = 2")
-        db.commit()
-
-    store = Store(path)
-
-    assert user_version(path) == SCHEMA_VERSION
-    job = store.job(job_id)
-    assert (job.kind, job.note, job.context) == ("rte", "", "")
-    assert store.rows(job_id)[0].grp == ""
+    with pytest.raises(StoreError, match="예전 작업 기록 형식"):
+        Store(path)
 
 
 DEFINITIONS = [
@@ -286,8 +267,8 @@ DEFINITIONS = [
 ]
 
 
-def test_schema_version_is_five():
-    assert SCHEMA_VERSION == 5
+def test_schema_version_is_six():
+    assert SCHEMA_VERSION == 6
 
 
 def test_definitions_round_trip_in_name_file_line_order(tmp_path):
@@ -299,7 +280,7 @@ def test_definitions_round_trip_in_name_file_line_order(tmp_path):
     )
 
     assert store.definitions(job_id) == DEFINITIONS
-    assert store.definitions(job_id + 1) == []
+    assert store.definitions("no-such-job") == []
 
 
 def test_job_without_definitions_has_an_empty_list(tmp_path):
@@ -319,7 +300,7 @@ def test_sources_returns_every_file_of_a_job(tmp_path):
 
     assert set(store.sources(job_id)) == {"calc.c", "lib/drv.c"}
     assert store.sources(job_id)["lib/drv.c"] == other
-    assert store.sources(job_id + 1) == {}
+    assert store.sources("no-such-job") == {}
 
 
 def test_add_files_keeps_what_the_job_already_has(tmp_path):
@@ -357,3 +338,39 @@ def test_job_keeps_the_connection_name(tmp_path):
 
     assert store.job(job).connection == "게이트웨이 B"
     assert store.job(old).connection == ""
+
+
+def test_jobs_get_uuid_ids_titles_and_settings(tmp_path):
+    import uuid
+
+    store = Store(tmp_path / "fixer.db")
+    first = store.create_job(
+        "a.xlsx",
+        "RTE_Result",
+        0,
+        [],
+        [],
+        title="첫 작업",
+        settings={"model": "m", "connection": "기본 연결"},
+    )
+    second = store.create_job("b.xlsx", "RTE_Result", 0, [], [])
+
+    assert str(uuid.UUID(first)) == first
+    assert [job.id for job in store.jobs()] == [second, first]
+    assert store.job(first).title == "첫 작업"
+    assert json.loads(store.job(first).settings) == {"model": "m", "connection": "기본 연결"}
+    assert store.job(second).settings == ""
+    store.rename_job(first, "새 이름")
+    assert store.job(first).title == "새 이름"
+    assert store.job("1") is None
+
+
+def test_old_integer_database_is_refused(tmp_path):
+    path = tmp_path / "fixer.db"
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, created_at TEXT)")
+        db.execute("PRAGMA user_version = 5")
+        db.commit()
+
+    with pytest.raises(StoreError, match="예전 작업 기록 형식"):
+        Store(path)
