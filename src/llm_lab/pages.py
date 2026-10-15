@@ -275,6 +275,9 @@ pre.diff span::before { content: attr(data-ln); color: var(--faint); margin-righ
 .precheck .ok::before { content: "확인 · "; font-weight: 700; color: var(--green); }
 .precheck .info { color: var(--muted); }
 .precheck .hint { margin: 4px 0 0; }
+.jobfilters { align-items: center; }
+.jobfilters input[type=search] { font: inherit; font-size: 13px; padding: 5px 10px;
+  min-width: 240px; border: 1px solid var(--line-strong); border-radius: var(--radius); }
 .card.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d68a; }
 /* 설정: 연결마다 한 줄 카드, 현재 연결은 왼쪽 띠, 추가·수정 양식은 두 칸 */
 .connrow { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
@@ -501,6 +504,29 @@ function syncChoices() {
 }
 syncChoices();
 window.addEventListener('pageshow', syncChoices);
+// 작업 목록: 찾기 칸의 글자와 상태 단추로 행을 거른다
+const jobSearch = document.getElementById('job-search');
+const jobStates = [...document.querySelectorAll('[data-job-state]')];
+const jobRows = [...document.querySelectorAll('tr[data-search]')];
+const jobsShown = document.getElementById('jobs-shown');
+let jobState = 'all';
+function filterJobs() {
+  const words = (jobSearch ? jobSearch.value : '').toLowerCase().split(/\\s+/).filter(Boolean);
+  let n = 0;
+  jobRows.forEach(row => {
+    row.hidden = (jobState !== 'all' && row.dataset.state !== jobState)
+      || !words.every(word => row.dataset.search.includes(word));
+    if (!row.hidden) n++;
+  });
+  jobStates.forEach(b => b.classList.toggle('on', b.dataset.jobState === jobState));
+  const narrowed = jobState !== 'all' || words.length > 0;
+  if (jobsShown) jobsShown.textContent = narrowed ? `표시 ${n} / 전체 ${jobRows.length}` : '';
+}
+if (jobSearch) jobSearch.addEventListener('input', filterJobs);
+jobStates.forEach(b => b.addEventListener('click', () => {
+  jobState = b.dataset.jobState;
+  filterJobs();
+}));
 // 분석 전 확인: 서버가 엑셀과 폴더를 읽어 보고 개수만 돌려준다 (작업은 만들지 않는다)
 const precheck = document.getElementById('precheck');
 const precheckResult = document.getElementById('precheck-result');
@@ -680,8 +706,14 @@ def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
         )
         when = job.created_at[5:16].replace("T", " ")
         model = _settings(job).get("model") or "-"
+        search = " ".join(
+            str(part)
+            for part in (job.title, job.excel_name, kind.title, job.connection, model)
+            if part
+        ).casefold()
         lines.append(
-            f'<tr><td class="jobname"><a href="/results/{job.id}">'
+            f'<tr data-state="{job.state}" data-search="{escape(search)}">'
+            f'<td class="jobname"><a href="/results/{job.id}">'
             f"{escape(job.title or job.excel_name)}</a></td>"
             f"<td>{escape(kind.title)}</td><td>{escape(job.connection or '-')}</td>"
             f"<td>{escape(str(model))}</td><td>{escape(when)}</td>"
@@ -735,23 +767,36 @@ def _settings_card(job: Job) -> str:
     return f'<div class="card"><h3>작업 설정</h3><table>{rows}</table></div>'
 
 
-def _kind_step() -> str:
-    """분석할 시트(종류) 라디오와 종류별 대상 체크 상자. 처음에는 첫 종류(RTE)를 고른다."""
+def _kind_step(preset: dict | None = None) -> str:
+    """분석할 시트(종류) 라디오와 종류별 대상 체크 상자.
+
+    처음에는 첫 종류(RTE)와 기본 대상을 고른다. preset(작업에 기록된 설정)이 있으면 그 종류·대상·
+    처리 방식을 고른다.
+    """
+    preset = preset or {}
+    chosen_kind = preset.get("kind") if preset.get("kind") in KINDS else next(iter(KINDS))
     blocks = []
-    for number, kind in enumerate(KINDS.values()):
-        first = number == 0
+    for kind in KINDS.values():
+        first = kind.name == chosen_kind
+        picked = (
+            preset.get("choices") if first and isinstance(preset.get("choices"), list) else None
+        )
+        checked = set(picked) if picked is not None else set(kind.defaults)
+        preset_mode = preset.get("mode") if first else None
+        mode_values = [value for value, _, _ in kind.modes]
+        mode_pick = preset_mode if preset_mode in mode_values else (mode_values or [None])[0]
         boxes = "".join(
             f'<label><input type="checkbox" name="choice" '
             f'value="{escape(kind.name)}:{escape(label)}"'
-            f"{' checked' if label in kind.defaults else ''}> {escape(label)}</label>"
+            f"{' checked' if label in checked else ''}> {escape(label)}</label>"
             for label in kind.choices
         )
         if kind.modes:
             radios = "".join(
                 f'<label><input type="radio" name="mode" '
                 f'value="{escape(kind.name)}:{escape(value)}"'
-                f"{' checked' if number_ == 0 else ''}> {escape(label)}</label>"
-                for number_, (value, label, _) in enumerate(kind.modes)
+                f"{' checked' if value == mode_pick else ''}> {escape(label)}</label>"
+                for value, label, _ in kind.modes
             )
             helps = " / ".join(f"{escape(label)}: {escape(help)}" for _, label, help in kind.modes)
             boxes += f'<div class="modes">처리 방식: {radios}</div><p class="hint">{helps}</p>'
@@ -775,8 +820,23 @@ def index_page(
     recent_dirs: list[str],
     *,
     connection: str | None = None,
+    preset_from: Job | None = None,
 ) -> str:
     options = "".join(f'<option value="{escape(folder)}">' for folder in recent_dirs)
+    # "같은 설정으로 새 분석": 기록된 설정으로 채운다. 엑셀은 저장하지 않으므로 다시 고른다
+    preset = _settings(preset_from) if preset_from is not None else {}
+    folder_value = preset.get("source_root") or ""
+    folder_attr = f' value="{escape(str(folder_value))}"' if folder_value else ""
+    preset_note = ""
+    if preset_from is not None:
+        excel = preset.get("excel") or preset_from.excel_name
+        preset_note = (
+            '<div class="notice paused">'
+            f"작업 &lsquo;{escape(preset_from.title or preset_from.excel_name)}&rsquo;의 "
+            "설정(소스 폴더, "
+            f"시트 종류, 대상, 처리 방식)을 채웠습니다. 엑셀 파일은 다시 고르세요(그때 파일: "
+            f"{escape(str(excel))}). 새 작업으로 기록되고 예전 작업은 그대로 남습니다.</div>"
+        )
     form = (
         '<form id="analyze" class="card" method="post" action="/results" '
         'enctype="multipart/form-data">'
@@ -788,11 +848,11 @@ def index_page(
         '"폴더 찾기…"로 고르거나 경로를 붙여넣습니다. 엑셀에 나온 파일을 이 폴더 안에서 '
         "찾고, 패치도 이 폴더 기준으로 만듭니다.</p>"
         '<div class="pickrow"><input type="text" name="source_dir" list="recent-dirs" required '
-        r'placeholder="예: C:\work\brake" autocomplete="off">'
+        rf'placeholder="예: C:\work\brake" autocomplete="off"{folder_attr}>'
         '<button class="btn plain" type="button" id="pick-folder">폴더 찾기…</button></div>'
         '<p class="hint" id="pick-note"></p>'
         f'<datalist id="recent-dirs">{options}</datalist></div></div>'
-        + _kind_step()
+        + _kind_step(preset)
         + '<div class="step"><div class="num">4</div><div><h3>분석 시작</h3>'
         '<p class="hint">"확인"은 작업을 만들지 않고 엑셀의 대상 행 수와 폴더에서 찾은 파일 수를 '
         "미리 봅니다. 분석 시작을 누르면 결과 화면으로 넘어가고, 행이 하나씩 처리되는 모습을 볼 수 "
@@ -812,6 +872,7 @@ def index_page(
             if connection == ""
             else ""
         )
+        + preset_note
         + form
         + '<h2>최근 작업 <a href="/results" style="font-size:12px;font-weight:400">'
         "전체 보기</a></h2>" + _jobs_table(recent)
@@ -819,11 +880,30 @@ def index_page(
     return page("새 분석", body, connection=connection)
 
 
+def _job_filters(items: list[tuple[Job, list[Row]]]) -> str:
+    """작업 목록의 찾기 칸과 상태 단추. 거르기는 스크립트가 이 화면 안에서 한다."""
+    states = Counter(job.state for job, _ in items)
+    buttons = [("all", f"전체 {len(items)}")] + [
+        (state, f"{label} {states[state]}") for state, label in JOB_STATES.items() if states[state]
+    ]
+    html = "".join(
+        f'<button type="button" data-job-state="{state}"{' class="on"' if state == "all" else ""}>'
+        f"{escape(label)}</button>"
+        for state, label in buttons
+    )
+    return (
+        '<div class="filters jobfilters"><input type="search" id="job-search" '
+        'placeholder="이름·엑셀·종류·연결·모델로 찾기" aria-label="작업 찾기" autocomplete="off">'
+        f'{html}<span class="shown" id="jobs-shown"></span></div>'
+    )
+
+
 def results_page(items: list[tuple[Job, list[Row]]], *, connection: str | None = None) -> str:
     body = (
         '<div class="pagehead"><div><h1>작업 목록</h1>'
         f'<p class="sub">작업 {len(items)}개 · 최근 작업부터 보여줍니다.</p></div>'
         '<div class="actions"><a class="btn primary" href="/">새 분석</a></div></div>'
+        + (_job_filters(items) if items else "")
         + _jobs_table(items)
     )
     return page("작업 목록", body, connection=connection)
@@ -1198,6 +1278,7 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
         f'<div class="actions"><a class="btn plain" href="/results/{job.id}/summary">'
         "요약 (캡처용)</a>"
         f'<a class="btn plain" href="/results/{job.id}/results.xlsx">엑셀로 내보내기</a>'
+        f'<a class="btn plain" href="/?from={job.id}">같은 설정으로 새 분석</a>'
         "</div></div>"
     )
     if job.state == "running":

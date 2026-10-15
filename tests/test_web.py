@@ -1394,3 +1394,41 @@ def test_home_page_has_the_check_button(tmp_path):
 
     assert '<button class="btn plain" type="button" id="precheck">확인</button>' in page
     assert 'id="precheck-result" aria-live="polite" hidden' in page
+
+
+def test_same_settings_link_fills_the_form_and_keeps_the_old_job(tmp_path):
+    client, store, _ = make_service(tmp_path, fix_answer())
+    folder = source_folder(tmp_path)
+    upload(client, EXCEL, folder, choices=("rte:Red",), mode="rte:root_cause")
+    job = job_id(tmp_path)
+
+    assert f'href="/?from={job}">같은 설정으로 새 분석</a>' in client.get(f"/results/{job}").text
+    page = client.get(f"/?from={job}").text
+
+    # 기록된 소스 폴더·종류·대상·처리 방식으로 채우고, 엑셀은 다시 고르라고 안내한다
+    assert f'autocomplete="off" value="{folder}">' in page
+    assert 'value="rte:Red" checked>' in page and 'value="rte:Orange">' in page
+    assert 'value="rte:root_cause" checked>' in page and 'value="rte:guard">' in page
+    assert "엑셀 파일은 다시 고르세요(그때 파일: rte.xlsx)" in page
+    assert len(store.jobs()) == 1  # 양식만 채운다. 작업은 분석 시작 때 새로 생긴다
+
+
+def test_unknown_from_gives_the_plain_form(tmp_path):
+    client, _, _ = make_service(tmp_path)
+
+    page = client.get("/?from=not-a-job").text
+
+    assert "엑셀 파일은 다시 고르세요" not in page
+    assert 'value="rte:Red" checked>' in page and 'value="rte:Orange" checked>' in page
+
+
+def test_job_list_has_search_and_state_filters(tmp_path):
+    client, _, _ = make_service(tmp_path, fix_answer())
+    upload(client, EXCEL, source_folder(tmp_path))
+
+    page = client.get("/results").text
+
+    assert 'id="job-search"' in page and 'data-job-state="all" class="on">전체 1' in page
+    assert 'data-job-state="done">완료 1' in page
+    assert '<tr data-state="done" data-search="rte.xlsx · rte rte.xlsx rte' in page
+    assert 'id="job-search"' not in client.get("/").text  # 첫 화면의 최근 작업에는 없다

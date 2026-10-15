@@ -19,7 +19,7 @@ from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -251,9 +251,14 @@ def create_app(
         return [(job, store.rows(job.id)) for job in jobs]
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
+    def index(from_: Annotated[str | None, Query(alias="from")] = None) -> str:
+        # ?from=작업 ID면 그 작업에 기록된 설정으로 양식을 채운다 (없는 작업이면 빈 양식)
+        preset = store.job(from_) if from_ else None
         return index_page(
-            with_rows(store.jobs(limit=RECENT_JOBS)), store.recent_roots(), connection=label()
+            with_rows(store.jobs(limit=RECENT_JOBS)),
+            store.recent_roots(),
+            connection=label(),
+            preset_from=preset,
         )
 
     @app.get("/favicon.ico", include_in_schema=False)
