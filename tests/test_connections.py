@@ -262,9 +262,25 @@ def test_default_connection_can_be_renamed_and_old_names_still_find_it(tmp_path)
         store.rename_default("A")
     with pytest.raises(ConfigError, match="이름"):
         store.rename_default("  ")
-    with pytest.raises(ConfigError, match="정해진 이름"):
-        store.save(connection_from_form({**FORM, "name": "사내 게이트웨이"}))
+    with pytest.raises(ConfigError, match="^기본 연결이 쓰고 있는 이름입니다"):
+        store.save(connection_from_form({**FORM, "name": "게이트웨이 2"}))
     assert "secret-env" not in path.read_text(encoding="utf-8")
+
+
+def test_an_old_default_name_can_be_used_for_a_new_connection(tmp_path):
+    # 기본 연결의 예전 이름은 새 연결이 가져갈 수 있다. 그 뒤로 그 이름은 새 연결을 가리킨다
+    settings = Settings(base_url="https://env.test/v1", api_key="secret-env", model="m")
+    env = connection_from_settings(ENV_NAME, settings, read_only=True)
+    path = tmp_path / "connections.json"
+    store = ConnectionStore(path, env)
+    store.rename_default("LLM")
+    store.rename_default("사내 게이트웨이")
+
+    store.save(connection_from_form({**FORM, "name": "LLM"}))
+
+    assert store.get("LLM").read_only is False
+    assert ConnectionStore(path, env).get("LLM").read_only is False  # 다시 켜도 같다
+    assert store.get(ENV_NAME).name == "사내 게이트웨이"
 
 
 def test_rename_default_without_env_connection_is_refused(tmp_path):

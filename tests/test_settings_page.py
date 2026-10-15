@@ -219,3 +219,46 @@ def test_default_connection_rename_from_the_settings_page(tmp_path):
     assert "연결: 사내 게이트웨이" in home
     assert client.post("/settings/rename-default", data={"name": " "}).status_code == 200
     assert connections.current().name == "사내 게이트웨이"
+
+
+def test_try_checks_the_form_without_saving(tmp_path, monkeypatch):
+    from llm_lab import web
+
+    seen = []
+
+    def fake(connection, base, make_client=None):
+        seen.append(connection)
+        return "인증 실패"
+
+    client, connections = service(tmp_path)
+    monkeypatch.setattr(web, "check_connection", fake)
+
+    answer = client.post("/settings/try", data={**FORM, "name": ""})
+    page = client.get("/settings").text
+
+    assert answer.status_code == 200 and answer.text == "연결 확인: 인증 실패"
+    assert seen[0].base_url == "https://llm.test/v1" and seen[0].api_key == "secret-key-123"
+    assert connections.get("게이트웨이 B") is None and [c.name for c in connections.list()] == [
+        ENV_NAME
+    ]
+    assert 'formaction="/settings/try"' in page and "저장하지 않고 연결 확인" in page
+
+
+def test_try_reuses_the_saved_key_when_editing_and_reports_form_errors(tmp_path, monkeypatch):
+    from llm_lab import web
+
+    seen = []
+    client, _ = service(tmp_path)
+    client.post("/settings/save", data=FORM)
+    monkeypatch.setattr(
+        web,
+        "check_connection",
+        lambda connection, base, make_client=None: seen.append(connection) or "성공",
+    )
+
+    edited = client.post("/settings/try", data={**FORM, "api_key": "", "original": "게이트웨이 B"})
+    broken = client.post("/settings/try", data={**FORM, "base_url": ""})
+
+    assert edited.text == "연결 확인: 성공" and seen[0].api_key == "secret-key-123"
+    assert broken.status_code == 200 and broken.text.startswith("연결 확인 못 함: ")
+    assert "secret" not in broken.text and len(seen) == 1

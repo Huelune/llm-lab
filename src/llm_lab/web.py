@@ -21,7 +21,14 @@ from urllib.parse import urlsplit
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
+from starlette.concurrency import run_in_threadpool
 
 from llm_lab.config import ConfigError, Settings, load_settings
 from llm_lab.connections import (
@@ -588,6 +595,25 @@ def _add_settings_routes(
         # 동기 def라 스레드 풀에서 돈다. 최대 10초 걸려도 다른 요청을 막지 않는다.
         checks[name] = check_connection(target, base_settings or Settings("", "", ""))
         return back()
+
+    @app.post("/settings/try")
+    async def settings_try(request: Request) -> Response:
+        """양식 값으로 연결만 확인한다 (저장하지 않는다). 화면이 그대로 남게 글 한 줄만 돌려준다."""
+        fields = {
+            key: value for key, value in (await request.form()).items() if isinstance(value, str)
+        }
+        fields["name"] = fields.get("name", "").strip() or "확인"
+        original = fields.get("original") or None
+        try:
+            keep = connections.get(original) if original else None
+            target = connection_from_form(fields, None if keep and keep.read_only else keep)
+        except ConfigError as exc:
+            return PlainTextResponse(f"연결 확인 못 함: {exc}")
+        # 확인은 최대 10초 걸린다. 스레드 풀에서 돌려 다른 요청을 막지 않는다
+        result = await run_in_threadpool(
+            check_connection, target, base_settings or Settings("", "", "")
+        )
+        return PlainTextResponse(f"연결 확인: {result}")
 
     @app.post("/settings/delete")
     def settings_delete(name: Annotated[str, Form()] = "") -> Response:

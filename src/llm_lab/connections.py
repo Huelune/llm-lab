@@ -38,6 +38,7 @@ ENV_READ_ONLY = _ENV_READ_ONLY = (
     "기본 연결은 여기서 바꿀 수 없습니다. 서버를 설치한 담당자가 설정 파일에서 바꿉니다."
 )
 _ENV_RESERVED = "'기본 연결'은 정해진 이름이라 쓸 수 없습니다."
+_ENV_TAKEN = "기본 연결이 쓰고 있는 이름입니다. 다른 이름을 적으세요."
 
 
 @dataclass(frozen=True)
@@ -255,11 +256,12 @@ class ConnectionStore:
     def save(self, connection: Connection, original: str | None = None) -> None:
         """추가(original이 None) 또는 수정. 이름이 바뀐 current는 current도 따라간다."""
         with self._lock:
-            reserved = self._env_names()
-            if self._env and original in reserved:
+            if original is not None and (found := self._find(original)) and found.read_only:
                 raise ConfigError(_ENV_READ_ONLY)
-            if connection.name in reserved:
+            if connection.name in (ENV_NAME, LEGACY_ENV_NAME):
                 raise ConfigError(_ENV_RESERVED)
+            if connection.name == self._env_name:
+                raise ConfigError(_ENV_TAKEN)
             if any(c.name == connection.name and c.name != original for c in self._all()):
                 raise ConfigError("같은 이름의 연결이 있습니다")
             saved = list(self._saved)
@@ -273,7 +275,9 @@ class ConnectionStore:
                 if self._current() is saved[index]:
                     current_name = connection.name
                 saved[index] = connection
-            self._commit(saved, current_name)
+            # 기본 연결의 예전 이름은 새 연결이 가져간다. 그 뒤로 그 이름은 새 연결을 가리킨다
+            aliases = [a for a in self._env_aliases if a != connection.name]
+            self._commit(saved, current_name, env_aliases=aliases)
 
     def delete(self, name: str) -> None:
         with self._lock:

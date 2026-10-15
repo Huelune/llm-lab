@@ -1471,9 +1471,32 @@ def _connection_form(values: Mapping[str, str], editing: str | None, error: str)
         + "</label><label>생각 모드 (LLM_ENABLE_THINKING)"
         + _select("enable_thinking", values.get("enable_thinking", ""), thinking)
         + "</label></div>"
-        f'<div class="actions"><button class="btn primary" type="submit">저장</button>{cancel}'
-        "</div></form>"
+        f'<div class="actions"><button class="btn primary" type="submit">저장</button>'
+        '<button class="btn plain" type="submit" formaction="/settings/try" id="try">'
+        f"저장하지 않고 연결 확인</button>{cancel}"
+        '<span class="sub" id="trial" role="status"></span></div></form>'
+        f"<script>{TRY_SCRIPT}</script>"
     )
+
+
+# 저장하지 않고 연결 확인: 화면을 떠나지 않게 fetch로 보내 결과 한 줄만 보인다 (적은 키가 남는다)
+TRY_SCRIPT = """
+document.getElementById('try').addEventListener('click', async (event) => {
+  const form = event.target.form;
+  if (!form.reportValidity()) return;
+  event.preventDefault();
+  const trial = document.getElementById('trial');
+  event.target.disabled = true;
+  trial.textContent = '연결 확인 중… (최대 10초)';
+  try {
+    const answer = await fetch('/settings/try', {method: 'POST', body: new FormData(form)});
+    trial.textContent = answer.ok ? await answer.text() : '연결 확인 못 함: 서버 오류';
+  } catch (error) {
+    trial.textContent = '연결 확인 못 함: 서버에 닿지 않음';
+  }
+  event.target.disabled = false;
+});
+"""
 
 
 def settings_page(
