@@ -8,9 +8,12 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Mapping
 from html import escape
 from urllib.parse import quote
 
+from llm_lab.config import CLIENT_KINDS
+from llm_lab.connections import Connection
 from llm_lab.kinds import KINDS, Kind
 from llm_lab.patch import APPLY_COMMAND, find_conflicts, pick_without_conflicts
 from llm_lab.safe_text import safe
@@ -74,6 +77,9 @@ code, .mono { font-family: Consolas, "D2Coding", monospace; }
 .topbar .name img { width: 20px; height: 20px; }
 .topbar a { color: #c4cddc; font-size: 13px; }
 .topbar a:hover { color: #fff; text-decoration: none; }
+.topbar a.conn { background: var(--brand); color: #fff; border-radius: 999px; padding: 2px 12px;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar a.conn:hover { background: var(--brand-dark); }
 main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 0; }
 h1 { font-size: 20px; margin: 0; display: flex; gap: 10px; align-items: center; }
 h2 { font-size: 15px; margin: 24px 0 10px; }
@@ -95,10 +101,11 @@ h2 { font-size: 15px; margin: 24px 0 10px; }
 .step > div + div { flex: 1; min-width: 0; }
 .step h3 { margin: 2px 0; font-size: 14.5px; }
 .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 8px; }
-input[type=text] { font: 13px Consolas, "D2Coding", monospace; padding: 7px 10px; width: 100%;
-  border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; }
-input[type=text]:focus { border-color: var(--brand); outline: 3px solid var(--brand-bg);
-  outline-offset: 0; }
+input[type=text], input[type=password], select { font: 13px Consolas, "D2Coding", monospace;
+  padding: 7px 10px; width: 100%; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: #fff; }
+input[type=text]:focus, input[type=password]:focus, select:focus { border-color: var(--brand);
+  outline: 3px solid var(--brand-bg); outline-offset: 0; }
 input[type=file] { font-size: 13px; padding: 10px; border: 1px dashed var(--line-strong);
   border-radius: 8px; width: 100%; background: #fafbfd; }
 input[type=checkbox], input[type=radio] { accent-color: var(--brand); }
@@ -249,6 +256,20 @@ pre.diff .hunk { color: var(--faint); }
   box-shadow: 0 -4px 16px rgba(16, 24, 40, .12); }
 .applybar .count { font-weight: 700; margin-right: auto; }
 .empty { color: var(--muted); padding: 14px 16px; margin: 0; }
+.card.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d68a; }
+/* 설정: 연결마다 한 줄 카드, 현재 연결은 왼쪽 띠, 추가·수정 양식은 두 칸 */
+.connrow { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
+  border-left: 4px solid var(--line); }
+.connrow.current { border-left-color: var(--brand); }
+.connrow .what { flex: 1 1 320px; min-width: 0; }
+.connrow .what .sub { margin: 2px 0 0; overflow-wrap: anywhere; }
+.connrow .what .sub.ok { color: var(--green); }
+.connrow .row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.connrow .row-actions .hint { margin: 0; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 8px 0 12px; }
+.fields label { display: block; font-size: 12.5px; color: var(--muted); }
+.fields label input, .fields label select { margin-top: 3px; color: var(--text); }
+@media (max-width: 700px) { .fields { grid-template-columns: 1fr; } }
 /* 작업 목록: 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음 */
 .jobs td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
 .jobs .jobno { color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -461,8 +482,11 @@ FAVICON_SVG = (
 FAVICON_HREF = "data:image/svg+xml," + quote(FAVICON_SVG)
 
 
-def page(title: str, body: str, *, refresh: bool = False) -> str:
-    """refresh면 스크립트가 5초마다 내용 지문(data-version)을 확인해 바뀌었을 때만 다시 읽는다."""
+def page(title: str, body: str, *, refresh: bool = False, connection: str | None = None) -> str:
+    """refresh면 스크립트가 5초마다 내용 지문(data-version)을 확인해 바뀌었을 때만 다시 읽는다.
+
+    connection이 None이 아니면 위쪽 막대 오른쪽에 현재 연결 이름(""이면 없음)을 보인다.
+    """
     main = "<main>"
     if refresh:
         version = hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
@@ -474,18 +498,25 @@ def page(title: str, body: str, *, refresh: bool = False) -> str:
         f"<title>{escape(title)} · {APP_NAME}</title><style>{STYLE}</style></head><body>"
         f'<div class="topbar"><div class="inner"><a class="name" href="/">'
         f'<img src="{FAVICON_HREF}" alt="">{APP_NAME}</a>'
-        '<a href="/">새 분석</a><a href="/results">작업 목록</a></div></div>'
+        '<a href="/">새 분석</a><a href="/results">작업 목록</a>'
+        f"{_connection_link(connection)}</div></div>"
         f"{main}{body}</main><script>{SCRIPT}</script></body></html>"
     )
 
 
-def error_page(title: str, message: str) -> str:
+def _connection_link(connection: str | None) -> str:
+    if connection is None:
+        return ""
+    return f'<a class="conn" href="/settings">연결: {escape(connection or "없음")}</a>'
+
+
+def error_page(title: str, message: str, *, connection: str | None = None) -> str:
     body = (
         f"<h1>{escape(title)}</h1>"
         f'<div class="card"><div class="error">{escape(message)}</div>'
         '<p><a href="/">새 분석으로 돌아가기</a></p></div>'
     )
-    return page(title, body)
+    return page(title, body, connection=connection)
 
 
 def _badge(color: str, text: str, title: str = "") -> str:
@@ -583,7 +614,12 @@ def _kind_step() -> str:
     )
 
 
-def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> str:
+def index_page(
+    recent: list[tuple[Job, list[Row]]],
+    recent_dirs: list[str],
+    *,
+    connection: str | None = None,
+) -> str:
     options = "".join(f'<option value="{escape(folder)}">' for folder in recent_dirs)
     form = (
         '<form id="analyze" class="card" method="post" action="/results" '
@@ -609,21 +645,27 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         f'<h1 class="app-title">{APP_NAME}</h1><p class="sub">{APP_TAGLINE}</p><h2>새 분석</h2>'
         '<p class="sub">Polyspace 결과 엑셀과 소스 폴더를 주면 고른 시트의 행마다 '
         "LLM이 수정안을 만듭니다.</p>"
+        + (
+            '<div class="card warn">설정에서 LLM 연결을 추가하세요 '
+            '<a href="/settings">설정</a></div>'
+            if connection == ""
+            else ""
+        )
         + form
         + '<h2>최근 작업 <a href="/results" style="font-size:12px;font-weight:400">'
         "전체 보기</a></h2>" + _jobs_table(recent)
     )
-    return page("새 분석", body)
+    return page("새 분석", body, connection=connection)
 
 
-def results_page(items: list[tuple[Job, list[Row]]]) -> str:
+def results_page(items: list[tuple[Job, list[Row]]], *, connection: str | None = None) -> str:
     body = (
         '<div class="pagehead"><div><h1>작업 목록</h1>'
         f'<p class="sub">작업 {len(items)}개 · 최근 작업부터 보여줍니다.</p></div>'
         '<div class="actions"><a class="btn primary" href="/">새 분석</a></div></div>'
         + _jobs_table(items)
     )
-    return page("작업 목록", body)
+    return page("작업 목록", body, connection=connection)
 
 
 def _diff(diff: str) -> str:
@@ -949,7 +991,7 @@ def _howto(base: str | None) -> str:
     )
 
 
-def job_page(job: Job, rows: list[Row], base: str | None) -> str:
+def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | None = None) -> str:
     kind = KINDS[job.kind]
     finished = job.state != "running"
     when = job.created_at[5:16].replace("T", " ")
@@ -959,6 +1001,7 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
         f"<h1>작업 {job.id} · {escape(job.excel_name)} {_job_badge(job, rows)}</h1>"
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
         + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
+        + (f" · 연결 {escape(job.connection)}" if job.connection else "")
         + f"</p>{note}</div>"
         f'<div class="actions"><a class="btn plain" href="/results/{job.id}/summary">'
         "요약 (캡처용)</a>"
@@ -992,7 +1035,7 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
     title = f"작업 {job.id} 결과 · {job.excel_name}"
     if not rows:
         body += '<div class="card"><p class="empty">분석할 행이 없습니다.</p></div>'
-        return page(title, body, refresh=not finished)
+        return page(title, body, refresh=not finished, connection=connection)
     conflicts, picked, manual = _selection(kind, rows) if finished else ({}, set(), set())
     by_id = {row.id: row for row in rows}
     groups: dict[str, list[Row]] = {}
@@ -1031,7 +1074,159 @@ def job_page(job: Job, rows: list[Row], base: str | None) -> str:
         )
     else:
         body += panels
-    return page(title, body, refresh=not finished)
+    return page(title, body, refresh=not finished, connection=connection)
+
+
+_BOOL_TEXT = {True: "true", False: "false", None: ""}
+_SECRET_FIELDS = ("api_key", "project_id")
+
+
+def _connection_fields(connection: Connection) -> dict[str, str]:
+    """수정 양식에 채울 값. 키·프로젝트 ID는 넣지 않는다."""
+    return {
+        "name": connection.name,
+        "client_kind": connection.client_kind,
+        "base_url": connection.base_url,
+        "model": connection.model,
+        "project_header": connection.project_header,
+        "api_version": connection.api_version,
+        "timeout": f"{connection.timeout:g}",
+        "verify_ssl": _BOOL_TEXT[connection.verify_ssl],
+        "enable_thinking": _BOOL_TEXT[connection.enable_thinking],
+    }
+
+
+def _connection_row(connection: Connection, is_current: bool, check: str) -> str:
+    """연결 한 줄: 이름, 현재 연결 배지, 접속 방식 · 모델 · 주소, 버튼들."""
+    name = escape(connection.name)
+    meta = " · ".join(
+        escape(part) for part in (connection.client_kind, connection.model, connection.base_url)
+    )
+    badge = " " + _badge("blue", "현재 연결") if is_current else ""
+    buttons = []
+    if not is_current:
+        buttons.append(
+            '<form method="post" action="/settings/select">'
+            f'<input type="hidden" name="name" value="{name}">'
+            '<button class="btn plain" type="submit">현재 연결로</button></form>'
+        )
+    if connection.read_only:
+        buttons.append('<span class="hint">.env 파일에서 고침</span>')
+    else:
+        buttons.append(
+            f'<a class="btn plain" href="/settings?edit={quote(connection.name)}#form">수정</a>'
+            '<form method="post" action="/settings/delete" '
+            "onsubmit=\"return confirm('이 연결을 지울까요?')\">"
+            f'<input type="hidden" name="name" value="{name}">'
+            '<button class="btn plain" type="submit">삭제</button></form>'
+        )
+    checked = f'<p class="sub ok">{escape(check)}</p>' if check else ""
+    return (
+        f'<div class="card connrow{" current" if is_current else ""}"><div class="what">'
+        f'<b>{name}</b>{badge}<p class="sub">{meta}</p>{checked}</div>'
+        f'<div class="row-actions">{"".join(buttons)}</div></div>'
+    )
+
+
+def _select(name: str, value: str, options: list[tuple[str, str]]) -> str:
+    items = "".join(
+        f'<option value="{escape(v)}"{" selected" if v == value else ""}>{escape(label)}</option>'
+        for v, label in options
+    )
+    return f'<select name="{name}">{items}</select>'
+
+
+def _connection_form(values: Mapping[str, str], editing: str | None, error: str) -> str:
+    """추가·수정 양식. 키·프로젝트 ID 칸은 늘 비워 둔다."""
+
+    def text(name: str, label: str, placeholder: str = "", required: bool = False) -> str:
+        need = " required" if required else ""
+        return (
+            f'<label>{label}<input type="text" name="{name}" '
+            f'value="{escape(values.get(name, ""))}" placeholder="{escape(placeholder)}"'
+            f' autocomplete="off"{need}></label>'
+        )
+
+    def secret(name: str, label: str) -> str:
+        # 저장된 값은 화면에 내보내지 않는다. 수정 때 비워 두면 저장된 값을 쓴다
+        hint = "비워 두면 저장된 값을 씁니다" if editing else ""
+        return (
+            f'<label>{label}<input type="password" name="{name}" value="" '
+            f'placeholder="{hint}" autocomplete="new-password"></label>'
+        )
+
+    kinds = [(kind, kind) for kind in CLIENT_KINDS]
+    yes_no = [("true", "true"), ("false", "false")]
+    thinking = [("", "서버 기본값"), *yes_no]
+    original = f'<input type="hidden" name="original" value="{escape(editing)}">' if editing else ""
+    title = "연결 수정" if editing else "연결 추가"
+    note = '<p class="hint">키·프로젝트 ID를 비워 두면 저장된 값을 씁니다.</p>' if editing else ""
+    cancel = '<a class="btn plain" href="/settings">취소</a>' if editing else ""
+    return (
+        '<form id="form" class="card" method="post" action="/settings/save">'
+        f'<h2 style="margin-top:4px">{title}</h2>{note}'
+        + (f'<div class="error">{escape(error)}</div>' if error else "")
+        + original
+        + '<div class="fields">'
+        + text("name", "연결 이름", "예: 사내 게이트웨이", required=True)
+        + f"<label>접속 방식{_select('client_kind', values.get('client_kind', ''), kinds)}</label>"
+        + text("base_url", "접속 주소 (LLM_BASE_URL)", "https://…/v1", required=True)
+        + text("model", "모델 (LLM_MODEL)", required=True)
+        + secret("api_key", "API 키 (LLM_API_KEY)")
+        + secret("project_id", "프로젝트 ID (LLM_PROJECT_ID)")
+        + text("project_header", "프로젝트 헤더 이름 (LLM_PROJECT_HEADER)", "OpenAI-Project")
+        + text("api_version", "API 버전 (LLM_API_VERSION, azure)")
+        + text("timeout", "응답 대기 초 (LLM_TIMEOUT)", "60")
+        + "<label>인증서 확인 (LLM_VERIFY_SSL)"
+        + _select("verify_ssl", values.get("verify_ssl", "true"), yes_no)
+        + "</label><label>생각 모드 (LLM_ENABLE_THINKING)"
+        + _select("enable_thinking", values.get("enable_thinking", ""), thinking)
+        + "</label></div>"
+        f'<div class="actions"><button class="btn primary" type="submit">저장</button>{cancel}'
+        "</div></form>"
+    )
+
+
+def settings_page(
+    connections: list[Connection],
+    current: str | None,
+    message: str = "",
+    form: Mapping[str, str] | None = None,
+    editing: str | None = None,
+    checks: Mapping[str, str] | None = None,
+    error: str = "",
+    *,
+    connection: str | None = None,
+) -> str:
+    """연결 목록과 추가·수정 양식.
+
+    form은 다시 그릴 양식 값(키·프로젝트 ID는 쓰지 않는다). editing이면 그 연결의 수정 양식이고,
+    form이 없으면 그 연결의 값을 채운다. error는 form이 있으면 양식 안에, 없으면 위에 보인다.
+    """
+    checks = checks or {}
+    rows = "".join(
+        _connection_row(item, item.name == current, checks.get(item.name, ""))
+        for item in connections
+    ) or (
+        '<div class="card"><p class="empty">아직 연결이 없습니다. '
+        "아래 양식으로 추가하세요.</p></div>"
+    )
+    if form is None and editing:
+        target = next((item for item in connections if item.name == editing), None)
+        values = _connection_fields(target) if target else {}
+    else:
+        values = {k: v for k, v in (form or {}).items() if k not in _SECRET_FIELDS}
+    top = f'<div class="notice">{escape(error)}</div>' if error and form is None else ""
+    if message:
+        top += f'<div class="notice paused">{escape(message)}</div>'
+    body = (
+        '<div class="pagehead"><div><h1>LLM 연결</h1>'
+        '<p class="sub">분석을 시작할 때 현재 연결로 LLM에 묻습니다. 작업은 시작할 때의 연결을 '
+        "기억합니다. 키와 프로젝트 ID는 화면에 보이지 않습니다.</p></div>"
+        '<div class="actions"><a class="btn primary" href="/settings#form">연결 추가</a></div>'
+        "</div>" + top + rows + _connection_form(values, editing, error if form is not None else "")
+    )
+    return page("LLM 연결", body, connection=connection)
 
 
 def _edits_other_files(row: Row) -> bool:

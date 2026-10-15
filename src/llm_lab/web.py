@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -21,8 +22,13 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from llm_lab.client import get_client
 from llm_lab.config import ConfigError, load_settings
+from llm_lab.connections import (
+    ENV_NAME,
+    ConnectionStore,
+    connection_from_form,
+    connection_from_settings,
+)
 from llm_lab.csource import callers_for, enclosing_function, scan_project, used_definitions
 from llm_lab.export import export_workbook
 from llm_lab.folder_picker import PickerError, pick_folder
@@ -34,6 +40,7 @@ from llm_lab.pages import (
     index_page,
     job_page,
     results_page,
+    settings_page,
     summary_page,
 )
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
@@ -45,6 +52,7 @@ from llm_lab.worker import Worker, daemon_pool
 # .env처럼 프로젝트 루트 기준. private/는 git에서 제외되어 있다. --profile NAME이면 private/NAME
 DATA_DIR = Path("private")
 DB_NAME = "fixer.db"
+CONNECTIONS_NAME = "connections.json"  # 설정 페이지에서 추가한 LLM 연결 (키가 들어 있다)
 # 행마다 LLM과 오간 대화를 Markdown 파일로 남기는 폴더
 LOG_DIR_NAME = "llm-logs"
 DB_PATH = DATA_DIR / DB_NAME
@@ -109,10 +117,18 @@ def _row_json(row: Row) -> dict[str, Any]:
     }
 
 
-def create_app(store: Store, worker: Worker) -> FastAPI:
+def create_app(store: Store, worker: Worker, connections: ConnectionStore | None = None) -> FastAPI:
+    """connections가 없으면 위쪽 막대에 연결을 보이지 않고, 분석 시작도 연결을 확인하지 않는다."""
     app = FastAPI(title="llm-fix-server")
     # DNS 리바인딩으로 다른 사이트가 이 페이지(회사 소스·diff)를 읽지 못하게 Host를 제한한다
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+
+    def label() -> str | None:
+        """위쪽 막대의 현재 연결 이름. 연결이 없으면 "", 연결 기능이 없으면 None."""
+        if connections is None:
+            return None
+        current = connections.current()
+        return current.name if current else ""
 
     def job_or_404(job_id: int) -> Job:
         job = store.job(job_id)
@@ -125,7 +141,9 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return index_page(with_rows(store.jobs(limit=RECENT_JOBS)), store.recent_roots())
+        return index_page(
+            with_rows(store.jobs(limit=RECENT_JOBS)), store.recent_roots(), connection=label()
+        )
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -134,7 +152,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
 
     @app.get("/results", response_class=HTMLResponse)
     def results() -> str:
-        return results_page(with_rows(store.jobs(limit=LISTED_JOBS)))
+        return results_page(with_rows(store.jobs(limit=LISTED_JOBS)), connection=label())
 
     picking = threading.Lock()  # 폴더 선택 창은 한 번에 하나만
 
@@ -164,27 +182,33 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         choice: Annotated[list[str] | None, Form()] = None,
         mode: Annotated[list[str] | None, Form()] = None,
     ) -> Response:
+        def fail(title: str, message: str) -> Response:
+            return HTMLResponse(error_page(title, message, connection=label()), status_code=400)
+
+        # 연결이 없으면 엑셀을 읽기 전에 멈춘다. 있으면 작업에 이름을 남겨 그 연결로 묻는다
+        current = connections.current() if connections is not None else None
+        if connections is not None and current is None:
+            message = "설정에서 LLM 연결을 추가하고 고른 뒤 다시 시작하세요."
+            return fail("LLM 연결이 없음", message)
         sheet_kind = KINDS.get(kind)
         if sheet_kind is None:
-            message = f"분석할 시트 종류를 다시 고르세요: {kind}"
-            return HTMLResponse(error_page("알 수 없는 종류", message), status_code=400)
+            return fail("알 수 없는 종류", f"분석할 시트 종류를 다시 고르세요: {kind}")
         # 체크 상자 값은 "종류:대상"이다. 고른 종류의 것만, 그 종류의 대상인 것만 쓴다
         prefix = f"{sheet_kind.name}:"
         picked = {value.removeprefix(prefix) for value in choice or [] if value.startswith(prefix)}
         selected = picked & set(sheet_kind.choices)
         if sheet_kind.choices and not selected:
-            message = "분석할 대상을 하나 이상 고르세요."
-            return HTMLResponse(error_page("분석할 대상이 없음", message), status_code=400)
+            return fail("분석할 대상이 없음", "분석할 대상을 하나 이상 고르세요.")
         root = _source_root(source_dir)
         if root is None or not root.is_dir():
             message = (
                 f"{root} 폴더가 없습니다." if root else "소스 폴더 경로를 입력하세요."
             ) + " 탐색기 주소창의 경로를 그대로 붙여넣으면 됩니다."
-            return HTMLResponse(error_page("소스 폴더를 찾을 수 없음", message), status_code=400)
+            return fail("소스 폴더를 찾을 수 없음", message)
         try:
             sheet = read_sheet(io.BytesIO(excel.file.read()), sheet_kind, selected)
         except SheetError as exc:
-            return HTMLResponse(error_page("엑셀을 읽을 수 없음", str(exc)), status_code=400)
+            return fail("엑셀을 읽을 수 없음", str(exc))
         # 엑셀에 나온 파일만 폴더에서 찾아 읽는다. 읽은 내용은 작업에 함께 저장해
         # 나중에 소스가 바뀌어도 결과와 패치는 분석 당시 기준으로 남는다.
         matches, files = load_from_folder(root, [f.file for f in sheet.findings])
@@ -246,6 +270,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
             ),
             definitions=[*definitions, *callers],
             context="" if data is None else json.dumps(data, ensure_ascii=False),
+            connection=current.name if current else "",
         )
         worker.start(job_id)
         return RedirectResponse(f"/results/{job_id}", status_code=303)
@@ -254,7 +279,7 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
     def job_view(job_id: int) -> str:
         job = job_or_404(job_id)
         rows = store.rows(job_id)
-        return job_page(job, rows, _base(job, rows))
+        return job_page(job, rows, _base(job, rows), connection=label())
 
     @app.get("/results/{job_id}/results.xlsx")
     def export_excel(job_id: int) -> Response:
@@ -281,7 +306,8 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         ]
         if not chosen:
             message = "적용할 수정을 하나 이상 고르세요."
-            return HTMLResponse(error_page("패치를 만들 수 없음", message), status_code=400)
+            page = error_page("패치를 만들 수 없음", message, connection=label())
+            return HTMLResponse(page, status_code=400)
         base = _base(job, rows)
         by_file: dict[str, FilePatch] = {}
         for r in chosen:
@@ -297,7 +323,8 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         try:
             data = build_patch(list(by_file.values()))
         except PatchError as exc:
-            return HTMLResponse(error_page("패치를 만들 수 없음", str(exc)), status_code=409)
+            page = error_page("패치를 만들 수 없음", str(exc), connection=label())
+            return HTMLResponse(page, status_code=409)
         return Response(
             data,
             media_type="text/x-diff",
@@ -324,7 +351,68 @@ def create_app(store: Store, worker: Worker) -> FastAPI:
         base = _base(job, rows)
         return {**asdict(job), "base_folder": base, "rows": [_row_json(r) for r in rows]}
 
+    if connections is not None:
+        _add_settings_routes(app, connections, label)
     return app
+
+
+def _add_settings_routes(
+    app: FastAPI, connections: ConnectionStore, label: Callable[[], str | None]
+) -> None:
+    """설정 페이지. 저장·고르기·지우기는 성공하면 /settings로 돌아가고, 실패하면 이유를 보인
+    설정 페이지를 바로 그린다."""
+
+    def settings_html(**kwargs: Any) -> str:
+        current = connections.current()
+        return settings_page(
+            connections.list(),
+            current.name if current else None,
+            connection=label(),
+            **kwargs,
+        )
+
+    def back() -> Response:
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_view(edit: str = "") -> str:
+        if not edit:
+            return settings_html()
+        target = connections.get(edit)
+        if target is None:
+            return settings_html(error="없는 연결입니다")
+        if target.read_only:
+            return settings_html(error=".env 연결은 .env 파일에서 고칩니다")
+        return settings_html(editing=edit)
+
+    @app.post("/settings/save")
+    async def settings_save(request: Request) -> Response:
+        fields = {
+            key: value for key, value in (await request.form()).items() if isinstance(value, str)
+        }
+        original = fields.get("original") or None
+        try:
+            keep = connections.get(original) if original else None
+            connections.save(connection_from_form(fields, keep), original)
+        except ConfigError as exc:
+            return HTMLResponse(settings_html(form=fields, editing=original, error=str(exc)))
+        return back()
+
+    @app.post("/settings/select")
+    def settings_select(name: Annotated[str, Form()] = "") -> Response:
+        try:
+            connections.select(name)
+        except ConfigError as exc:
+            return HTMLResponse(settings_html(error=str(exc)))
+        return back()
+
+    @app.post("/settings/delete")
+    def settings_delete(name: Annotated[str, Form()] = "") -> Response:
+        try:
+            connections.delete(name)
+        except ConfigError as exc:
+            return HTMLResponse(settings_html(error=str(exc)))
+        return back()
 
 
 def open_when_ready(url: str, port: int, timeout: float = 15.0) -> None:
@@ -408,7 +496,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.clear:
         return clear_records(data_dir, args.clear)
     try:
-        settings = load_settings(args.profile)
+        # 연결 값은 비어 있어도 된다 (설정 페이지에서 추가한다). workers·follow_ups는 여기서 읽는다
+        settings = load_settings(args.profile, require_connection=False)
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return 1
@@ -417,21 +506,35 @@ def main(argv: list[str] | None = None) -> int:
     except StoreError as exc:
         print(f"DB 오류: {exc}", file=sys.stderr)
         return 1
+    env = (
+        connection_from_settings(ENV_NAME, settings, read_only=True) if settings.base_url else None
+    )
+    connections = ConnectionStore(data_dir / CONNECTIONS_NAME, env)
+    if connections.error:
+        print(
+            f"연결 설정 파일을 읽지 못했습니다({connections.error}). "
+            "설정 페이지에서 다시 저장하세요.",
+            file=sys.stderr,
+        )
     submit = daemon_pool(settings.workers)
     worker = Worker(
         store,
-        get_client(settings),
+        None,
         settings.model,
         submit,
         log_dir=data_dir / LOG_DIR_NAME,
         follow_ups=settings.follow_ups,
+        connections=connections,
+        base_settings=settings,
     )
     worker.resume()
     url = f"http://127.0.0.1:{args.port}/"
     profile_note = f"   프로필: {args.profile}" if args.profile else ""
     print(f"\n  접속 주소: {url}{profile_note}   (끄려면 Ctrl+C)\n")
+    if connections.current() is None:
+        print("  LLM 연결이 없습니다: 접속 주소의 설정에서 추가하세요\n")
     if not args.no_browser:
         threading.Thread(target=open_when_ready, args=(url, args.port), daemon=True).start()
     # 끄면 처리 중이거나 줄 서 있는 행은 버린다. 다음에 켤 때 resume()이 이어서 처리한다.
-    uvicorn.run(create_app(store, worker), host="127.0.0.1", port=args.port)
+    uvicorn.run(create_app(store, worker, connections), host="127.0.0.1", port=args.port)
     return 0

@@ -26,7 +26,8 @@ from rte_fixtures import (
 from test_patch import git_apply, needs_git
 
 from llm_lab import web
-from llm_lab.config import OPTIONAL_VARS, REQUIRED_VARS
+from llm_lab.config import OPTIONAL_VARS, REQUIRED_VARS, Settings
+from llm_lab.connections import ENV_NAME, ConnectionStore, connection_from_settings
 from llm_lab.fixer import Edit, FixResult
 from llm_lab.folder_picker import PickerError
 from llm_lab.kinds import KINDS, RTE
@@ -39,12 +40,14 @@ def run_now(task):
     task()
 
 
-def make_service(tmp_path, *responses, submit=run_now):
+def make_service(tmp_path, *responses, submit=run_now, connections=None):
     handler, sent = scripted(*responses)
     store = Store(tmp_path / "fixer.db")
     worker = Worker(store, make_client(handler), MODEL, submit)
     # 브라우저가 실제로 보내는 Host와 같게 둔다
-    client = TestClient(web.create_app(store, worker), base_url="http://127.0.0.1:8000")
+    client = TestClient(
+        web.create_app(store, worker, connections), base_url="http://127.0.0.1:8000"
+    )
     return client, store, sent
 
 
@@ -476,12 +479,39 @@ def test_kind_decides_which_fixes_are_picked_automatically(tmp_path, monkeypatch
 
 
 def test_main_reports_config_error(tmp_path, monkeypatch, capsys):
+    # 연결 값이 없어도 켜지지만, 잘못된 값은 여전히 설정 오류다
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(web.uvicorn, "run", lambda app, **kwargs: None)
+    monkeypatch.setenv("LLM_TIMEOUT", "abc")
+
+    assert web.main(["--no-browser"]) == 1
+    assert "설정 오류" in capsys.readouterr().err
+
+
+def test_main_without_connection_starts_and_says_so(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         monkeypatch.delenv(key, raising=False)
+    apps = []
+    monkeypatch.setattr(web.uvicorn, "run", lambda app, **kwargs: apps.append(app))
 
-    assert web.main([]) == 1
-    assert "설정 오류" in capsys.readouterr().err
+    assert web.main(["--no-browser"]) == 0
+    assert "LLM 연결이 없습니다: 접속 주소의 설정에서 추가하세요" in capsys.readouterr().out
+    home = TestClient(apps[0], base_url="http://127.0.0.1").get("/").text
+    assert "연결: 없음" in home
+
+
+def test_main_uses_the_env_connection_and_reports_a_broken_store(tmp_path, monkeypatch, capsys):
+    (tmp_path / "private").mkdir()
+    (tmp_path / "private" / web.CONNECTIONS_NAME).write_text("{secret", encoding="utf-8")
+
+    started, workers, _ = start_main(tmp_path, monkeypatch, ["--no-browser"])
+
+    out = capsys.readouterr()
+    assert "연결 설정 파일을 읽지 못했습니다(JSONDecodeError)" in out.err
+    assert "secret" not in out.err + out.out
+    assert workers[0]["connections"].current().name == ENV_NAME
+    assert workers[0]["base_settings"].model == MODEL
 
 
 def start_main(tmp_path, monkeypatch, argv):
@@ -813,13 +843,11 @@ def test_clear_with_profile_points_back_to_the_default_records(tmp_path, monkeyp
     )
 
 
-def test_main_names_the_missing_profile_file(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LLM_BASE_URL", "https://llm.test/v1")
-    monkeypatch.setenv("LLM_MODEL", MODEL)
+def test_main_starts_a_profile_without_its_env_file(tmp_path, monkeypatch):
+    # 연결은 설정 페이지에서 추가하므로 .env.NAME이 없어도 켜지고, 기록은 private/NAME에 둔다
+    started, workers, _ = start_main(tmp_path, monkeypatch, ["--no-browser", "--profile", "b"])
 
-    assert web.main(["--no-browser", "--profile", "b"]) == 1
-    assert ".env.b" in capsys.readouterr().err
+    assert started and workers[0]["log_dir"] == Path("private/b/llm-logs")
 
 
 USE_C = b'#include "limits.h"\nint divide(int a, int b)\n{\n    return a / (b % LIMIT);\n}\n'
@@ -1118,6 +1146,22 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
     assert '<tr><td>제외한 행</td><td class="num">1</td></tr>' in page
     assert '<tr><td>수정 모두 선택이 고르는 수정</td><td class="num">1</td></tr>' in page
     assert "data-refresh=" not in page
+
+
+def test_summary_page_has_no_connection_name(tmp_path):
+    # 요약은 회사 밖으로 캡처해 보내는 화면이라 위쪽 막대에 연결 이름을 넣지 않는다
+    env = connection_from_settings(
+        ENV_NAME, Settings(base_url="https://llm.test/v1", api_key="k", model=MODEL), True
+    )
+    connections = ConnectionStore(tmp_path / "connections.json", env)
+    client, _, _ = make_service(tmp_path, fix_answer(), connections=connections)
+    upload(client, rte_excel(rte_row("Orange Check")), source_folder(tmp_path))
+
+    job_html = client.get("/results/1").text
+    summary_html = client.get("/results/1/summary").text
+
+    assert "연결: .env" in job_html and "연결 .env" in job_html
+    assert "연결:" not in summary_html
 
 
 def test_summary_page_of_a_missing_job_is_404(tmp_path):
