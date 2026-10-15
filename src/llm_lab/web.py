@@ -1,4 +1,4 @@
-"""Polyspace 수정 제안 웹 서비스 (llm-fix-server)."""
+"""LLM Test Advisor 웹 서비스 (llm-fix-server)."""
 
 from __future__ import annotations
 
@@ -27,7 +27,15 @@ from llm_lab.csource import callers_for, enclosing_function, scan_project, used_
 from llm_lab.export import export_workbook
 from llm_lab.folder_picker import PickerError, pick_folder
 from llm_lab.kinds import KINDS, Kind
-from llm_lab.pages import FAVICON_SVG, error_page, index_page, job_page, results_page, summary_page
+from llm_lab.pages import (
+    APP_NAME,
+    FAVICON_SVG,
+    error_page,
+    index_page,
+    job_page,
+    results_page,
+    summary_page,
+)
 from llm_lab.patch import FilePatch, PatchError, base_folder, build_patch, relative_path
 from llm_lab.polyspace import Finding, Sheet, SheetError, read_sheet
 from llm_lab.sources import DecodeError, Match, decode_source, load_from_folder
@@ -378,9 +386,7 @@ def clear_records(data_dir: Path, what: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="llm-fix-server", description="Polyspace 수정 제안 서비스"
-    )
+    parser = argparse.ArgumentParser(prog="llm-fix-server", description=f"{APP_NAME} 서버")
     parser.add_argument("--port", type=int, default=8000, help="접속 포트 (기본 8000)")
     parser.add_argument(
         "--no-browser", action="store_true", help="서버를 켤 때 브라우저를 자동으로 열지 않음"
