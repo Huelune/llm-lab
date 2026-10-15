@@ -83,7 +83,7 @@ def test_home_shows_upload_steps_and_menu(tmp_path):
 
     page = client.get("/").text
 
-    assert "<title>새 분석 · Polyspace 수정 제안</title>" in page
+    assert "<title>새 분석 · LLM Test Advisor</title>" in page
     assert 'href="/results">작업 목록</a>' in page
     assert 'name="excel"' in page
     assert 'name="source_dir"' in page
@@ -111,7 +111,7 @@ def test_upload_processes_rows_and_shows_result_page(tmp_path):
     assert response.status_code == 303
     assert response.headers["location"] == "/results/1"
     page = client.get("/results/1").text
-    assert "<title>작업 1 결과 · rte.xlsx · Polyspace 수정 제안</title>" in page
+    assert "<title>작업 1 결과 · rte.xlsx · LLM Test Advisor</title>" in page
     assert "RTE · 시트 RTE_Result" in page
     assert "제외: Gray Check 1" in page  # 작업 메모
     assert '<span class="badge green">완료</span>' in page
@@ -193,7 +193,7 @@ def test_results_list_page(tmp_path):
 
     page = client.get("/results").text
 
-    assert "<title>작업 목록 · Polyspace 수정 제안</title>" in page
+    assert "<title>작업 목록 · LLM Test Advisor</title>" in page
     assert 'href="/results/1">결과 보기' in page
     assert "rte.xlsx" in page
     # 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음
@@ -1103,7 +1103,7 @@ def test_summary_page_shows_only_counts_and_standard_words(tmp_path):
 
     page = client.get("/results/1/summary").text
 
-    assert "<title>작업 1 요약 · Polyspace 수정 제안</title>" in page
+    assert "<title>작업 1 요약 · LLM Test Advisor</title>" in page
     job = client.get("/results/1").text
     assert '<a class="btn plain" href="/results/1/summary">요약 (캡처용)</a>' in job
     for secret in ("secret", "rte.xlsx", "calc.c", str(tmp_path), REASON, "divide", "return"):

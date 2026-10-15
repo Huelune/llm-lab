@@ -17,7 +17,8 @@ from llm_lab.safe_text import safe
 from llm_lab.sources import base_name
 from llm_lab.store import USER_STOP, Job, Row
 
-APP_NAME = "Polyspace 수정 제안"
+APP_NAME = "LLM Test Advisor"
+APP_TAGLINE = "정적 분석 결과와 소스 코드를 묶어 LLM에 묻고, 판단과 수정안을 받습니다."
 JOB_STATES = {"running": "처리 중", "done": "완료", "stopped": "멈춤"}
 JOB_BADGES = {"running": "blue", "done": "green", "stopped": "red"}
 ROW_STATES = {
@@ -77,6 +78,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 0; }
 h1 { font-size: 20px; margin: 0; display: flex; gap: 10px; align-items: center; }
 h2 { font-size: 15px; margin: 24px 0 10px; }
 .sub { color: var(--muted); font-size: 12.5px; margin: 4px 0 12px; }
+.app-title { margin-bottom: 2px; }
 .pagehead { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
 .pagehead > div:first-child { flex: 1 1 320px; min-width: 0; }
 .pagehead .sub { overflow-wrap: anywhere; }
@@ -604,7 +606,7 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
         '<button class="btn primary" type="submit">분석 시작</button></div></div></form>'
     )
     body = (
-        "<h1>새 분석</h1>"
+        f'<h1 class="app-title">{APP_NAME}</h1><p class="sub">{APP_TAGLINE}</p><h2>새 분석</h2>'
         '<p class="sub">Polyspace 결과 엑셀과 소스 폴더를 주면 고른 시트의 행마다 '
         "LLM이 수정안을 만듭니다.</p>"
         + form

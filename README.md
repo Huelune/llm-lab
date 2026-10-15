@@ -1,4 +1,6 @@
-# llm-lab
+# LLM Test Advisor
+
+정적 분석 결과와 소스 코드를 묶어 LLM에 묻고, 판단과 수정안을 받는 도구입니다. 서버 명령 이름(llm-fix-server 등)은 그대로입니다.
 
 회사 LLM(OpenAI 호환 API, 사내망 전용)의 연결·기능 점검 도구, 공용 클라이언트, Polyspace 수정 제안 서비스(RTE·MISRA·CodeMetrics)입니다.
 
