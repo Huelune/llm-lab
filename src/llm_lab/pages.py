@@ -357,6 +357,13 @@ function showChoices(name) {
 document.querySelectorAll('input[name=kind]').forEach(radio => {
   radio.addEventListener('change', () => showChoices(radio.value));
 });
+// 뒤로 가기·새로 고침이면 브라우저가 고른 종류만 되살린다. 그 종류의 칸을 맞춰 보인다
+function syncChoices() {
+  const chosen = document.querySelector('input[name=kind]:checked');
+  if (chosen) showChoices(chosen.value);
+}
+syncChoices();
+window.addEventListener('pageshow', syncChoices);
 // 폴더 찾기: 서버가 같은 PC에서 윈도우 폴더 선택 창을 띄우고 고른 경로를 돌려준다
 const pick = document.getElementById('pick-folder');
 if (pick) pick.addEventListener('click', async () => {

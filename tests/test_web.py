@@ -89,6 +89,8 @@ def test_home_shows_upload_steps_and_menu(tmp_path):
     assert 'name="source_dir"' in page
     assert 'action="/results"' in page
     assert "아직 작업이 없습니다" in page
+    # 뒤로 가기로 되살아난 종류 선택에 대상 칸을 맞춘다
+    assert "syncChoices();" in page and "addEventListener('pageshow', syncChoices)" in page
 
 
 def test_rejects_other_host_names(tmp_path):
