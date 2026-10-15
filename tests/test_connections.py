@@ -96,7 +96,8 @@ def test_env_connection_is_listed_first_and_read_only(tmp_path):
         store.save(connection_from_form({**FORM, "name": ENV_NAME}), original=ENV_NAME)
     with pytest.raises(ConfigError, match=".env"):
         store.delete(ENV_NAME)
-    assert ENV_NAME not in (tmp_path / "connections.json").read_text(encoding="utf-8")
+    file_text = (tmp_path / "connections.json").read_text(encoding="utf-8")
+    assert ENV_NAME not in file_text and "secret-env" not in file_text
 
 
 def test_broken_file_leaves_an_error_kind_and_an_empty_list(tmp_path):
@@ -120,7 +121,7 @@ def test_connection_settings_keep_server_options():
     assert connection.fingerprint() != connection_from_form({**FORM, "model": "x"}).fingerprint()
 
 
-def test_saved_file_is_utf8_and_has_no_secrets_in_repr(tmp_path):
+def test_saved_file_is_utf8_in_a_new_folder_and_repr_hides_secrets(tmp_path):
     path = tmp_path / "sub" / "connections.json"
     store = ConnectionStore(path)
 
@@ -128,3 +129,24 @@ def test_saved_file_is_utf8_and_has_no_secrets_in_repr(tmp_path):
 
     assert "게이트웨이 B" in path.read_text(encoding="utf-8")
     assert isinstance(store.list()[0], Connection)
+    assert "secret" not in repr(store.list()[0]).replace("secret-model", "")
+
+
+def test_failed_write_keeps_memory_and_reports_a_config_error(tmp_path):
+    path = tmp_path / "connections.json"
+    store = ConnectionStore(path)
+    store.save(connection_from_form({**FORM, "name": "A"}))
+    store.save(connection_from_form({**FORM, "name": "B"}))
+    path.unlink()
+    path.mkdir()  # os.replace가 실패한다
+
+    with pytest.raises(ConfigError, match="저장하지 못했습니다") as info:
+        store.save(connection_from_form({**FORM, "name": "C"}))
+    assert str(tmp_path) not in str(info.value)
+    with pytest.raises(ConfigError, match="저장하지 못했습니다"):
+        store.select("B")
+    with pytest.raises(ConfigError, match="저장하지 못했습니다"):
+        store.delete("B")
+
+    assert [c.name for c in store.list()] == ["A", "B"] and store.current().name == "A"
+    assert not (tmp_path / "connections.json.tmp").exists()

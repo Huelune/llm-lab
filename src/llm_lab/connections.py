@@ -19,6 +19,7 @@ from llm_lab.config import (
 )
 
 ENV_NAME = ".env"
+_WRITE_FAILED = "연결 설정을 저장하지 못했습니다. 데이터 폴더에 쓸 수 있는지 확인하세요."
 _ENV_READ_ONLY = ".env 연결은 .env 파일에서 고칩니다"
 
 
@@ -136,12 +137,22 @@ class ConnectionStore:
             self._current_name = ""
             self.error = type(exc).__name__
 
-    def _write(self) -> None:
-        data = {"current": self._current_name, "connections": [_to_json(c) for c in self._saved]}
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+    def _commit(self, saved: list[Connection], current_name: str) -> None:
+        """새 상태를 파일에 먼저 쓰고, 성공하면 메모리에 반영한다. 실패는 안내만 남긴다."""
+        data = {"current": current_name, "connections": [_to_json(c) for c in saved]}
         tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self._path)
+        try:
+            # 키가 들어 있으므로 만들 때부터 소유자만 읽게 한다 (Windows에서는 mode가 대부분 무시됨)
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self._path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise ConfigError(_WRITE_FAILED) from None
+        self._saved = saved
+        self._current_name = current_name
 
     def _all(self) -> list[Connection]:
         return ([self._env] if self._env else []) + self._saved
@@ -171,17 +182,18 @@ class ConnectionStore:
                 raise ConfigError(_ENV_READ_ONLY)
             if any(c.name == connection.name and c.name != original for c in self._all()):
                 raise ConfigError("같은 이름의 연결이 있습니다")
+            saved = list(self._saved)
+            current_name = self._current_name
             if original is None:
-                self._saved.append(connection)
+                saved.append(connection)
             else:
-                index = next((i for i, c in enumerate(self._saved) if c.name == original), None)
+                index = next((i for i, c in enumerate(saved) if c.name == original), None)
                 if index is None:
                     raise ConfigError("없는 연결입니다")
-                was_current = self._current() is self._saved[index]
-                self._saved[index] = connection
-                if was_current:
-                    self._current_name = connection.name
-            self._write()
+                if self._current() is saved[index]:
+                    current_name = connection.name
+                saved[index] = connection
+            self._commit(saved, current_name)
 
     def delete(self, name: str) -> None:
         with self._lock:
@@ -192,12 +204,10 @@ class ConnectionStore:
                 raise ConfigError(_ENV_READ_ONLY)
             if target is self._current():
                 raise ConfigError("현재 연결은 지울 수 없습니다. 다른 연결을 먼저 고르세요")
-            self._saved = [c for c in self._saved if c.name != name]
-            self._write()
+            self._commit([c for c in self._saved if c.name != name], self._current_name)
 
     def select(self, name: str) -> None:
         with self._lock:
             if self._find(name) is None:
                 raise ConfigError("없는 연결입니다")
-            self._current_name = name
-            self._write()
+            self._commit(self._saved, name)
