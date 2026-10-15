@@ -84,11 +84,19 @@ def test_job_page_shows_settings_card_and_rename_form():
     assert "<title>secret 작업 · LLM Test Advisor</title>" in html
 
 
+def test_job_settings_fold_closed_with_a_short_summary():
+    html = pages.job_page(_job(), [], None)
+
+    assert '<details class="card job-settings"><summary>' in html
+    assert '<details class="card job-settings" open>' not in html
+    assert '<span class="brief">게이트웨이 B · secret-model · 가드 허용</span>' in html
+
+
 def test_job_page_without_recorded_settings_says_so():
     html = pages.job_page(_job(settings="", title=""), [], None)
 
     assert "기록된 설정이 없습니다" in html
-    assert "<h1>secret.xlsx " in html
+    assert '<h1><span class="name">secret.xlsx</span> ' in html
 
 
 def test_job_lists_show_name_connection_and_model():

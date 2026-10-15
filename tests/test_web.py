@@ -1257,7 +1257,7 @@ def test_summary_page_has_no_connection_name(tmp_path):
     job_html = client.get(f"/results/{jid}").text
     summary_html = client.get(f"/results/{jid}/summary").text
 
-    assert "연결: 기본 연결" in job_html and "연결 기본 연결" in job_html
+    assert "연결: 기본 연결" in job_html and '<span class="brief">기본 연결' in job_html
     assert "연결:" not in summary_html
 
 

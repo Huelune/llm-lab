@@ -76,13 +76,22 @@ code, .mono { font-family: Consolas, "D2Coding", monospace; }
 .topbar .name { font-weight: 700; margin-right: auto; color: #fff; display: flex; gap: 8px;
   align-items: center; }
 .topbar .name img { width: 20px; height: 20px; }
-.topbar a { color: #c4cddc; font-size: 13px; }
+.topbar a { color: #c4cddc; font-size: 13px; white-space: nowrap; }
 .topbar a:hover { color: #fff; text-decoration: none; }
 .topbar a.conn { background: var(--brand); color: #fff; border-radius: 999px; padding: 2px 12px;
   max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar a.conn:hover { background: var(--brand-dark); }
+@media (max-width: 560px) {
+  .topbar .inner { padding: 10px 16px; gap: 12px; }
+  .topbar .name span { display: none; }
+  .topbar a.conn { min-width: 0; flex: 0 1 auto; }
+  main { padding: 16px 16px 0; }
+}
 main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 0; }
-h1 { font-size: 20px; margin: 0; display: flex; gap: 10px; align-items: center; }
+h1 { font-size: 20px; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 10px;
+  align-items: center; min-width: 0; }
+h1 .name { min-width: 0; overflow-wrap: anywhere; }
+.btn, .badge { white-space: nowrap; }
 h2 { font-size: 15px; margin: 24px 0 10px; }
 .sub { color: var(--muted); font-size: 12.5px; margin: 4px 0 12px; }
 .app-title { margin-bottom: 2px; }
@@ -250,6 +259,19 @@ pre.diff span::before { content: attr(data-ln); color: var(--faint); margin-righ
   padding: 10px 16px; margin: 12px 0; font-size: 13px; box-shadow: var(--shadow); }
 .howto ol { margin: 6px 0 0; padding-left: 20px; }
 .howto details { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.job-settings > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  cursor: pointer; }
+.job-settings > summary h3 { margin: 0; display: inline; }
+.job-settings > summary::before { content: "▸"; color: var(--muted); }
+.job-settings[open] > summary::before { content: "▾"; }
+.job-settings .brief { color: var(--muted); font-size: 13px; min-width: 0;
+  overflow-wrap: anywhere; }
+.job-settings[open] .brief { display: none; }
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px 20px; margin: 12px 0 0; }
+.facts div { display: flex; gap: 10px; min-width: 0; }
+.facts dt { flex: 0 0 72px; color: var(--muted); white-space: nowrap; }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .howto summary { cursor: pointer; color: var(--muted); }
 .cmd { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
 .cmd code { flex: 1; background: var(--ink); color: #e6edf7; padding: 5px 10px; border-radius: 6px;
@@ -623,8 +645,8 @@ def page(title: str, body: str, *, refresh: bool = False, connection: str | None
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<link rel="icon" href="{FAVICON_HREF}">'
         f"<title>{escape(title)} · {APP_NAME}</title><style>{STYLE}</style></head><body>"
-        f'<div class="topbar"><div class="inner"><a class="name" href="/">'
-        f'<img src="{FAVICON_HREF}" alt="">{APP_NAME}</a>'
+        f'<div class="topbar"><div class="inner"><a class="name" href="/" title="{APP_NAME}">'
+        f'<img src="{FAVICON_HREF}" alt=""><span>{APP_NAME}</span></a>'
         '<a href="/">새 분석</a><a href="/results">작업 목록</a>'
         f"{_connection_link(connection)}</div></div>"
         f"{main}{body}</main><script>{SCRIPT}</script></body></html>"
@@ -760,11 +782,19 @@ def _settings_card(job: Job) -> str:
         ("엑셀 파일", settings.get("excel")),
         ("시작 시각", job.created_at[:16].replace("T", " ")),
     ]
-    rows = "".join(
-        f"<tr><td>{escape(name)}</td><td>{escape(str(value)) if value else '-'}</td></tr>"
+    items = "".join(
+        f"<div><dt>{escape(name)}</dt><dd>{escape(str(value)) if value else '-'}</dd></div>"
         for name, value in facts
     )
-    return f'<div class="card"><h3>작업 설정</h3><table>{rows}</table></div>'
+    # 접어 둔 채로 시작한다. 접힌 줄에는 연결 · 모델 · 처리 방식만 짧게 보인다
+    shown = dict(facts)
+    brief = " · ".join(
+        escape(str(shown[name])) for name in ("연결", "모델", "처리 방식") if shown[name]
+    )
+    return (
+        '<details class="card job-settings"><summary><h3>작업 설정</h3>'
+        f'<span class="brief">{brief}</span></summary><dl class="facts">{items}</dl></details>'
+    )
 
 
 def _kind_step(preset: dict | None = None) -> str:
@@ -1266,14 +1296,13 @@ def job_page(job: Job, rows: list[Row], base: str | None, *, connection: str | N
     note = f'<p class="sub">{escape(job.note)}</p>' if job.note else ""
     body = (
         '<div class="pagehead"><div>'
-        f"<h1>{escape(job.title or job.excel_name)} {_job_badge(job, rows)}</h1>"
+        f'<h1><span class="name">{escape(job.title or job.excel_name)}</span> '
+        f"{_job_badge(job, rows)}</h1>"
         '<details class="rename"><summary>이름 바꾸기</summary>'
         f'<form method="post" action="/results/{job.id}/rename">'
         f'<input type="text" name="title" value="{escape(job.title)}" maxlength="80" required> '
         '<button class="btn plain" type="submit">저장</button></form></details>'
         f'<p class="sub">{escape(kind.title)} · 시트 {escape(job.sheet)} · {escape(when)} 시작'
-        + (f" · 소스 폴더 {escape(job.source_root)}" if job.source_root else "")
-        + (f" · 연결 {escape(job.connection)}" if job.connection else "")
         + f"</p>{note}</div>"
         f'<div class="actions"><a class="btn plain" href="/results/{job.id}/summary">'
         "요약 (캡처용)</a>"
