@@ -47,6 +47,7 @@ uv sync
 | `uv run llm-fix-server --port 8001` | 다른 포트로 켬 |
 | `uv run llm-fix-server --no-browser` | 브라우저를 자동으로 열지 않음 |
 | `uv run llm-fix-server --profile 이름 --port 8001` | 설정이 다른 두 번째 서버를 켬(모델 비교용) |
+| 브라우저에서 `/settings`(위쪽 막대의 "연결: …") | LLM 연결 추가·수정·삭제, "현재 연결로" 고르기, "연결 확인" |
 
 ### 기록 지우기
 
