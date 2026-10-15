@@ -423,6 +423,15 @@ CONTEXT_SIZES = (8_000, 16_000, 32_000, 64_000, 128_000, 256_000)
 CONTEXT_TIMEOUT = 300.0
 
 
+def _one_token(client: OpenAI, model: str, size: int, limit_name: str):
+    """size단어짜리 프롬프트를 보내고 생성은 1토큰만 받는다."""
+    return client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": "hello " * size}],
+        **{limit_name: 1},
+    )
+
+
 def run_context(client: OpenAI, settings: Settings, *, output: TextIO | None = None) -> int:
     """컨텍스트 길이를 잰다. 가장 작은 요청부터 실패하면 1, 아니면 0."""
     emit = _emitter(settings, output)
@@ -430,14 +439,19 @@ def run_context(client: OpenAI, settings: Settings, *, output: TextIO | None = N
     client = client.with_options(timeout=max(settings.timeout, CONTEXT_TIMEOUT))
     passed: int | None = None
     rejected: int | None = None
+    # 추론형 모델(OpenAI·Azure)은 max_tokens를 거부하고 max_completion_tokens를 요구한다
+    limit_name = "max_tokens"
     for size in CONTEXT_SIZES:
         start = time.perf_counter()
         try:
-            response = client.chat.completions.create(
-                model=settings.model,
-                messages=[{"role": "user", "content": "hello " * size}],
-                max_tokens=1,
-            )
+            try:
+                response = _one_token(client, settings.model, size, limit_name)
+            except openai.BadRequestError as exc:
+                if limit_name != "max_tokens" or "max_completion_tokens" not in str(exc):
+                    raise
+                limit_name = "max_completion_tokens"
+                start = time.perf_counter()
+                response = _one_token(client, settings.model, size, limit_name)
         except openai.APIStatusError as exc:
             # 게이트웨이가 감싼 메시지는 길고 숫자가 뒤쪽에 있으므로 넉넉히 보여준다
             emit(f"약 {size:,}토큰  거부({exc.status_code})  {_server_message(exc, limit=600)}")

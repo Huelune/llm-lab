@@ -40,6 +40,32 @@ def test_context_grows_until_rejected_and_shows_server_message(capsys):
     assert "16,000토큰은 통과, 32,000토큰은 거부" in out
 
 
+def test_context_switches_to_max_completion_tokens_when_server_asks(capsys):
+    # 추론형 모델(OpenAI·Azure)은 max_tokens를 거부하고 max_completion_tokens를 요구한다
+    sent: list[dict] = []
+
+    def handler(request):
+        body = request_json(request)
+        sent.append(body)
+        if "max_tokens" in body:
+            return error(
+                400,
+                "Unsupported parameter: 'max_tokens' is not supported with this model. "
+                "Use 'max_completion_tokens' instead.",
+            )
+        words = len(body["messages"][0]["content"].split())
+        return completion("x") if words <= 20_000 else error(400, VLLM_LIMIT_MESSAGE)
+
+    code = probe.run_context(make_client(handler), SETTINGS)
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "max_tokens" in sent[0]  # 처음에는 max_tokens로 보내 보고
+    assert all(body.get("max_completion_tokens") == 1 for body in sent[1:])  # 이후로는 바꿔 보낸다
+    assert "Unsupported parameter" not in out
+    assert "16,000토큰은 통과, 32,000토큰은 거부" in out
+
+
 def test_context_reports_lower_bound_when_everything_passes(capsys):
     handler, sent = limited_server(10**9)
 
