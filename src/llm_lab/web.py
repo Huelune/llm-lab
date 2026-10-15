@@ -569,6 +569,17 @@ def _add_settings_routes(
             return HTMLResponse(settings_html(error=str(exc)))
         return back()
 
+    @app.post("/settings/rename-default")
+    def settings_rename_default(name: Annotated[str, Form()] = "") -> Response:
+        old = connections.current()
+        try:
+            connections.rename_default(name)
+        except ConfigError as exc:
+            return HTMLResponse(settings_html(error=str(exc)))
+        if old is not None and old.read_only:
+            checks.pop(old.name, None)
+        return back()
+
     @app.post("/settings/check")
     def settings_check(name: Annotated[str, Form()] = "") -> Response:
         target = connections.get(name)

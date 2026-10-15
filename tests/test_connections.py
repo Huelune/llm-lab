@@ -239,3 +239,36 @@ def test_env_connection_is_called_the_default_connection_and_old_name_still_find
     assert store.get(".env") is env
     with pytest.raises(ConfigError, match="정해진 이름"):
         store.save(connection_from_form({**FORM, "name": ".env"}))
+
+
+def test_default_connection_can_be_renamed_and_old_names_still_find_it(tmp_path):
+    settings = Settings(base_url="https://env.test/v1", api_key="secret-env", model="m")
+    env = connection_from_settings(ENV_NAME, settings, read_only=True)
+    path = tmp_path / "connections.json"
+    store = ConnectionStore(path, env)
+    store.save(connection_from_form({**FORM, "name": "A"}))
+
+    store.rename_default("사내 게이트웨이")
+
+    assert [c.name for c in store.list()] == ["사내 게이트웨이", "A"]
+    assert store.current().name == "사내 게이트웨이"
+    for old in (ENV_NAME, ".env", "사내 게이트웨이"):
+        assert store.get(old).name == "사내 게이트웨이"
+    again = ConnectionStore(path, env)  # 다시 켜도 이름이 남는다
+    assert again.current().name == "사내 게이트웨이" and again.get(ENV_NAME) is not None
+    store.rename_default("게이트웨이 2")
+    assert store.get("사내 게이트웨이").name == "게이트웨이 2"  # 그 전 이름도 찾는다
+    with pytest.raises(ConfigError, match="같은 이름"):
+        store.rename_default("A")
+    with pytest.raises(ConfigError, match="이름"):
+        store.rename_default("  ")
+    with pytest.raises(ConfigError, match="정해진 이름"):
+        store.save(connection_from_form({**FORM, "name": "사내 게이트웨이"}))
+    assert "secret-env" not in path.read_text(encoding="utf-8")
+
+
+def test_rename_default_without_env_connection_is_refused(tmp_path):
+    store = ConnectionStore(tmp_path / "connections.json")
+
+    with pytest.raises(ConfigError, match="기본 연결이 없습니다"):
+        store.rename_default("새 이름")

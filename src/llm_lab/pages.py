@@ -1390,7 +1390,14 @@ def _connection_row(connection: Connection, is_current: bool, check: str) -> str
             '<button class="btn plain" type="submit">현재 연결로</button></form>'
         )
     if connection.read_only:
-        buttons.append('<span class="hint">여기서는 바꿀 수 없음</span>')
+        # 기본 연결은 이름만 바꾼다. 주소·키·모델은 담당자가 서버 설정 파일에서 바꾼다
+        buttons.append(
+            '<details class="rename"><summary class="btn plain">이름 바꾸기</summary>'
+            '<form method="post" action="/settings/rename-default">'
+            f'<input name="name" value="{name}" maxlength="40" required> '
+            '<button class="btn plain" type="submit">저장</button></form></details>'
+            '<span class="hint">주소·키는 여기서 바꿀 수 없음</span>'
+        )
     else:
         buttons.append(
             f'<a class="btn plain" href="/settings?edit={quote(connection.name)}#form">수정</a>'

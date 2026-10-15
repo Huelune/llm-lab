@@ -155,9 +155,14 @@ class ConnectionStore:
         self._lock = threading.Lock()
         self._saved: list[Connection] = []
         self._current_name = ""
+        # 기본 연결(env)의 화면 이름과, 그 전에 쓰던 이름들 (예전 작업에 적힌 이름으로도 찾는다)
+        self._env_name = ENV_NAME
+        self._env_aliases: list[str] = []
         self.error = ""
         self._kept_bad = False
         self._load()
+        if self._env is not None and self._env.name != self._env_name:
+            self._env = replace(self._env, name=self._env_name)
 
     def _load(self) -> None:
         if not self._path.is_file():
@@ -166,9 +171,13 @@ class ConnectionStore:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             self._saved = [_from_json(item) for item in data.get("connections", [])]
             self._current_name = str(data.get("current", ""))
+            self._env_name = str(data.get("env_name") or ENV_NAME)
+            self._env_aliases = [str(name) for name in data.get("env_aliases", [])]
         except Exception as exc:  # 종류만 남긴다 (메시지에 경로·값이 있을 수 있음)
             self._saved = []
             self._current_name = ""
+            self._env_name = ENV_NAME
+            self._env_aliases = []
             self.error = type(exc).__name__
             # 다음 저장이 원래 파일을 덮어쓰지 않게 옆으로 옮겨 둔다. 못 옮기면 그대로 둔다
             try:
@@ -184,9 +193,20 @@ class ConnectionStore:
         kept = f" 원래 파일은 {self._path.name}.bad로 남겨 두었습니다." if self._kept_bad else ""
         return f"연결 설정 파일을 읽지 못했습니다({self.error}).{kept}"
 
-    def _commit(self, saved: list[Connection], current_name: str) -> None:
+    def _commit(
+        self,
+        saved: list[Connection],
+        current_name: str,
+        env_name: str | None = None,
+        env_aliases: list[str] | None = None,
+    ) -> None:
         """새 상태를 파일에 먼저 쓰고, 성공하면 메모리에 반영한다. 실패는 안내만 남긴다."""
-        data = {"current": current_name, "connections": [_to_json(c) for c in saved]}
+        env_name = env_name or self._env_name
+        env_aliases = self._env_aliases if env_aliases is None else env_aliases
+        data: dict = {"current": current_name, "connections": [_to_json(c) for c in saved]}
+        if env_name != ENV_NAME or env_aliases:  # 바꾼 적이 있을 때만 남긴다
+            data["env_name"] = env_name
+            data["env_aliases"] = env_aliases
         tmp = self._path.with_name(self._path.name + ".tmp")
         try:
             # 키가 들어 있으므로 만들 때부터 소유자만 읽게 한다 (Windows에서는 mode가 대부분 무시됨)
@@ -200,14 +220,22 @@ class ConnectionStore:
             raise ConfigError(_WRITE_FAILED) from None
         self._saved = saved
         self._current_name = current_name
+        self._env_name = env_name
+        self._env_aliases = env_aliases
+        if self._env is not None and self._env.name != env_name:
+            self._env = replace(self._env, name=env_name)
+
+    def _env_names(self) -> set[str]:
+        """기본 연결을 가리키는 이름: 지금 이름, 정해진 이름(기본 연결, .env), 그 전에 쓰던 이름."""
+        return {self._env_name, ENV_NAME, LEGACY_ENV_NAME, *self._env_aliases}
 
     def _all(self) -> list[Connection]:
         return ([self._env] if self._env else []) + self._saved
 
     def _find(self, name: str) -> Connection | None:
-        if name == LEGACY_ENV_NAME and self._env:
-            name = ENV_NAME
-        return next((c for c in self._all() if c.name == name), None)
+        if self._env is not None and name in self._env_names():
+            return self._env
+        return next((c for c in self._saved if c.name == name), None)
 
     def _current(self) -> Connection | None:
         return self._find(self._current_name) or next(iter(self._all()), None)
@@ -227,9 +255,10 @@ class ConnectionStore:
     def save(self, connection: Connection, original: str | None = None) -> None:
         """추가(original이 None) 또는 수정. 이름이 바뀐 current는 current도 따라간다."""
         with self._lock:
-            if self._env and ENV_NAME in (original, connection.name):
+            reserved = self._env_names()
+            if self._env and original in reserved:
                 raise ConfigError(_ENV_READ_ONLY)
-            if connection.name in (ENV_NAME, LEGACY_ENV_NAME):
+            if connection.name in reserved:
                 raise ConfigError(_ENV_RESERVED)
             if any(c.name == connection.name and c.name != original for c in self._all()):
                 raise ConfigError("같은 이름의 연결이 있습니다")
@@ -259,9 +288,29 @@ class ConnectionStore:
 
     def select(self, name: str) -> None:
         with self._lock:
-            if self._find(name) is None:
+            target = self._find(name)
+            if target is None:
                 raise ConfigError("없는 연결입니다")
-            self._commit(self._saved, name)
+            self._commit(self._saved, target.name)
+
+    def rename_default(self, name: str) -> None:
+        """기본 연결(.env)의 화면 이름만 바꾼다. 그 전 이름은 별칭으로 남아 예전 작업도 찾는다."""
+        name = name.strip()
+        with self._lock:
+            if self._env is None:
+                raise ConfigError("기본 연결이 없습니다. 서버 설정 파일에 연결 값이 있어야 합니다.")
+            if not 1 <= len(name) <= 40:
+                raise ConfigError("이름은 1~40자로 적으세요.")
+            if any(c.name == name for c in self._saved):
+                raise ConfigError("같은 이름의 연결이 있습니다")
+            old = self._env_name
+            aliases = [a for a in self._env_aliases if a != name]
+            if old not in (name, ENV_NAME) and old not in aliases:
+                aliases.append(old)
+            current = self._current_name
+            if not current or current in self._env_names():
+                current = name
+            self._commit(self._saved, current, env_name=name, env_aliases=aliases)
 
 
 _CHECK_TIMEOUT = 10

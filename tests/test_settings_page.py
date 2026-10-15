@@ -92,7 +92,7 @@ def test_env_connection_has_no_edit_or_delete(tmp_path):
 
     response = client.post("/settings/delete", data={"name": ENV_NAME})
 
-    assert "여기서는 바꿀 수 없음" in html and ".env" not in html
+    assert "주소·키는 여기서 바꿀 수 없음" in html and ".env" not in html
     assert (
         response.status_code == 200
         and "기본 연결은 여기서 바꿀 수 없습니다. 서버를 설치한 담당자가 설정 파일에서 바꿉니다."
@@ -203,3 +203,19 @@ def test_edit_form_hint_says_when_to_retype_secrets(tmp_path):
     form = client.get("/settings", params={"edit": "게이트웨이 B"}).text
 
     assert "비워 두면 저장된 값을 씁니다 (주소나 접속 방식을 바꾸면 다시 입력)" in form
+
+
+def test_default_connection_rename_from_the_settings_page(tmp_path):
+    client, connections = service(tmp_path)
+
+    page = client.get("/settings").text
+    response = client.post(
+        "/settings/rename-default", data={"name": "사내 게이트웨이"}, follow_redirects=False
+    )
+    home = client.get("/").text
+
+    assert 'action="/settings/rename-default"' in page
+    assert response.status_code == 303
+    assert "연결: 사내 게이트웨이" in home
+    assert client.post("/settings/rename-default", data={"name": " "}).status_code == 200
+    assert connections.current().name == "사내 게이트웨이"
