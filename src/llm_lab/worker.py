@@ -12,7 +12,9 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from llm_lab.client import chat_endpoint
+from llm_lab.client import chat_endpoint, get_client
+from llm_lab.config import Settings
+from llm_lab.connections import ConnectionStore
 from llm_lab.fixer import (
     Ask,
     Exchange,
@@ -28,12 +30,14 @@ from llm_lab.kinds import KINDS, Kind
 from llm_lab.pages import DECISIONS
 from llm_lab.polyspace import Finding
 from llm_lab.sources import DecodeError, SourceFile, decode_source
-from llm_lab.store import Row, Store
+from llm_lab.store import Job, Row, Store
 from llm_lab.transcript import render_log, write_log
 
 Submit = Callable[[Callable[[], None]], object]
 
 log = logging.getLogger(__name__)
+
+MISSING_CONNECTION = "작업의 LLM 연결이 없어졌습니다. 설정에서 연결을 고른 뒤 다시 시도하세요."
 
 
 def daemon_pool(workers: int) -> Submit:
@@ -66,6 +70,9 @@ class Worker:
         log_dir: Path | None = None,
         follow_ups: int = 0,
         indexes: IndexCache | None = None,
+        connections: ConnectionStore | None = None,
+        base_settings: Settings | None = None,
+        make_client: Callable[[Settings], OpenAI] = get_client,
     ) -> None:
         self.store = store
         self.client = client
@@ -74,6 +81,12 @@ class Worker:
         self.log_dir = log_dir
         self.follow_ups = follow_ups  # 묶음마다 정의를 되물을 수 있는 횟수
         self.indexes = indexes or IndexCache()  # 되묻기 때 찾을 작업별 프로젝트 색인
+        self.connections = connections  # 있으면 작업에 기록된 연결로 요청한다
+        self.base_settings = base_settings
+        self._make_client = make_client
+        # 연결 이름 → (fingerprint, 클라이언트). 연결 값이 바뀌면 새로 만든다
+        self._clients: dict[str, tuple[str, OpenAI]] = {}
+        self._clients_lock = threading.Lock()
 
     def start(self, job_id: int) -> None:
         """작업의 pending 행을 묶음으로 모아, 중요한 대상부터 묶음마다 하나씩 제출한다."""
@@ -99,6 +112,24 @@ class Worker:
         """서비스를 켤 때 끝나지 않은 작업을 이어서 처리한다."""
         for job_id in self.store.recover():
             self.start(job_id)
+
+    def _llm(self, job: Job) -> tuple[OpenAI, str]:
+        """작업이 쓸 클라이언트와 모델. 연결이 없어졌으면 LookupError."""
+        if self.connections is None:
+            return self.client, self.model
+        connection = (
+            self.connections.get(job.connection) if job.connection else self.connections.current()
+        )
+        if connection is None:
+            raise LookupError(job.connection)
+        assert self.base_settings is not None
+        fingerprint = connection.fingerprint()
+        with self._clients_lock:
+            cached = self._clients.get(connection.name)
+            if cached is None or cached[0] != fingerprint:
+                client = self._make_client(connection.settings(self.base_settings))
+                cached = self._clients[connection.name] = (fingerprint, client)
+        return cached[1], connection.model
 
     def _run(self, job_id: int, row_ids: list[int]) -> None:
         try:
@@ -128,6 +159,14 @@ class Worker:
         rounds: list[Asked] = []
         reused = False
         try:
+            client, model = self._llm(job)
+        except LookupError:
+            # 나머지 묶음도 같은 이유로 못 처리하므로 작업을 멈춘다. 기록 파일은 남기지 않는다.
+            for row in rows:
+                self.store.set_row(row.id, "pending")
+            self.store.set_job(job_id, "stopped", MISSING_CONNECTION)
+            return
+        try:
             request = make_request(
                 kind,
                 findings,
@@ -137,7 +176,7 @@ class Worker:
                 self.store.sources(job_id),
                 follow_ups=self.follow_ups,
             )
-            key = cache_key(self.model, request)
+            key = cache_key(model, request)
             entry = self.store.cache_entry(key)
             results = None
             if entry is not None and self._restore(job_id, job.source_root, entry[1]):
@@ -146,11 +185,13 @@ class Worker:
             if results is None:
                 used: dict[str, str] = {}  # 되묻기로 고칠 수 있게 보낸 파일 → sha256
                 ask = self._asker(job_id, job.source_root, rounds, used)
-                results = propose_fixes(self.client, self.model, request, exchanges, ask=ask)
+                results = propose_fixes(client, model, request, exchanges, ask=ask)
                 self.store.cache_put(key, results, files=sorted(used.items()))
         except FatalLLMError as exc:
             # 나머지 묶음도 같은 이유로 실패하므로 작업을 멈춘다. 이 묶음은 다시 시도 때 처리한다.
-            self._save_log(job_id, kind, findings, source.name, exchanges, [f"작업 중단: {exc}"])
+            self._save_log(
+                job_id, kind, findings, source.name, exchanges, [f"작업 중단: {exc}"], client, model
+            )
             for row in rows:
                 self.store.set_row(row.id, "pending")
             self.store.set_job(job_id, "stopped", str(exc))
@@ -159,7 +200,7 @@ class Worker:
             error = str(exc) or type(exc).__name__
             # 기록 파일의 "결과" 줄은 한 줄이어야 목록이 깨지지 않는다
             outcome = "오류: " + " / ".join(error.splitlines())
-            self._save_log(job_id, kind, findings, source.name, exchanges, [outcome])
+            self._save_log(job_id, kind, findings, source.name, exchanges, [outcome], client, model)
             for row in rows:
                 self.store.set_row(row.id, "error", error=error)
         else:
@@ -174,7 +215,7 @@ class Worker:
                     ]
             if rounds:
                 outcomes = [f"정의 되묻기 {len(rounds)}번", *outcomes]
-            self._save_log(job_id, kind, findings, source.name, exchanges, outcomes)
+            self._save_log(job_id, kind, findings, source.name, exchanges, outcomes, client, model)
             for row, result in zip(rows, results, strict=True):
                 self.store.set_row(row.id, "done", result=result)
         self.store.finish_if_done(job_id)
@@ -244,6 +285,8 @@ class Worker:
         source_name: str,
         exchanges: list[Exchange],
         outcomes: list[str],
+        client: OpenAI,
+        model: str,
     ) -> None:
         """대화 기록 파일을 남긴다. 기록을 못 남겨도 묶음 처리는 계속한다."""
         if self.log_dir is None:
@@ -253,9 +296,9 @@ class Worker:
             kind=kind.title,
             findings=findings,
             source_name=source_name,
-            model=self.model,
-            endpoint=chat_endpoint(self.client, self.model),
-            extra_body=getattr(self.client, "chat_extra_body", {}),
+            model=model,
+            endpoint=chat_endpoint(client, model),
+            extra_body=getattr(client, "chat_extra_body", {}),
             exchanges=exchanges,
             outcomes=outcomes,
         )

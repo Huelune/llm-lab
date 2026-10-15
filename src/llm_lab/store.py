@@ -20,7 +20,8 @@ from llm_lab.sources import SourceFile
 # 2: jobs.source_root (소스를 읽은 폴더. 파일을 하나씩 올리던 예전 작업은 '')
 # 3: jobs.kind·note·context (시트 종류, 작업 메모, 작업 정보 JSON), rows.grp (묶음)
 # 4: definitions (분석 대상 파일이 쓰는 다른 곳의 정의)
-SCHEMA_VERSION = 4
+# 5: jobs.connection (작업을 만들 때 쓴 LLM 연결 이름)
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -34,7 +35,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     source_root TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'rte',
     note TEXT NOT NULL DEFAULT '',
-    context TEXT NOT NULL DEFAULT ''
+    context TEXT NOT NULL DEFAULT '',
+    connection TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS files (
     job_id INTEGER NOT NULL,
@@ -79,6 +81,7 @@ ADDED_COLUMNS = [
     ("jobs", "kind", "TEXT NOT NULL DEFAULT 'rte'"),
     ("jobs", "note", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "context", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "connection", "TEXT NOT NULL DEFAULT ''"),
     ("rows", "grp", "TEXT NOT NULL DEFAULT ''"),
 ]
 # 사용자가 "멈춤"을 눌러 멈춘 작업의 메시지. 화면은 치명 오류로 멈춘 작업과 다르게 보인다.
@@ -102,6 +105,7 @@ class Job:
     kind: str = "rte"  # 시트 종류 (llm_lab.kinds). 스키마 3 전의 작업은 모두 RTE
     note: str = ""  # 작업 메모 한 줄 (조건 시트 요약, 뺀 행의 이유별 개수)
     context: str = ""  # 종류가 엑셀 전체에서 읽은 작업 정보 (JSON, 없으면 '')
+    connection: str = ""  # 작업을 만들 때 쓴 LLM 연결 이름. 옛 작업은 '' (현재 연결)
 
 
 @dataclass(frozen=True)
@@ -178,13 +182,25 @@ class Store:
         note: str = "",
         context: str = "",
         definitions: Iterable[Definition] = (),
+        connection: str = "",
     ) -> int:
         state = "running" if any(row.state == "pending" for row in rows) else "done"
         with self._write() as db:
             cursor = db.execute(
                 "INSERT INTO jobs (created_at, excel_name, sheet, skipped, state, source_root, "
-                "kind, note, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (_now(), excel_name, sheet, skipped, state, source_root, kind, note, context),
+                "kind, note, context, connection) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _now(),
+                    excel_name,
+                    sheet,
+                    skipped,
+                    state,
+                    source_root,
+                    kind,
+                    note,
+                    context,
+                    connection,
+                ),
             )
             job_id = cursor.lastrowid
             assert job_id is not None

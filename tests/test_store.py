@@ -257,7 +257,7 @@ def test_database_from_schema_1_gets_source_folder_column(tmp_path):
 
     store = Store(path)
 
-    assert user_version(path) == SCHEMA_VERSION == 4
+    assert user_version(path) == SCHEMA_VERSION == 5
     assert store.job(job_id).source_root == ""
 
 
@@ -286,8 +286,8 @@ DEFINITIONS = [
 ]
 
 
-def test_schema_version_is_four():
-    assert SCHEMA_VERSION == 4
+def test_schema_version_is_five():
+    assert SCHEMA_VERSION == 5
 
 
 def test_definitions_round_trip_in_name_file_line_order(tmp_path):
@@ -348,3 +348,12 @@ def test_cache_keeps_the_files_an_answer_relied_on(tmp_path):
     assert store.cache_entry("asked") == ([result], [("lib/deep.c", "abc")])
     assert store.cache_get("asked") == [result]
     assert store.cache_entry("none") is None
+
+
+def test_job_keeps_the_connection_name(tmp_path):
+    store = Store(tmp_path / "fixer.db")
+    job = store.create_job("x.xlsx", "RTE_Result", 0, [], [], connection="게이트웨이 B")
+    old = store.create_job("x.xlsx", "RTE_Result", 0, [], [])
+
+    assert store.job(job).connection == "게이트웨이 B"
+    assert store.job(old).connection == ""
