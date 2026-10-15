@@ -247,6 +247,21 @@ pre.diff .hunk { color: var(--faint); }
   box-shadow: 0 -4px 16px rgba(16, 24, 40, .12); }
 .applybar .count { font-weight: 700; margin-right: auto; }
 .empty { color: var(--muted); padding: 14px 16px; margin: 0; }
+/* 작업 목록: 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음 */
+.jobs td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
+.jobs .jobno { color: var(--faint); font-variant-numeric: tabular-nums; }
+.jobs .jobname a { font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+.jobs .jobname .sub { margin: 2px 0 0; font-size: 12px; }
+.jobs .tags { line-height: 26px; }
+.jobs .go { text-align: right; white-space: nowrap; }
+/* 좁은 화면에서는 번호·판단·결과 보기 칸을 숨긴다 (엑셀 이름이 결과로 가는 링크다) */
+@media (max-width: 800px) {
+  .jobs th:nth-child(4), .jobs td:nth-child(4) { display: none; }
+}
+@media (max-width: 560px) {
+  .jobs th:nth-child(1), .jobs td:nth-child(1), .jobs th:nth-child(6), .jobs td:nth-child(6) {
+    display: none; }
+}
 """
 
 # 탭, 걸러 보기, 수정 고르기(겹치는 수정은 함께 못 고름), 명령 복사, 폴더 찾기.
@@ -498,7 +513,10 @@ def _job_badge(job: Job, rows: list[Row]) -> str:
 
 def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
     if not items:
-        return '<div class="card table"><p class="empty">아직 작업이 없습니다.</p></div>'
+        return (
+            '<div class="card table"><p class="empty">아직 작업이 없습니다. '
+            '<a href="/">새 분석</a>에서 엑셀을 올리면 여기에 쌓입니다.</p></div>'
+        )
     lines = []
     for job, rows in items:
         kind = KINDS[job.kind]
@@ -506,15 +524,25 @@ def _jobs_table(items: list[tuple[Job, list[Row]]]) -> str:
             _badge(kind.color(label), f"{label} {count}")
             for label, count in _label_counts(kind, rows)
         )
+        decided = Counter(_kind(row) for row in rows)
+        verdicts = " ".join(
+            _badge(KIND_BADGES[key], f"{KIND_LABELS[key]} {decided[key]}")
+            for key in KIND_ORDER
+            if decided[key]
+        )
         when = job.created_at[5:16].replace("T", " ")
         lines.append(
-            f"<tr><td>{job.id}</td><td>{escape(when)}</td><td>{escape(job.excel_name)}</td>"
-            f"<td>{escape(kind.title)} {labels}</td><td>{_job_badge(job, rows)}</td>"
-            f'<td><a href="/results/{job.id}">결과 보기 →</a></td></tr>'
+            f'<tr><td class="jobno">{job.id}</td>'
+            f'<td class="jobname"><a href="/results/{job.id}">{escape(job.excel_name)}</a>'
+            f'<div class="sub">{escape(kind.title)} · {escape(when)}</div></td>'
+            f'<td class="tags">{labels}</td><td class="tags">{verdicts}</td>'
+            f"<td>{_job_badge(job, rows)}</td>"
+            f'<td class="go"><a href="/results/{job.id}">결과 보기 →</a></td></tr>'
         )
     return (
-        '<div class="card table"><table><tr><th>번호</th><th>시각</th><th>엑셀</th>'
-        "<th>종류 · 대상</th><th>상태</th><th></th></tr>" + "".join(lines) + "</table></div>"
+        '<div class="card table jobs"><table><tr><th style="width:52px">번호</th>'
+        '<th>엑셀</th><th>대상</th><th>판단</th><th style="width:110px">상태</th>'
+        '<th style="width:96px"></th></tr>' + "".join(lines) + "</table></div>"
     )
 
 
@@ -587,7 +615,12 @@ def index_page(recent: list[tuple[Job, list[Row]]], recent_dirs: list[str]) -> s
 
 
 def results_page(items: list[tuple[Job, list[Row]]]) -> str:
-    body = '<h1>작업 목록</h1><p class="sub">최근 작업부터 보여줍니다.</p>' + _jobs_table(items)
+    body = (
+        '<div class="pagehead"><div><h1>작업 목록</h1>'
+        f'<p class="sub">작업 {len(items)}개 · 최근 작업부터 보여줍니다.</p></div>'
+        '<div class="actions"><a class="btn primary" href="/">새 분석</a></div></div>'
+        + _jobs_table(items)
+    )
     return page("작업 목록", body)
 
 

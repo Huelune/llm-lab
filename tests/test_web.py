@@ -196,11 +196,16 @@ def test_results_list_page(tmp_path):
     assert "<title>작업 목록 · Polyspace 수정 제안</title>" in page
     assert 'href="/results/1">결과 보기' in page
     assert "rte.xlsx" in page
+    # 엑셀 이름 아래에 종류·시각, 대상과 판단은 배지 묶음
+    assert '<div class="sub">RTE · ' in page
     assert (
-        'RTE <span class="badge red">Red 1</span> <span class="badge orange">Orange 1</span>'
-        in (page)
-    )
+        '<td class="tags"><span class="badge red">Red 1</span> '
+        '<span class="badge orange">Orange 1</span></td>'
+    ) in page
+    verdicts = '<span class="badge blue">수정 1</span> <span class="badge amber">확인 필요 1</span>'
+    assert verdicts in page
     assert '<span class="badge green">완료</span>' in page
+    assert '<a class="btn primary" href="/">새 분석</a>' in page
 
 
 def test_bad_excel_is_rejected_with_reason(tmp_path):
@@ -372,7 +377,7 @@ def test_misra_job_sends_one_line_together_and_shows_categories(tmp_path):
     assert "함께 보낸 행: 엑셀 3행" in page and "함께 보낸 행: 엑셀 2행" in page
     assert page.count('<pre class="diff">') == 1  # 같은 묶음의 diff는 첫 행에만
     assert "같은 묶음의 수정입니다 (엑셀 2행과 같음)." in page
-    assert "MISRA C:2012 <span" in client.get("/results").text
+    assert '<div class="sub">MISRA C:2012 · ' in client.get("/results").text
 
     patch = client.post("/results/1/fixes.patch", data={"row": ["1", "2"]})
 
